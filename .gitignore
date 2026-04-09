@@ -1,0 +1,18 @@
+# Build artifacts
+bin/
+obj/
+dist/
+publish/
+
+# Local tool/cache folders
+.appdata/
+.localappdata/
+.dotnet-cli/
+.nuget/
+
+# User/editor files
+*.user
+*.suo
+*.tmp
+*.log
+.DS_Store
