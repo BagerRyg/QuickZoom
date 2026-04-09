@@ -55,6 +55,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private ToolStripMenuItem? _maxItem;
     private ToolStripMenuItem? _enableKeyItem;
     private ToolStripMenuItem? _displayMenu;
+    private ToolStripMenuItem? _startupServiceStatusItem;
 
     // Refresh rate
     private int _fps = 60;
@@ -63,24 +64,24 @@ internal sealed partial class TrayContext : ApplicationContext
     private readonly HashSet<string> _selectedMonitorDeviceNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, MonitorMagnifierWindow> _monitorWindows = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Point> _lastAnchorByMonitor = new(StringComparer.OrdinalIgnoreCase);
+    private bool _useCursorMonitorSelection;
+    private bool _suspendPerMonitorTrackingForMenu;
+    private bool _suspendPerMonitorTrackingForShellUi;
     private bool _monitorLayoutDirty = true;
+    private bool _startupInitialized;
+    private System.Windows.Forms.Timer? _startupTimer;
+    private ShellMessageWindow? _shellMessageWindow;
+    private int _taskbarCreatedMessage;
 
     // Settings
-    private readonly string _settingsPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "QuickZoom",
-        "settings.json");
+    private readonly string _settingsPath = AppPaths.SettingsPath;
+    private readonly string _legacySettingsPath = AppPaths.LegacySettingsPath;
 
     public TrayContext()
     {
         LoadSettings();
-        BuildMenuAndTray();
-        SubscribeThemeChanges();
-        SubscribeDisplayChanges();
-        InstallHook();
-        InstallKeyboardHook();
-        InitTimers();
-        UpdateMenuLabels();
+        InitializeShellIntegration();
+        StartDeferredStartupIfNeeded();
     }
 
     protected override void ExitThreadCore()
@@ -101,6 +102,9 @@ internal sealed partial class TrayContext : ApplicationContext
 
             _followTimer?.Stop();
             _animTimer?.Stop();
+            _startupTimer?.Stop();
+            _startupTimer?.Dispose();
+            _shellMessageWindow?.Dispose();
 
             if (_tray != null)
             {
@@ -115,6 +119,37 @@ internal sealed partial class TrayContext : ApplicationContext
         finally
         {
             base.ExitThreadCore();
+        }
+    }
+
+    private sealed class ShellMessageWindow : NativeWindow, IDisposable
+    {
+        private readonly TrayContext _owner;
+        private readonly int _taskbarCreatedMessage;
+
+        public ShellMessageWindow(TrayContext owner, int taskbarCreatedMessage)
+        {
+            _owner = owner;
+            _taskbarCreatedMessage = taskbarCreatedMessage;
+            CreateHandle(new CreateParams());
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == _taskbarCreatedMessage)
+            {
+                _owner.OnTaskbarCreated();
+            }
+
+            base.WndProc(ref m);
+        }
+
+        public void Dispose()
+        {
+            if (Handle != IntPtr.Zero)
+            {
+                DestroyHandle();
+            }
         }
     }
 }

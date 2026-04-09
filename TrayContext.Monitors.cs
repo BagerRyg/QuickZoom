@@ -107,12 +107,28 @@ internal sealed partial class TrayContext
         var screens = GetOrderedScreens();
         int selectedCount = _selectedMonitorDeviceNames.Count;
 
+        var cursorItem = new ToolStripMenuItem("Monitor Under Cursor")
+        {
+            Checked = _useCursorMonitorSelection
+        };
+        cursorItem.Click += (_, _) =>
+        {
+            _useCursorMonitorSelection = true;
+            _lockedScreen = null;
+            _monitorLayoutDirty = true;
+            RebuildDisplayMenuItems();
+            SaveSettings();
+            ApplyTransformCurrentPoint();
+        };
+        _displayMenu.DropDownItems.Add(cursorItem);
+
         var allItem = new ToolStripMenuItem("All Displays")
         {
-            Checked = selectedCount == screens.Count
+            Checked = !_useCursorMonitorSelection && selectedCount == screens.Count
         };
         allItem.Click += (_, _) =>
         {
+            _useCursorMonitorSelection = false;
             foreach (Screen screen in screens)
             {
                 _selectedMonitorDeviceNames.Add(screen.DeviceName);
@@ -136,12 +152,13 @@ internal sealed partial class TrayContext
             var item = new ToolStripMenuItem(label)
             {
                 CheckOnClick = true,
-                Checked = _selectedMonitorDeviceNames.Contains(screen.DeviceName),
+                Checked = !_useCursorMonitorSelection && _selectedMonitorDeviceNames.Contains(screen.DeviceName),
                 Tag = screen.DeviceName
             };
 
             item.Click += (_, _) =>
             {
+                _useCursorMonitorSelection = false;
                 string deviceName = (string)item.Tag!;
                 if (item.Checked)
                 {
@@ -181,6 +198,34 @@ internal sealed partial class TrayContext
     private List<Screen> GetSelectedScreens()
     {
         EnsureSelectedMonitorsValid();
+
+        if (_useCursorMonitorSelection)
+        {
+            if (!_autoSwitchMonitor && _lockedScreen != null)
+            {
+                return [_lockedScreen];
+            }
+
+            if (GetCursorPos(out var pt))
+            {
+                Screen screen = Screen.FromPoint(new Point(pt.X, pt.Y));
+                if (!_autoSwitchMonitor)
+                {
+                    _lockedScreen = screen;
+                }
+
+                return [screen];
+            }
+
+            if (_lockedScreen != null)
+            {
+                return [_lockedScreen];
+            }
+
+            Screen fallback = Screen.PrimaryScreen ?? Screen.AllScreens.First();
+            return [fallback];
+        }
+
         var selectedNames = _selectedMonitorDeviceNames;
 
         var screens = GetOrderedScreens()

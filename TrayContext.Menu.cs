@@ -1,12 +1,93 @@
 using System;
 using System.Drawing;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace QuickZoom;
 
 internal sealed partial class TrayContext
 {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint RegisterWindowMessage(string lpString);
+
+    private void InitializeShellIntegration()
+    {
+        _taskbarCreatedMessage = unchecked((int)RegisterWindowMessage("TaskbarCreated"));
+        _shellMessageWindow = new ShellMessageWindow(this, _taskbarCreatedMessage);
+    }
+
+    private void StartDeferredStartupIfNeeded()
+    {
+        if (IsShellReady())
+        {
+            CompleteStartupInitialization();
+            return;
+        }
+
+        _startupTimer = new System.Windows.Forms.Timer
+        {
+            Interval = 1000
+        };
+        _startupTimer.Tick += (_, _) =>
+        {
+            if (!IsShellReady())
+            {
+                return;
+            }
+
+            _startupTimer?.Stop();
+            _startupTimer?.Dispose();
+            _startupTimer = null;
+            CompleteStartupInitialization();
+        };
+        _startupTimer.Start();
+    }
+
+    private void CompleteStartupInitialization()
+    {
+        if (_startupInitialized)
+        {
+            RestoreTrayIcon();
+            return;
+        }
+
+        BuildMenuAndTray();
+        SubscribeThemeChanges();
+        SubscribeDisplayChanges();
+        InstallHook();
+        InstallKeyboardHook();
+        InitTimers();
+        UpdateMenuLabels();
+        _startupInitialized = true;
+    }
+
+    private void OnTaskbarCreated()
+    {
+        if (!_startupInitialized)
+        {
+            if (IsShellReady())
+            {
+                _startupTimer?.Stop();
+                _startupTimer?.Dispose();
+                _startupTimer = null;
+                CompleteStartupInitialization();
+            }
+
+            return;
+        }
+
+        RestoreTrayIcon();
+    }
+
+    private static bool IsShellReady()
+    {
+        return FindWindow("Shell_TrayWnd", null) != IntPtr.Zero;
+    }
+
     private void BuildMenuAndTray()
     {
         var menu = new ContextMenuStrip
@@ -14,6 +95,12 @@ internal sealed partial class TrayContext
             ShowCheckMargin = true,
             ShowImageMargin = false
         };
+        menu.Opening += (_, _) =>
+        {
+            UpdateStartupServiceStatusLabel();
+            SuspendPerMonitorTracking();
+        };
+        menu.Closed += (_, _) => ResumePerMonitorTracking();
         _menu = menu;
 
         var enabledItem = new ToolStripMenuItem("Enabled") { Checked = _enabled, CheckOnClick = true };
@@ -169,6 +256,11 @@ internal sealed partial class TrayContext
         var resetCursorItem = new ToolStripMenuItem("Reset Cursor (fix pointer feel)");
         resetCursorItem.Click += (_, _) => { SystemParametersInfo(SPI_SETCURSORS, 0, IntPtr.Zero, 0); };
 
+        _startupServiceStatusItem = new ToolStripMenuItem("Startup Service: Checking...")
+        {
+            Enabled = false
+        };
+
         var aboutItem = new ToolStripMenuItem("About");
         aboutItem.Click += (_, _) => ShowAboutDialog();
 
@@ -187,6 +279,7 @@ internal sealed partial class TrayContext
         menu.Items.Add(enableKeyRoot);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(resetCursorItem);
+        menu.Items.Add(_startupServiceStatusItem);
         menu.Items.Add(aboutItem);
         menu.Items.Add(exitItem);
 
@@ -194,14 +287,42 @@ internal sealed partial class TrayContext
                    ?? Icon.ExtractAssociatedIcon(Application.ExecutablePath)
                    ?? SystemIcons.Application;
 
+        CreateNotifyIcon();
+
+        ApplyThemeFromSystem(force: true);
+        UpdateStartupServiceStatusLabel();
+    }
+
+    private void CreateNotifyIcon()
+    {
+        if (_menu == null)
+        {
+            return;
+        }
+
+        if (_tray != null)
+        {
+            _tray.Visible = false;
+            _tray.Dispose();
+        }
+
         _tray = new NotifyIcon
         {
             Icon = _iconRef,
             Visible = true,
             Text = "QuickZoom",
-            ContextMenuStrip = menu
+            ContextMenuStrip = _menu
         };
+    }
 
+    private void RestoreTrayIcon()
+    {
+        if (_menu == null || !IsShellReady())
+        {
+            return;
+        }
+
+        CreateNotifyIcon();
         ApplyThemeFromSystem(force: true);
     }
 
@@ -258,6 +379,14 @@ internal sealed partial class TrayContext
         }
     }
 
+    private void UpdateStartupServiceStatusLabel()
+    {
+        if (_startupServiceStatusItem != null)
+        {
+            _startupServiceStatusItem.Text = StartupTaskService.GetStatusLabel();
+        }
+    }
+
     private void InitTimers()
     {
         _followTimer = new System.Windows.Forms.Timer();
@@ -270,6 +399,13 @@ internal sealed partial class TrayContext
             }
 
             if (!_followCursor || !_magActive)
+            {
+                return;
+            }
+
+            UpdateShellUiTrackingState();
+
+            if (IsPerMonitorTrackingSuspended && !_useFullscreenBackend)
             {
                 return;
             }
@@ -312,5 +448,33 @@ internal sealed partial class TrayContext
                 _animTimer.Stop();
             }
         };
+    }
+
+    private void SuspendPerMonitorTracking()
+    {
+        if (_useFullscreenBackend)
+        {
+            return;
+        }
+
+        _suspendPerMonitorTrackingForMenu = true;
+        SetPerMonitorWindowsVisible(false);
+        _animTimer?.Stop();
+    }
+
+    private void ResumePerMonitorTracking()
+    {
+        if (!_suspendPerMonitorTrackingForMenu)
+        {
+            return;
+        }
+
+        _suspendPerMonitorTrackingForMenu = false;
+        SetPerMonitorWindowsVisible(!IsPerMonitorTrackingSuspended);
+
+        if (!IsPerMonitorTrackingSuspended && _magActive && _zoomPercent > 100)
+        {
+            ApplyTransformCurrentPoint();
+        }
     }
 }

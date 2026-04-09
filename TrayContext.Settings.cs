@@ -20,6 +20,7 @@ internal sealed partial class TrayContext
         public int Fps { get; set; } = 60;
         public bool CenterCursor { get; set; }
         public bool AutoSwitchMonitor { get; set; } = true;
+        public bool UseCursorMonitorSelection { get; set; }
         public List<string> SelectedMonitorDeviceNames { get; set; } = new();
     }
 
@@ -28,6 +29,11 @@ internal sealed partial class TrayContext
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!);
+
+            if (!File.Exists(_settingsPath) && File.Exists(_legacySettingsPath))
+            {
+                File.Copy(_legacySettingsPath, _settingsPath, overwrite: false);
+            }
 
             if (!File.Exists(_settingsPath))
             {
@@ -49,6 +55,7 @@ internal sealed partial class TrayContext
             _autoDisableAt100 = s.AutoDisableAt100;
             _fps = Math.Clamp(s.Fps, 5, 240);
             _centerCursor = s.CenterCursor;
+            _useCursorMonitorSelection = s.UseCursorMonitorSelection;
             _selectedMonitorDeviceNames.Clear();
             foreach (string name in s.SelectedMonitorDeviceNames.Where(n => !string.IsNullOrWhiteSpace(n)))
             {
@@ -69,6 +76,8 @@ internal sealed partial class TrayContext
     {
         try
         {
+            Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!);
+
             var s = new Settings
             {
                 StepPercent = _stepPercent,
@@ -80,6 +89,7 @@ internal sealed partial class TrayContext
                 AutoDisableAt100 = _autoDisableAt100,
                 Fps = _fps,
                 CenterCursor = _centerCursor,
+                UseCursorMonitorSelection = _useCursorMonitorSelection,
                 SelectedMonitorDeviceNames = _selectedMonitorDeviceNames.ToList()
             };
 

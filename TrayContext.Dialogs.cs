@@ -1,5 +1,7 @@
 using System;
+using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
@@ -13,6 +15,9 @@ internal sealed partial class TrayContext
 
     private void ShowAboutDialog()
     {
+        string installPath = InstalledAppService.GetCurrentInstalledExecutablePath() ?? "Not installed";
+        string settingsPath = AppPaths.SettingsPath;
+
         using var dlg = new Form
         {
             Text = "QuickZoom",
@@ -38,9 +43,46 @@ internal sealed partial class TrayContext
         var lbl = new Label
         {
             AutoSize = true,
-            Text = "To activate hold the 'Enable' Key down and either scroll on your mouse wheel or use +/- keys on your keyboard.\n\nQuickZoom v. 3.0 - Better and simpler Magnification tool for Windows.\n\nMade by Bager - With the help of AI.",
+            Text = "To activate hold the 'Enable' Key down and either scroll on your mouse wheel or use +/- keys on your keyboard.\n\n" +
+                   AppInfo.DisplayVersion + "\n" +
+                   "Better and simpler magnification tool for Windows.\n\n" +
+                   StartupTaskService.GetStatusLabel() + "\n\n" +
+                   "Install Path: " + installPath + "\n\n" +
+                   "Settings Path: " + settingsPath + "\n\n" +
+                   "Made by Bager - With the help of AI.",
             MaximumSize = new Size(640, 0)
         };
+
+        var pathButtons = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            Padding = new Padding(0),
+            Margin = new Padding(0, 12, 0, 0),
+            WrapContents = false
+        };
+
+        var openInstallButton = new Button
+        {
+            Text = "Open Install Location",
+            AutoSize = true,
+            MinimumSize = new Size(160, 32),
+            Enabled = !string.Equals(installPath, "Not installed", StringComparison.OrdinalIgnoreCase)
+        };
+        openInstallButton.Click += (_, _) => OpenFileLocation(installPath);
+
+        var openSettingsButton = new Button
+        {
+            Text = "Open Settings Location",
+            AutoSize = true,
+            MinimumSize = new Size(170, 32)
+        };
+        openSettingsButton.Click += (_, _) => OpenFileLocation(settingsPath);
+
+        pathButtons.Controls.Add(openInstallButton);
+        pathButtons.Controls.Add(openSettingsButton);
 
         var buttons = new FlowLayoutPanel
         {
@@ -63,12 +105,51 @@ internal sealed partial class TrayContext
 
         buttons.Controls.Add(ok);
         root.Controls.Add(lbl, 0, 0);
-        root.Controls.Add(buttons, 0, 1);
+        root.Controls.Add(pathButtons, 0, 1);
+        root.Controls.Add(buttons, 0, 2);
         dlg.Controls.Add(root);
         dlg.AcceptButton = ok;
 
         ApplyDialogTheme(dlg);
         dlg.ShowDialog();
+    }
+
+    private static void OpenFileLocation(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || string.Equals(path, "Not installed", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            if (File.Exists(path))
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = "/select,\"" + path + "\"",
+                    UseShellExecute = true
+                });
+                return;
+            }
+
+            string? directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = "\"" + directory + "\"",
+                    UseShellExecute = true
+                });
+            }
+        }
+        catch
+        {
+            // Ignore shell-launch failures.
+        }
     }
 
     private void ApplyDialogTheme(Form form)

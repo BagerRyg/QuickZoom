@@ -2,6 +2,7 @@ using System;
 using System.ComponentModel;
 using System.Drawing;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows.Forms;
 
 namespace QuickZoom;
@@ -55,6 +56,12 @@ internal sealed partial class TrayContext
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint crKey, byte bAlpha, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
     private const uint SPI_SETCURSORS = 0x0057;
     private const uint LWA_ALPHA = 0x00000002;
@@ -144,6 +151,9 @@ internal sealed partial class TrayContext
     {
         private readonly MonitorMagnifierHostForm _host;
         private IntPtr _magnifierHandle;
+        private bool _hasLastFrame;
+        private RECT _lastSourceRect;
+        private float _lastMagnification;
 
         public IntPtr HostHandle => _host.Handle;
         public IntPtr MagnifierHandle => _magnifierHandle;
@@ -183,6 +193,7 @@ internal sealed partial class TrayContext
         public void UpdateBounds(Rectangle bounds)
         {
             _host.Bounds = bounds;
+            _hasLastFrame = false;
             if (_magnifierHandle != IntPtr.Zero)
             {
                 _ = MoveWindow(_magnifierHandle, 0, 0, bounds.Width, bounds.Height, true);
@@ -196,6 +207,13 @@ internal sealed partial class TrayContext
                 return;
             }
 
+            if (_hasLastFrame &&
+                Math.Abs(_lastMagnification - magnification) < 0.0001f &&
+                RectEquals(_lastSourceRect, sourceRect))
+            {
+                return;
+            }
+
             var transform = new MAGTRANSFORM
             {
                 v00 = magnification,
@@ -205,6 +223,24 @@ internal sealed partial class TrayContext
 
             _ = MagSetWindowTransform(_magnifierHandle, ref transform);
             _ = MagSetWindowSource(_magnifierHandle, sourceRect);
+            _lastMagnification = magnification;
+            _lastSourceRect = sourceRect;
+            _hasLastFrame = true;
+        }
+
+        public void SetVisible(bool visible)
+        {
+            if (visible)
+            {
+                if (!_host.Visible)
+                {
+                    _host.Show();
+                }
+            }
+            else if (_host.Visible)
+            {
+                _host.Hide();
+            }
         }
 
         public void Dispose()
@@ -219,6 +255,69 @@ internal sealed partial class TrayContext
             _host.Close();
             _host.Dispose();
         }
+    }
+
+    private static bool RectEquals(RECT a, RECT b)
+    {
+        return a.left == b.left &&
+            a.top == b.top &&
+            a.right == b.right &&
+            a.bottom == b.bottom;
+    }
+
+    private bool IsPerMonitorTrackingSuspended => _suspendPerMonitorTrackingForMenu || _suspendPerMonitorTrackingForShellUi;
+
+    private void SetPerMonitorWindowsVisible(bool visible)
+    {
+        foreach (MonitorMagnifierWindow window in _monitorWindows.Values)
+        {
+            window.SetVisible(visible);
+        }
+    }
+
+    private void UpdateShellUiTrackingState()
+    {
+        if (_useFullscreenBackend || !_magActive)
+        {
+            if (_suspendPerMonitorTrackingForShellUi)
+            {
+                _suspendPerMonitorTrackingForShellUi = false;
+                SetPerMonitorWindowsVisible(!IsPerMonitorTrackingSuspended);
+            }
+
+            return;
+        }
+
+        bool shouldSuspend = IsShellPopupForeground();
+        if (shouldSuspend == _suspendPerMonitorTrackingForShellUi)
+        {
+            return;
+        }
+
+        _suspendPerMonitorTrackingForShellUi = shouldSuspend;
+        SetPerMonitorWindowsVisible(!IsPerMonitorTrackingSuspended);
+    }
+
+    private static bool IsShellPopupForeground()
+    {
+        IntPtr hwnd = GetForegroundWindow();
+        if (hwnd == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        var className = new StringBuilder(256);
+        if (GetClassName(hwnd, className, className.Capacity) <= 0)
+        {
+            return false;
+        }
+
+        string cls = className.ToString();
+        return string.Equals(cls, "#32768", StringComparison.Ordinal) ||
+            string.Equals(cls, "Shell_TrayWnd", StringComparison.Ordinal) ||
+            string.Equals(cls, "NotifyIconOverflowWindow", StringComparison.Ordinal) ||
+            string.Equals(cls, "TopLevelWindowForOverflowXamlIsland", StringComparison.Ordinal) ||
+            string.Equals(cls, "Xaml_WindowedPopupClass", StringComparison.Ordinal);
     }
 
     private void EnsureMag(bool active)
@@ -257,10 +356,10 @@ internal sealed partial class TrayContext
             }
             else
             {
-                int selectedCount = GetSelectedScreens().Count;
-                if (_monitorLayoutDirty || _monitorWindows.Count != selectedCount)
+                var selectedScreens = GetSelectedScreens();
+                if (_monitorLayoutDirty || !MonitorWindowLayoutMatches(selectedScreens))
                 {
-                    SyncMonitorWindows();
+                    SyncMonitorWindows(selectedScreens);
                     _monitorLayoutDirty = false;
                 }
             }
@@ -294,14 +393,32 @@ internal sealed partial class TrayContext
         return selectedCount == allCount;
     }
 
-    private void SyncMonitorWindows()
+    private bool MonitorWindowLayoutMatches(List<Screen> selectedScreens)
+    {
+        if (_monitorWindows.Count != selectedScreens.Count)
+        {
+            return false;
+        }
+
+        foreach (Screen screen in selectedScreens)
+        {
+            if (!_monitorWindows.ContainsKey(screen.DeviceName))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void SyncMonitorWindows(List<Screen>? selectedScreens = null)
     {
         if (!_magActive)
         {
             return;
         }
 
-        var selectedScreens = GetSelectedScreens();
+        selectedScreens ??= GetSelectedScreens();
         var selectedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (Screen screen in selectedScreens)
@@ -408,6 +525,13 @@ internal sealed partial class TrayContext
             return;
         }
 
+        UpdateShellUiTrackingState();
+
+        if (IsPerMonitorTrackingSuspended && !_useFullscreenBackend)
+        {
+            return;
+        }
+
         EnsureMag(true);
         if (!_magActive)
         {
@@ -452,6 +576,19 @@ internal sealed partial class TrayContext
             return;
         }
 
+        UpdateShellUiTrackingState();
+
+        if (IsPerMonitorTrackingSuspended)
+        {
+            return;
+        }
+
+        if (_monitorLayoutDirty || !MonitorWindowLayoutMatches(selectedScreens))
+        {
+            SyncMonitorWindows(selectedScreens);
+            _monitorLayoutDirty = false;
+        }
+
         Screen cursorScreen = Screen.FromPoint(new Point(pt.X, pt.Y));
         Screen lockedScreen = _lockedScreen ?? cursorScreen;
         if (!_autoSwitchMonitor)
@@ -467,7 +604,24 @@ internal sealed partial class TrayContext
             }
 
             Point anchorPoint;
-            if (_autoSwitchMonitor)
+            if (selectedScreens.Count == 1)
+            {
+                if (_useCursorMonitorSelection ||
+                    string.Equals(screen.DeviceName, cursorScreen.DeviceName, StringComparison.OrdinalIgnoreCase))
+                {
+                    anchorPoint = new Point(pt.X, pt.Y);
+                    _lastAnchorByMonitor[screen.DeviceName] = anchorPoint;
+                }
+                else if (!_lastAnchorByMonitor.TryGetValue(screen.DeviceName, out anchorPoint))
+                {
+                    anchorPoint = new Point(
+                        screen.Bounds.Left + (screen.Bounds.Width / 2),
+                        screen.Bounds.Top + (screen.Bounds.Height / 2));
+                }
+
+                _lastAnchorByMonitor[screen.DeviceName] = anchorPoint;
+            }
+            else if (_autoSwitchMonitor)
             {
                 if (string.Equals(screen.DeviceName, cursorScreen.DeviceName, StringComparison.OrdinalIgnoreCase))
                 {

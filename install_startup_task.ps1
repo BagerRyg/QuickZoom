@@ -6,6 +6,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$startupTaskPriority = 3
+$installRoot = Join-Path $env:LOCALAPPDATA "QuickZoom"
+$versionsRoot = Join-Path $installRoot "versions"
+$currentInstallPointerPath = Join-Path $installRoot "current.txt"
 
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -17,6 +21,12 @@ function Resolve-DefaultExePath {
     param([string]$Root)
 
     $candidates = @(
+        (Get-ChildItem -LiteralPath $Root -Directory -Filter "Build *" -ErrorAction SilentlyContinue |
+            Sort-Object {
+                if ($_.Name -match '^Build\s+(\d+)$') { [int]$matches[1] } else { -1 }
+            } -Descending |
+            ForEach-Object { Join-Path $_.FullName "QuickZoom.exe" } |
+            Where-Object { Test-Path -LiteralPath $_ }),
         (Join-Path $Root "dist\self-contained\win-x64\QuickZoom.exe"),
         (Join-Path $Root "publish\win-x64-elevated-hotkey\QuickZoom.exe"),
         (Join-Path $Root "publish\win-x64-theme-auto\QuickZoom.exe"),
@@ -31,6 +41,70 @@ function Resolve-DefaultExePath {
     }
 
     return $null
+}
+
+function Get-PayloadId {
+    param([string]$Path)
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $hash = $sha.ComputeHash($stream)
+        return -join ($hash[0..7] | ForEach-Object { $_.ToString("X2") })
+    }
+    finally {
+        $stream.Dispose()
+        $sha.Dispose()
+    }
+}
+
+function Install-AppPayload {
+    param([string]$SourceExe)
+
+    $sourceExe = (Resolve-Path -LiteralPath $SourceExe).Path
+    $sourceDir = Split-Path -Parent $sourceExe
+    $payloadId = Get-PayloadId -Path $sourceExe
+    $targetDir = Join-Path $versionsRoot $payloadId
+    New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+
+    $files = [System.Collections.Generic.List[string]]::new()
+    $files.Add($sourceExe)
+
+    foreach ($name in @(
+        "D3DCompiler_47_cor3.dll",
+        "PenImc_cor3.dll",
+        "PresentationNative_cor3.dll",
+        "vcruntime140_cor3.dll",
+        "wpfgfx_cor3.dll",
+        "QuickZoom.pdb"
+    )) {
+        $candidate = Join-Path $sourceDir $name
+        if (Test-Path -LiteralPath $candidate) {
+            $files.Add((Resolve-Path -LiteralPath $candidate).Path)
+        }
+    }
+
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($sourceExe)
+    foreach ($suffix in @(".json", ".runtimeconfig.json", ".deps.json")) {
+        $candidate = Join-Path $sourceDir ($baseName + $suffix)
+        if (Test-Path -LiteralPath $candidate) {
+            $files.Add((Resolve-Path -LiteralPath $candidate).Path)
+        }
+    }
+
+    foreach ($file in $files | Select-Object -Unique) {
+        $destination = Join-Path $targetDir (Split-Path -Leaf $file)
+        if ([string]::Equals($file, $destination, [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        Copy-Item -LiteralPath $file -Destination $destination -Force
+    }
+
+    $installedExe = Join-Path $targetDir (Split-Path -Leaf $sourceExe)
+    New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
+    Set-Content -LiteralPath $currentInstallPointerPath -Value $installedExe -NoNewline
+    return $installedExe
 }
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -51,17 +125,18 @@ if (-not (Test-Path -LiteralPath $ExePath)) {
     throw "QuickZoom.exe not found: $ExePath"
 }
 
-$resolvedExe = (Resolve-Path -LiteralPath $ExePath).Path
+$resolvedExe = Install-AppPayload -SourceExe $ExePath
 $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
 $action = New-ScheduledTaskAction -Execute $resolvedExe
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser -RandomDelay (New-TimeSpan -Seconds 0)
 $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
-    -MultipleInstances IgnoreNew
+    -MultipleInstances IgnoreNew `
+    -Priority $startupTaskPriority
 
 Register-ScheduledTask `
     -TaskName $TaskName `
