@@ -11,7 +11,9 @@ internal sealed partial class TrayContext
     private const int WM_MOUSEWHEEL = 0x020A;
     private const int WH_KEYBOARD_LL = 13;
     private const int WM_KEYDOWN = 0x0100;
+    private const int WM_KEYUP = 0x0101;
     private const int WM_SYSKEYDOWN = 0x0104;
+    private const int WM_SYSKEYUP = 0x0105;
 
     private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
     private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
@@ -30,9 +32,6 @@ internal sealed partial class TrayContext
 
     [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     private static extern IntPtr GetModuleHandle(string lpModuleName);
-
-    [DllImport("user32.dll")]
-    private static extern short GetAsyncKeyState(int vKey);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct MSLLHOOKSTRUCT
@@ -86,13 +85,14 @@ internal sealed partial class TrayContext
     {
         if (!_enabled)
         {
+            _enableKeyPressed = false;
+            _wheelDeltaRemainder = 0;
             return CallNextHookEx(_hook, nCode, wParam, lParam);
         }
 
         if (nCode >= 0 && wParam.ToInt32() == WM_MOUSEWHEEL)
         {
-            bool enableHeld = (GetAsyncKeyState((int)_enableKey) & 0x8000) != 0;
-            if (enableHeld)
+            if (_enableKeyPressed)
             {
                 var data = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
                 int wheelDelta = (short)((data.mouseData >> 16) & 0xFFFF);
@@ -104,6 +104,8 @@ internal sealed partial class TrayContext
                 HandleZoomDetents(detents);
                 return (IntPtr)1;
             }
+
+            _wheelDeltaRemainder = 0;
         }
 
         return CallNextHookEx(_hook, nCode, wParam, lParam);
@@ -113,17 +115,28 @@ internal sealed partial class TrayContext
     {
         if (!_enabled)
         {
+            _enableKeyPressed = false;
             return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
         }
 
-        if (nCode >= 0 && (wParam.ToInt32() == WM_KEYDOWN || wParam.ToInt32() == WM_SYSKEYDOWN))
+        if (nCode < 0)
         {
-            bool enableHeld = (GetAsyncKeyState((int)_enableKey) & 0x8000) != 0;
-            if (enableHeld)
-            {
-                var data = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
-                int vk = (int)data.vkCode;
+            return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
+        }
 
+        int message = wParam.ToInt32();
+        var data = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
+        int vk = (int)data.vkCode;
+
+        if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN)
+        {
+            if (IsEnableKeyMatch(_enableKey, vk))
+            {
+                _enableKeyPressed = true;
+            }
+
+            if (_enableKeyPressed)
+            {
                 const int VK_OEM_PLUS = 0xBB;
                 const int VK_OEM_MINUS = 0xBD;
                 const int VK_ADD = 0x6B;
@@ -142,8 +155,29 @@ internal sealed partial class TrayContext
                 }
             }
         }
+        else if (message == WM_KEYUP || message == WM_SYSKEYUP)
+        {
+            if (IsEnableKeyMatch(_enableKey, vk))
+            {
+                _enableKeyPressed = false;
+                _wheelDeltaRemainder = 0;
+            }
+        }
 
         return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
+    }
+
+    private static bool IsEnableKeyMatch(Keys enableKey, int vk)
+    {
+        return enableKey switch
+        {
+            Keys.ControlKey => vk == (int)Keys.ControlKey || vk == (int)Keys.LControlKey || vk == (int)Keys.RControlKey,
+            Keys.Menu => vk == (int)Keys.Menu || vk == (int)Keys.LMenu || vk == (int)Keys.RMenu,
+            Keys.ShiftKey => vk == (int)Keys.ShiftKey || vk == (int)Keys.LShiftKey || vk == (int)Keys.RShiftKey,
+            Keys.LWin => vk == (int)Keys.LWin || vk == (int)Keys.RWin,
+            Keys.RWin => vk == (int)Keys.LWin || vk == (int)Keys.RWin,
+            _ => vk == (int)enableKey
+        };
     }
 
     private void HandleZoomDetents(int detents)

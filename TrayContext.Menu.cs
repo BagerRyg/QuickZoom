@@ -44,6 +44,9 @@ internal sealed partial class TrayContext
             SaveSettings();
         };
 
+        _displayMenu = new ToolStripMenuItem("Magnified Displays");
+        RebuildDisplayMenuItems();
+
         var autoSwitchItem = new ToolStripMenuItem("Auto-switch monitor") { Checked = _autoSwitchMonitor, CheckOnClick = true };
         autoSwitchItem.CheckedChanged += (_, _) =>
         {
@@ -143,9 +146,9 @@ internal sealed partial class TrayContext
 
         var enableKeyRoot = new ToolStripMenuItem("Enable Key");
         var preset = new ToolStripMenuItem("Preset");
-        preset.DropDownItems.Add("Ctrl", null, (_, _) => { _enableKey = Keys.ControlKey; SaveSettings(); UpdateMenuLabels(); });
-        preset.DropDownItems.Add("Alt", null, (_, _) => { _enableKey = Keys.Menu; SaveSettings(); UpdateMenuLabels(); });
-        preset.DropDownItems.Add("Shift", null, (_, _) => { _enableKey = Keys.ShiftKey; SaveSettings(); UpdateMenuLabels(); });
+        preset.DropDownItems.Add("Ctrl", null, (_, _) => { _enableKey = Keys.ControlKey; _enableKeyPressed = false; SaveSettings(); UpdateMenuLabels(); });
+        preset.DropDownItems.Add("Alt", null, (_, _) => { _enableKey = Keys.Menu; _enableKeyPressed = false; SaveSettings(); UpdateMenuLabels(); });
+        preset.DropDownItems.Add("Shift", null, (_, _) => { _enableKey = Keys.ShiftKey; _enableKeyPressed = false; SaveSettings(); UpdateMenuLabels(); });
 
         var customKey = new ToolStripMenuItem("Custom...");
         customKey.Click += (_, _) =>
@@ -154,6 +157,7 @@ internal sealed partial class TrayContext
             if (k != null)
             {
                 _enableKey = k.Value;
+                _enableKeyPressed = false;
                 SaveSettings();
                 UpdateMenuLabels();
             }
@@ -173,6 +177,7 @@ internal sealed partial class TrayContext
 
         menu.Items.Add(enabledItem);
         menu.Items.Add(followItem);
+        menu.Items.Add(_displayMenu);
         menu.Items.Add(autoSwitchItem);
         menu.Items.Add(smoothItem);
         menu.Items.Add(autoDisableItem);
@@ -229,6 +234,12 @@ internal sealed partial class TrayContext
     {
         int interval = Math.Max(5, 1000 / Math.Max(10, _fps));
         _followTimer.Interval = interval;
+
+        if (_animTimer != null)
+        {
+            // Keep zoom animation updates aligned with display cadence to reduce jitter.
+            _animTimer.Interval = Math.Max(8, 1000 / Math.Max(60, _fps));
+        }
     }
 
     private void RefreshFpsMenuChecks()
@@ -263,6 +274,12 @@ internal sealed partial class TrayContext
                 return;
             }
 
+            if (_animTimer != null && _animTimer.Enabled)
+            {
+                // Animation ticks already update transform continuously.
+                return;
+            }
+
             if (GetCursorPos(out var pt))
             {
                 ApplyTransformAtPoint(pt, PercentToMag(_zoomPercent));
@@ -274,7 +291,8 @@ internal sealed partial class TrayContext
             _followTimer.Start();
         }
 
-        _animTimer = new System.Windows.Forms.Timer { Interval = 10 };
+        _animTimer = new System.Windows.Forms.Timer();
+        ApplyFps();
         _animTimer.Tick += (_, _) =>
         {
             if (_zoomPercent == _animTargetPercent)

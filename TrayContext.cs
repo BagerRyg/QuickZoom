@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -35,6 +36,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private bool _smoothZoom = true;
     private bool _autoDisableAt100 = true;
     private bool _magActive;
+    private bool _useFullscreenBackend;
     private bool _centerCursor;
 
     // Animation
@@ -43,6 +45,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private int _animStartPercent = 100;
     private int _animTargetPercent = 100;
     private int _wheelDeltaRemainder;
+    private bool _enableKeyPressed;
 
     private POINT _staticCenter;
     private Keys _enableKey = Keys.ControlKey;
@@ -51,11 +54,16 @@ internal sealed partial class TrayContext : ApplicationContext
     private ToolStripMenuItem? _stepItem;
     private ToolStripMenuItem? _maxItem;
     private ToolStripMenuItem? _enableKeyItem;
+    private ToolStripMenuItem? _displayMenu;
 
     // Refresh rate
     private int _fps = 60;
     private ToolStripMenuItem? _fpsMenu;
     private static readonly int[] _fpsOptions = [30, 40, 50, 60, 90, 120];
+    private readonly HashSet<string> _selectedMonitorDeviceNames = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, MonitorMagnifierWindow> _monitorWindows = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Point> _lastAnchorByMonitor = new(StringComparer.OrdinalIgnoreCase);
+    private bool _monitorLayoutDirty = true;
 
     // Settings
     private readonly string _settingsPath = Path.Combine(
@@ -68,6 +76,7 @@ internal sealed partial class TrayContext : ApplicationContext
         LoadSettings();
         BuildMenuAndTray();
         SubscribeThemeChanges();
+        SubscribeDisplayChanges();
         InstallHook();
         InstallKeyboardHook();
         InitTimers();
@@ -100,6 +109,7 @@ internal sealed partial class TrayContext : ApplicationContext
             }
 
             UnsubscribeThemeChanges();
+            UnsubscribeDisplayChanges();
             _iconRef?.Dispose();
         }
         finally

@@ -152,7 +152,7 @@ internal static class Program
         var sb = new StringBuilder();
         for (int i = 0; i < args.Length; i++)
         {
-            if (HasArg(args, ElevatedFlag))
+            if (string.Equals(args[i], ElevatedFlag, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }

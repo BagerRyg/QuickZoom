@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Windows.Forms;
 
@@ -18,6 +20,7 @@ internal sealed partial class TrayContext
         public int Fps { get; set; } = 60;
         public bool CenterCursor { get; set; }
         public bool AutoSwitchMonitor { get; set; } = true;
+        public List<string> SelectedMonitorDeviceNames { get; set; } = new();
     }
 
     private void LoadSettings()
@@ -46,11 +49,18 @@ internal sealed partial class TrayContext
             _autoDisableAt100 = s.AutoDisableAt100;
             _fps = Math.Clamp(s.Fps, 5, 240);
             _centerCursor = s.CenterCursor;
+            _selectedMonitorDeviceNames.Clear();
+            foreach (string name in s.SelectedMonitorDeviceNames.Where(n => !string.IsNullOrWhiteSpace(n)))
+            {
+                _selectedMonitorDeviceNames.Add(name);
+            }
         }
         catch
         {
             // Ignore settings errors and keep defaults.
         }
+
+        EnsureSelectedMonitorsValid();
 
         UpdateMenuLabels();
     }
@@ -69,7 +79,8 @@ internal sealed partial class TrayContext
                 SmoothZoom = _smoothZoom,
                 AutoDisableAt100 = _autoDisableAt100,
                 Fps = _fps,
-                CenterCursor = _centerCursor
+                CenterCursor = _centerCursor,
+                SelectedMonitorDeviceNames = _selectedMonitorDeviceNames.ToList()
             };
 
             File.WriteAllText(_settingsPath, JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true }));
