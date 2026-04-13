@@ -14,10 +14,14 @@ internal sealed partial class TrayContext
         public int StepPercent { get; set; } = 15;
         public int MaxPercent { get; set; } = 300;
         public bool FollowCursor { get; set; } = true;
-        public int EnableKey { get; set; } = (int)Keys.ControlKey;
+        public int EnableKey { get; set; } = (int)Keys.Menu;
+        public int Language { get; set; } = (int)UiLanguage.English;
+        public bool InvertColors { get; set; }
+        public int InvertKey { get; set; } = (int)Keys.Menu;
+        public int InvertTrigger { get; set; } = (int)InvertTriggerKind.EnableKeyPlusMiddleClick;
         public bool SmoothZoom { get; set; } = true;
         public bool AutoDisableAt100 { get; set; } = true;
-        public int Fps { get; set; } = 60;
+        public int Fps { get; set; } = 120;
         public bool CenterCursor { get; set; }
         public bool AutoSwitchMonitor { get; set; } = true;
         public bool UseCursorMonitorSelection { get; set; }
@@ -51,6 +55,14 @@ internal sealed partial class TrayContext
             _followCursor = s.FollowCursor;
             _autoSwitchMonitor = s.AutoSwitchMonitor;
             _enableKey = (Keys)s.EnableKey;
+            _language = Enum.IsDefined(typeof(UiLanguage), s.Language)
+                ? (UiLanguage)s.Language
+                : UiText.GetDefaultLanguage();
+            _invertColors = s.InvertColors;
+            _invertKey = (Keys)s.InvertKey;
+            _invertTrigger = Enum.IsDefined(typeof(InvertTriggerKind), s.InvertTrigger)
+                ? (InvertTriggerKind)s.InvertTrigger
+                : InvertTriggerKind.EnableKeyPlusMiddleClick;
             _smoothZoom = s.SmoothZoom;
             _autoDisableAt100 = s.AutoDisableAt100;
             _fps = Math.Clamp(s.Fps, 5, 240);
@@ -62,9 +74,9 @@ internal sealed partial class TrayContext
                 _selectedMonitorDeviceNames.Add(name);
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore settings errors and keep defaults.
+            ErrorLog.Write("LoadSettings", ex);
         }
 
         EnsureSelectedMonitorsValid();
@@ -85,6 +97,10 @@ internal sealed partial class TrayContext
                 FollowCursor = _followCursor,
                 AutoSwitchMonitor = _autoSwitchMonitor,
                 EnableKey = (int)_enableKey,
+                Language = (int)_language,
+                InvertColors = _invertColors,
+                InvertKey = (int)_invertKey,
+                InvertTrigger = (int)_invertTrigger,
                 SmoothZoom = _smoothZoom,
                 AutoDisableAt100 = _autoDisableAt100,
                 Fps = _fps,
@@ -95,9 +111,9 @@ internal sealed partial class TrayContext
 
             File.WriteAllText(_settingsPath, JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true }));
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore settings errors to keep app responsive.
+            ErrorLog.Write("SaveSettings", ex);
         }
 
         UpdateMenuLabels();
@@ -105,22 +121,7 @@ internal sealed partial class TrayContext
 
     private void UpdateMenuLabels()
     {
-        if (_stepItem != null)
-        {
-            _stepItem.Text = $"Zoom Step (current: {_stepPercent}%)";
-        }
-
-        if (_maxItem != null)
-        {
-            _maxItem.Text = $"Max Zoom (current: {_maxPercent}%)";
-        }
-
-        if (_enableKeyItem != null)
-        {
-            _enableKeyItem.Text = $"Enable Key (hold): {KeyLabel(_enableKey)}";
-        }
-
-        RefreshFpsMenuChecks();
+        // Reserved for future live-menu label updates. The current tray UI is rebuilt instead.
     }
 
     private static string KeyLabel(Keys key) => key switch
@@ -131,4 +132,20 @@ internal sealed partial class TrayContext
         Keys.LWin or Keys.RWin => "Win",
         _ => key.ToString()
     };
+
+    private string InvertTriggerLabel() => _invertTrigger switch
+    {
+        InvertTriggerKind.EnableKeyPlusMiddleClick => InvertTriggerTextForCurrentEnableKey(L("Settings.Trigger.EnableMiddle")),
+        InvertTriggerKind.EnableKeyPlusXButton1 => InvertTriggerTextForCurrentEnableKey(L("Settings.Trigger.EnableX1")),
+        InvertTriggerKind.EnableKeyPlusXButton2 => InvertTriggerTextForCurrentEnableKey(L("Settings.Trigger.EnableX2")),
+        InvertTriggerKind.CustomKey => KeyLabel(_invertKey),
+        _ => "Unknown"
+    };
+
+    private string InvertTriggerTextForCurrentEnableKey(string template)
+    {
+        return template
+            .Replace("Enable Key", KeyLabel(_enableKey), StringComparison.Ordinal)
+            .Replace("Aktiveringstast", KeyLabel(_enableKey), StringComparison.Ordinal);
+    }
 }

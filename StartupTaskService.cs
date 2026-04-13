@@ -75,13 +75,13 @@ internal static class StartupTaskService
         return false;
     }
 
-    internal static string GetStatusLabel()
+    internal static string GetStatusLabel(UiLanguage language)
     {
         return GetStatus() switch
         {
-            StartupTaskStatus.Ready => "Startup Service: Configured",
-            StartupTaskStatus.Missing => "Startup Service: Not configured",
-            _ => "Startup Service: Status unavailable"
+            StartupTaskStatus.Ready => UiText.Get(language, "Tray.StartupConfigured"),
+            StartupTaskStatus.Missing => UiText.Get(language, "Tray.StartupMissing"),
+            _ => UiText.Get(language, "Tray.StartupUnknown")
         };
     }
 }

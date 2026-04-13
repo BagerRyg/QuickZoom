@@ -35,30 +35,19 @@ internal sealed partial class TrayContext
 
     private void OnDisplaySettingsChanged(object? sender, EventArgs e)
     {
-        if (_menu == null || _menu.IsDisposed)
+        RunOnUiThread(() =>
         {
-            return;
-        }
+            EnsureSelectedMonitorsValid();
+            EnsureLockedScreenStillValid();
+            _monitorLayoutDirty = true;
+            PopulateDisplayOptionsHost();
+            UpdateTrayPopupState();
 
-        try
-        {
-            _menu.BeginInvoke((MethodInvoker)(() =>
+            if (_magActive)
             {
-                EnsureSelectedMonitorsValid();
-                RebuildDisplayMenuItems();
-                EnsureLockedScreenStillValid();
-                _monitorLayoutDirty = true;
-
-                if (_magActive)
-                {
-                    ApplyTransformCurrentPoint();
-                }
-            }));
-        }
-        catch
-        {
-            // Ignore shutdown race conditions.
-        }
+                ApplyTransformCurrentPoint();
+            }
+        });
     }
 
     private void EnsureSelectedMonitorsValid()
@@ -94,39 +83,46 @@ internal sealed partial class TrayContext
         }
     }
 
-    private void RebuildDisplayMenuItems()
+    private void PopulateDisplayOptionsHost()
     {
-        if (_displayMenu == null)
+        if (_displayOptionsHost == null)
         {
             return;
         }
 
+        ThemePalette palette = CurrentTheme;
         EnsureSelectedMonitorsValid();
-        _displayMenu.DropDownItems.Clear();
+        _displayOptionsHost.SuspendLayout();
+        _displayOptionsHost.Controls.Clear();
+        int rowWidth = Math.Max(
+            ControlDrawing.ScaleLogical(_displayOptionsHost, 180),
+            (_displayOptionsHost.Width > 0 ? _displayOptionsHost.Width : _displayOptionsHost.MinimumSize.Width) - _displayOptionsHost.Padding.Horizontal);
 
-        var screens = GetOrderedScreens();
-        int selectedCount = _selectedMonitorDeviceNames.Count;
-
-        var cursorItem = new ToolStripMenuItem("Monitor Under Cursor")
+        var cursorRow = new TrayMenuRow(palette, L("Tray.MonitorUnderCursor"), _useCursorMonitorSelection ? L("Tray.DisplaySelected") : string.Empty)
         {
-            Checked = _useCursorMonitorSelection
+            Active = _useCursorMonitorSelection,
+            Width = rowWidth
         };
-        cursorItem.Click += (_, _) =>
+        cursorRow.ActionRequested += (_, _) =>
         {
             _useCursorMonitorSelection = true;
             _lockedScreen = null;
             _monitorLayoutDirty = true;
-            RebuildDisplayMenuItems();
             SaveSettings();
+            UpdateTrayPopupState();
             ApplyTransformCurrentPoint();
         };
-        _displayMenu.DropDownItems.Add(cursorItem);
+        _displayOptionsHost.Controls.Add(cursorRow);
 
-        var allItem = new ToolStripMenuItem("All Displays")
+        List<Screen> screens = GetOrderedScreens();
+        bool allDisplaysSelected = !_useCursorMonitorSelection && _selectedMonitorDeviceNames.Count == screens.Count;
+
+        var allRow = new TrayMenuRow(palette, L("Tray.AllDisplays"), allDisplaysSelected ? L("Tray.DisplaySelected") : string.Empty)
         {
-            Checked = !_useCursorMonitorSelection && selectedCount == screens.Count
+            Active = allDisplaysSelected,
+            Width = rowWidth
         };
-        allItem.Click += (_, _) =>
+        allRow.ActionRequested += (_, _) =>
         {
             _useCursorMonitorSelection = false;
             foreach (Screen screen in screens)
@@ -135,56 +131,71 @@ internal sealed partial class TrayContext
             }
 
             _monitorLayoutDirty = true;
-            RebuildDisplayMenuItems();
             SaveSettings();
+            UpdateTrayPopupState();
             ApplyTransformCurrentPoint();
         };
-        _displayMenu.DropDownItems.Add(allItem);
-        _displayMenu.DropDownItems.Add(new ToolStripSeparator());
+        _displayOptionsHost.Controls.Add(allRow);
 
         int index = 1;
         foreach (Screen screen in screens)
         {
             string label = screen.Primary
-                ? $"Primary ({screen.DeviceName})"
-                : $"Display {index} ({screen.DeviceName})";
+                ? string.Format(L("Tray.PrimaryDisplay"), screen.DeviceName)
+                : string.Format(L("Tray.DisplayN"), index, screen.DeviceName);
 
-            var item = new ToolStripMenuItem(label)
+            bool selected = !_useCursorMonitorSelection && _selectedMonitorDeviceNames.Contains(screen.DeviceName);
+            var screenRow = new TrayMenuRow(palette, label, selected ? L("Tray.DisplayIncluded") : string.Empty)
             {
-                CheckOnClick = true,
-                Checked = !_useCursorMonitorSelection && _selectedMonitorDeviceNames.Contains(screen.DeviceName),
-                Tag = screen.DeviceName
+                Active = selected,
+                Width = rowWidth
             };
-
-            item.Click += (_, _) =>
-            {
-                _useCursorMonitorSelection = false;
-                string deviceName = (string)item.Tag!;
-                if (item.Checked)
-                {
-                    _selectedMonitorDeviceNames.Add(deviceName);
-                }
-                else
-                {
-                    if (_selectedMonitorDeviceNames.Count == 1 &&
-                        _selectedMonitorDeviceNames.Contains(deviceName))
-                    {
-                        item.Checked = true;
-                        return;
-                    }
-
-                    _selectedMonitorDeviceNames.Remove(deviceName);
-                }
-
-                _monitorLayoutDirty = true;
-                RebuildDisplayMenuItems();
-                SaveSettings();
-                ApplyTransformCurrentPoint();
-            };
-
-            _displayMenu.DropDownItems.Add(item);
+            string deviceName = screen.DeviceName;
+            screenRow.ActionRequested += (_, _) => ToggleScreenSelection(deviceName);
+            _displayOptionsHost.Controls.Add(screenRow);
             index++;
         }
+        _displayOptionsHost.ResumeLayout(performLayout: true);
+    }
+
+    private void ToggleScreenSelection(string deviceName)
+    {
+        ResetExitConfirmation();
+        _useCursorMonitorSelection = false;
+        if (_selectedMonitorDeviceNames.Contains(deviceName))
+        {
+            if (_selectedMonitorDeviceNames.Count == 1)
+            {
+                return;
+            }
+
+            _selectedMonitorDeviceNames.Remove(deviceName);
+        }
+        else
+        {
+            _selectedMonitorDeviceNames.Add(deviceName);
+        }
+
+        _monitorLayoutDirty = true;
+        SaveSettings();
+        UpdateTrayPopupState();
+        ApplyTransformCurrentPoint();
+    }
+
+    private string GetDisplaySelectionSummary()
+    {
+        List<Screen> screens = GetOrderedScreens();
+        if (_useCursorMonitorSelection)
+        {
+            return L("Tray.DisplaySummaryCursor");
+        }
+
+        if (_selectedMonitorDeviceNames.Count >= screens.Count)
+        {
+            return L("Tray.DisplaySummaryAll");
+        }
+
+        return string.Format(L("Tray.DisplaySummaryCount"), _selectedMonitorDeviceNames.Count);
     }
 
     private List<Screen> GetOrderedScreens()
@@ -228,17 +239,17 @@ internal sealed partial class TrayContext
 
         var selectedNames = _selectedMonitorDeviceNames;
 
-        var screens = GetOrderedScreens()
+        var chosenScreens = GetOrderedScreens()
             .Where(screen => selectedNames.Contains(screen.DeviceName))
             .ToList();
 
-        if (screens.Count == 0)
+        if (chosenScreens.Count == 0)
         {
             Screen primary = Screen.PrimaryScreen ?? Screen.AllScreens.First();
-            screens.Add(primary);
+            chosenScreens.Add(primary);
         }
 
-        return screens;
+        return chosenScreens;
     }
 
     private static Point GetMonitorRelativePoint(Point sourcePoint, Rectangle sourceBounds, Rectangle targetBounds)

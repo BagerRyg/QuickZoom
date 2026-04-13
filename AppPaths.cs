@@ -14,4 +14,11 @@ internal static class AppPaths
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "QuickZoom",
         "settings.json");
+
+    internal static string RuntimeLogPath => Path.Combine(AppContext.BaseDirectory, "quickzoom-error.log");
+
+    internal static string AppDataLogPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "QuickZoom",
+        "quickzoom-error.log");
 }

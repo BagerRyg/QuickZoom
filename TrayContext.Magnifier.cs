@@ -22,7 +22,13 @@ internal sealed partial class TrayContext
     private static extern bool MagSetFullscreenTransform(float magLevel, int xOffset, int yOffset);
 
     [DllImport("Magnification.dll", ExactSpelling = true)]
+    private static extern bool MagSetFullscreenColorEffect([In] ref MAGCOLOREFFECT pEffect);
+
+    [DllImport("Magnification.dll", ExactSpelling = true)]
     private static extern bool MagSetWindowTransform(IntPtr hwnd, [In] ref MAGTRANSFORM pTransform);
+
+    [DllImport("Magnification.dll", ExactSpelling = true)]
+    private static extern bool MagSetColorEffect(IntPtr hwnd, [In] ref MAGCOLOREFFECT pEffect);
 
     [DllImport("Magnification.dll", ExactSpelling = true)]
     private static extern bool MagSetWindowFilterList(IntPtr hwnd, int dwFilterMode, int count, IntPtr[] pHWND);
@@ -105,6 +111,37 @@ internal sealed partial class TrayContext
         public float v20; public float v21; public float v22;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MAGCOLOREFFECT
+    {
+        public float v00; public float v01; public float v02; public float v03; public float v04;
+        public float v10; public float v11; public float v12; public float v13; public float v14;
+        public float v20; public float v21; public float v22; public float v23; public float v24;
+        public float v30; public float v31; public float v32; public float v33; public float v34;
+        public float v40; public float v41; public float v42; public float v43; public float v44;
+    }
+
+    private static readonly MAGCOLOREFFECT IdentityColorEffect = new()
+    {
+        v00 = 1f,
+        v11 = 1f,
+        v22 = 1f,
+        v33 = 1f,
+        v44 = 1f
+    };
+
+    private static readonly MAGCOLOREFFECT InvertColorEffect = new()
+    {
+        v00 = -1f,
+        v11 = -1f,
+        v22 = -1f,
+        v33 = 1f,
+        v40 = 1f,
+        v41 = 1f,
+        v42 = 1f,
+        v44 = 1f
+    };
+
     private sealed class MonitorMagnifierHostForm : Form
     {
         public MonitorMagnifierHostForm(Rectangle bounds)
@@ -154,6 +191,7 @@ internal sealed partial class TrayContext
         private bool _hasLastFrame;
         private RECT _lastSourceRect;
         private float _lastMagnification;
+        private bool _lastInvertColors;
 
         public IntPtr HostHandle => _host.Handle;
         public IntPtr MagnifierHandle => _magnifierHandle;
@@ -200,7 +238,7 @@ internal sealed partial class TrayContext
             }
         }
 
-        public void Apply(float magnification, RECT sourceRect)
+        public void Apply(float magnification, RECT sourceRect, bool invertColors)
         {
             if (_magnifierHandle == IntPtr.Zero)
             {
@@ -209,7 +247,8 @@ internal sealed partial class TrayContext
 
             if (_hasLastFrame &&
                 Math.Abs(_lastMagnification - magnification) < 0.0001f &&
-                RectEquals(_lastSourceRect, sourceRect))
+                RectEquals(_lastSourceRect, sourceRect) &&
+                _lastInvertColors == invertColors)
             {
                 return;
             }
@@ -221,10 +260,13 @@ internal sealed partial class TrayContext
                 v22 = 1f
             };
 
+            MAGCOLOREFFECT colorEffect = invertColors ? InvertColorEffect : IdentityColorEffect;
+            _ = MagSetColorEffect(_magnifierHandle, ref colorEffect);
             _ = MagSetWindowTransform(_magnifierHandle, ref transform);
             _ = MagSetWindowSource(_magnifierHandle, sourceRect);
             _lastMagnification = magnification;
             _lastSourceRect = sourceRect;
+            _lastInvertColors = invertColors;
             _hasLastFrame = true;
         }
 
@@ -344,6 +386,8 @@ internal sealed partial class TrayContext
                 else
                 {
                     _ = MagSetFullscreenTransform(1.0f, 0, 0);
+                    var identity = IdentityColorEffect;
+                    _ = MagSetFullscreenColorEffect(ref identity);
                     _monitorLayoutDirty = true;
                 }
 
@@ -371,6 +415,8 @@ internal sealed partial class TrayContext
             if (wasFullscreenBackend)
             {
                 _ = MagSetFullscreenTransform(1.0f, 0, 0);
+                var identity = IdentityColorEffect;
+                _ = MagSetFullscreenColorEffect(ref identity);
             }
             MagUninitialize();
             _magActive = false;
@@ -519,21 +565,22 @@ internal sealed partial class TrayContext
 
     private void ApplyTransformCurrentPoint()
     {
-        if (_autoDisableAt100 && _zoomPercent <= 100)
+        bool needsVisualEffect = _invertColors || _zoomPercent > 100;
+        if (_autoDisableAt100 && !needsVisualEffect)
         {
             DisableMagAndReset();
             return;
         }
 
         UpdateShellUiTrackingState();
-
-        if (IsPerMonitorTrackingSuspended && !_useFullscreenBackend)
+        EnsureMag(true);
+        if (!_magActive)
         {
             return;
         }
 
-        EnsureMag(true);
-        if (!_magActive)
+        UpdateShellUiTrackingState();
+        if (IsPerMonitorTrackingSuspended && !_useFullscreenBackend)
         {
             return;
         }
@@ -657,7 +704,7 @@ internal sealed partial class TrayContext
             }
 
             RECT sourceRect = BuildSourceRect(screen.Bounds, anchorPoint, mag);
-            window.Apply(mag, sourceRect);
+            window.Apply(mag, sourceRect, _invertColors);
         }
     }
 
@@ -703,6 +750,8 @@ internal sealed partial class TrayContext
             yOffset -= (int)Math.Round(bounds.Top / mag);
         }
 
+        MAGCOLOREFFECT colorEffect = _invertColors ? InvertColorEffect : IdentityColorEffect;
+        _ = MagSetFullscreenColorEffect(ref colorEffect);
         _ = MagSetFullscreenTransform(mag, xOffset, yOffset);
     }
 

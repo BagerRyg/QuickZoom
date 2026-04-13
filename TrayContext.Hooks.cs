@@ -9,6 +9,8 @@ internal sealed partial class TrayContext
 {
     private const int WH_MOUSE_LL = 14;
     private const int WM_MOUSEWHEEL = 0x020A;
+    private const int WM_MBUTTONDOWN = 0x0207;
+    private const int WM_XBUTTONDOWN = 0x020B;
     private const int WH_KEYBOARD_LL = 13;
     private const int WM_KEYDOWN = 0x0100;
     private const int WM_KEYUP = 0x0101;
@@ -86,26 +88,39 @@ internal sealed partial class TrayContext
         if (!_enabled)
         {
             _enableKeyPressed = false;
+            _invertKeyPressed = false;
             _wheelDeltaRemainder = 0;
             return CallNextHookEx(_hook, nCode, wParam, lParam);
         }
 
-        if (nCode >= 0 && wParam.ToInt32() == WM_MOUSEWHEEL)
+        if (nCode >= 0)
         {
-            if (_enableKeyPressed)
-            {
-                var data = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
-                int wheelDelta = (short)((data.mouseData >> 16) & 0xFFFF);
-                _wheelDeltaRemainder += wheelDelta;
-                int detents = _wheelDeltaRemainder / 120;
-                _wheelDeltaRemainder %= 120;
-                detents = Math.Max(-3, Math.Min(3, detents));
+            int message = wParam.ToInt32();
 
-                HandleZoomDetents(detents);
+            if ((message == WM_MBUTTONDOWN || message == WM_XBUTTONDOWN) &&
+                MatchesInvertMouseTrigger(Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam), message))
+            {
+                ToggleInvertColors();
                 return (IntPtr)1;
             }
 
-            _wheelDeltaRemainder = 0;
+            if (message == WM_MOUSEWHEEL)
+            {
+                if (_enableKeyPressed)
+                {
+                    var data = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
+                    int wheelDelta = (short)((data.mouseData >> 16) & 0xFFFF);
+                    _wheelDeltaRemainder += wheelDelta;
+                    int detents = _wheelDeltaRemainder / 120;
+                    _wheelDeltaRemainder %= 120;
+                    detents = Math.Max(-3, Math.Min(3, detents));
+
+                    HandleZoomDetents(detents);
+                    return (IntPtr)1;
+                }
+
+                _wheelDeltaRemainder = 0;
+            }
         }
 
         return CallNextHookEx(_hook, nCode, wParam, lParam);
@@ -116,6 +131,7 @@ internal sealed partial class TrayContext
         if (!_enabled)
         {
             _enableKeyPressed = false;
+            _invertKeyPressed = false;
             return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
         }
 
@@ -133,6 +149,17 @@ internal sealed partial class TrayContext
             if (IsEnableKeyMatch(_enableKey, vk))
             {
                 _enableKeyPressed = true;
+            }
+
+            if (_invertTrigger == InvertTriggerKind.CustomKey && IsInvertKeyMatch(vk))
+            {
+                if (!_invertKeyPressed)
+                {
+                    _invertKeyPressed = true;
+                    ToggleInvertColors();
+                }
+
+                return (IntPtr)1;
             }
 
             if (_enableKeyPressed)
@@ -162,6 +189,12 @@ internal sealed partial class TrayContext
                 _enableKeyPressed = false;
                 _wheelDeltaRemainder = 0;
             }
+
+            if (_invertTrigger == InvertTriggerKind.CustomKey && IsInvertKeyMatch(vk))
+            {
+                _invertKeyPressed = false;
+                return (IntPtr)1;
+            }
         }
 
         return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
@@ -180,11 +213,61 @@ internal sealed partial class TrayContext
         };
     }
 
+    private bool IsInvertKeyMatch(int vk)
+    {
+        return vk == (int)_invertKey;
+    }
+
+    private bool MatchesInvertMouseTrigger(MSLLHOOKSTRUCT data, int message)
+    {
+        if (!_enableKeyPressed)
+        {
+            return false;
+        }
+
+        return _invertTrigger switch
+        {
+            InvertTriggerKind.EnableKeyPlusMiddleClick => message == WM_MBUTTONDOWN,
+            InvertTriggerKind.EnableKeyPlusXButton1 => message == WM_XBUTTONDOWN && ((data.mouseData >> 16) & 0xFFFF) == 1,
+            InvertTriggerKind.EnableKeyPlusXButton2 => message == WM_XBUTTONDOWN && ((data.mouseData >> 16) & 0xFFFF) == 2,
+            _ => false
+        };
+    }
+
+    private void ToggleInvertColors()
+    {
+        ResetExitConfirmation();
+        _invertColors = !_invertColors;
+        if (_trayPopup != null && !_trayPopup.IsDisposed)
+        {
+            CloseTrayPopup();
+        }
+
+        if (!_invertColors && _zoomPercent <= 100 && _autoDisableAt100)
+        {
+            DisableMagAndReset();
+        }
+        else
+        {
+            ApplyTransformCurrentPoint();
+        }
+
+        SaveSettings();
+        RefreshMenuAndTrayUi();
+    }
+
     private void HandleZoomDetents(int detents)
     {
         if (detents == 0)
         {
             return;
+        }
+
+        ResetExitConfirmation();
+
+        if (_trayPopup != null && !_trayPopup.IsDisposed)
+        {
+            CloseTrayPopup();
         }
 
         int basePercent = _smoothZoom ? _animTargetPercent : _zoomPercent;

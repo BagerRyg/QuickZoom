@@ -47,6 +47,10 @@ internal static class Program
         try { Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); } catch { }
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += (_, e) => LogFatalException("UI thread", e.Exception);
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => LogFatalException("AppDomain", e.ExceptionObject as Exception);
+        ErrorLog.Write("Startup", $"Launching {AppInfo.DisplayVersion} from {AppContext.BaseDirectory}");
 
         string? exePath = GetExecutablePath();
         bool isAdmin = IsRunningAsAdministrator();
@@ -378,5 +382,10 @@ internal static class Program
     private static string ToPowerShellSingleQuoted(string value)
     {
         return "'" + value.Replace("'", "''") + "'";
+    }
+
+    private static void LogFatalException(string source, Exception? exception)
+    {
+        ErrorLog.Write(source, exception);
     }
 }

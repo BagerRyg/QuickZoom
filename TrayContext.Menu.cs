@@ -8,6 +8,8 @@ namespace QuickZoom;
 
 internal sealed partial class TrayContext
 {
+    private const int TrayContentLogicalWidth = 300;
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
 
@@ -18,6 +20,23 @@ internal sealed partial class TrayContext
     {
         _taskbarCreatedMessage = unchecked((int)RegisterWindowMessage("TaskbarCreated"));
         _shellMessageWindow = new ShellMessageWindow(this, _taskbarCreatedMessage);
+    }
+
+    private void InitializeCoreRuntime()
+    {
+        if (_coreRuntimeInitialized)
+        {
+            return;
+        }
+
+        ApplyThemeFromSystem(force: true);
+        SubscribeThemeChanges();
+        SubscribeDisplayChanges();
+        InstallHook();
+        InstallKeyboardHook();
+        InitTimers();
+        UpdateMenuLabels();
+        _coreRuntimeInitialized = true;
     }
 
     private void StartDeferredStartupIfNeeded()
@@ -56,12 +75,6 @@ internal sealed partial class TrayContext
         }
 
         BuildMenuAndTray();
-        SubscribeThemeChanges();
-        SubscribeDisplayChanges();
-        InstallHook();
-        InstallKeyboardHook();
-        InitTimers();
-        UpdateMenuLabels();
         _startupInitialized = true;
     }
 
@@ -90,240 +103,346 @@ internal sealed partial class TrayContext
 
     private void BuildMenuAndTray()
     {
-        var menu = new ContextMenuStrip
-        {
-            ShowCheckMargin = true,
-            ShowImageMargin = false
-        };
-        menu.Opening += (_, _) =>
-        {
-            UpdateStartupServiceStatusLabel();
-            SuspendPerMonitorTracking();
-        };
-        menu.Closed += (_, _) => ResumePerMonitorTracking();
-        _menu = menu;
-
-        var enabledItem = new ToolStripMenuItem("Enabled") { Checked = _enabled, CheckOnClick = true };
-        enabledItem.CheckedChanged += (_, _) =>
-        {
-            _enabled = enabledItem.Checked;
-            if (!_enabled)
-            {
-                DisableMagAndReset();
-            }
-
-            SaveSettings();
-        };
-
-        var followItem = new ToolStripMenuItem("Follow Cursor") { Checked = _followCursor, CheckOnClick = true };
-        followItem.CheckedChanged += (_, _) =>
-        {
-            _followCursor = followItem.Checked;
-            if (_followCursor)
-            {
-                _followTimer.Start();
-            }
-            else
-            {
-                _followTimer.Stop();
-            }
-
-            SaveSettings();
-        };
-
-        _displayMenu = new ToolStripMenuItem("Magnified Displays");
-        RebuildDisplayMenuItems();
-
-        var autoSwitchItem = new ToolStripMenuItem("Auto-switch monitor") { Checked = _autoSwitchMonitor, CheckOnClick = true };
-        autoSwitchItem.CheckedChanged += (_, _) =>
-        {
-            _autoSwitchMonitor = autoSwitchItem.Checked;
-            if (_autoSwitchMonitor)
-            {
-                _lockedScreen = null;
-            }
-            else if (GetCursorPos(out var ptLock))
-            {
-                _lockedScreen = Screen.FromPoint(new Point(ptLock.X, ptLock.Y));
-            }
-
-            ApplyTransformCurrentPoint();
-            SaveSettings();
-        };
-
-        var smoothItem = new ToolStripMenuItem("Smooth Zoom") { Checked = _smoothZoom, CheckOnClick = true };
-        smoothItem.CheckedChanged += (_, _) => { _smoothZoom = smoothItem.Checked; SaveSettings(); };
-
-        var centerItem = new ToolStripMenuItem("Center Cursor") { Checked = _centerCursor, CheckOnClick = true };
-        centerItem.CheckedChanged += (_, _) => { _centerCursor = centerItem.Checked; SaveSettings(); };
-
-        var autoDisableItem = new ToolStripMenuItem("Disable Magnifier at 100%") { Checked = _autoDisableAt100, CheckOnClick = true };
-        autoDisableItem.CheckedChanged += (_, _) =>
-        {
-            _autoDisableAt100 = autoDisableItem.Checked;
-            if (_autoDisableAt100 && _zoomPercent == 100)
-            {
-                DisableMagAndReset();
-            }
-
-            SaveSettings();
-        };
-
-        _stepItem = new ToolStripMenuItem($"Zoom Step (current: {_stepPercent}%)");
-        foreach (var p in new[] { 5, 10, 12, 15, 20, 25 })
-        {
-            _stepItem.DropDownItems.Add($"{p}%", null, (_, _) =>
-            {
-                _stepPercent = p;
-                UpdateMenuLabels();
-                SaveSettings();
-            });
-        }
-
-        _stepItem.DropDownItems.Add(new ToolStripSeparator());
-        _stepItem.DropDownItems.Add("Custom...", null, (_, _) =>
-        {
-            var v = PromptForNumber("Enter zoom step in % (5-50):", _stepPercent, 5, 50);
-            if (v != null)
-            {
-                _stepPercent = v.Value;
-                UpdateMenuLabels();
-                SaveSettings();
-            }
-        });
-
-        _maxItem = new ToolStripMenuItem($"Max Zoom (current: {_maxPercent}%)");
-        foreach (var p in new[] { 200, 250, 300, 350, 400 })
-        {
-            _maxItem.DropDownItems.Add($"{p}%", null, (_, _) =>
-            {
-                _maxPercent = p;
-                ClampZoom();
-                UpdateMenuLabels();
-                SaveSettings();
-            });
-        }
-
-        _maxItem.DropDownItems.Add(new ToolStripSeparator());
-        _maxItem.DropDownItems.Add("Custom...", null, (_, _) =>
-        {
-            var v = PromptForNumber("Enter max zoom in % (150-600):", _maxPercent, 150, 600);
-            if (v != null)
-            {
-                _maxPercent = v.Value;
-                ClampZoom();
-                UpdateMenuLabels();
-                SaveSettings();
-            }
-        });
-
-        _fpsMenu = new ToolStripMenuItem("Refresh Rate");
-        foreach (var f in _fpsOptions)
-        {
-            var item = new ToolStripMenuItem($"{f} FPS") { Tag = f, CheckOnClick = true, Checked = f == _fps };
-            item.Click += (_, _) =>
-            {
-                _fps = f;
-                ApplyFps();
-                RefreshFpsMenuChecks();
-                SaveSettings();
-            };
-            _fpsMenu.DropDownItems.Add(item);
-        }
-
-        var enableKeyRoot = new ToolStripMenuItem("Enable Key");
-        var preset = new ToolStripMenuItem("Preset");
-        preset.DropDownItems.Add("Ctrl", null, (_, _) => { _enableKey = Keys.ControlKey; _enableKeyPressed = false; SaveSettings(); UpdateMenuLabels(); });
-        preset.DropDownItems.Add("Alt", null, (_, _) => { _enableKey = Keys.Menu; _enableKeyPressed = false; SaveSettings(); UpdateMenuLabels(); });
-        preset.DropDownItems.Add("Shift", null, (_, _) => { _enableKey = Keys.ShiftKey; _enableKeyPressed = false; SaveSettings(); UpdateMenuLabels(); });
-
-        var customKey = new ToolStripMenuItem("Custom...");
-        customKey.Click += (_, _) =>
-        {
-            var k = PromptForKey(_enableKey);
-            if (k != null)
-            {
-                _enableKey = k.Value;
-                _enableKeyPressed = false;
-                SaveSettings();
-                UpdateMenuLabels();
-            }
-        };
-
-        _enableKeyItem = new ToolStripMenuItem($"Enable Key (hold): {KeyLabel(_enableKey)}");
-        enableKeyRoot.DropDownItems.AddRange([_enableKeyItem, preset, customKey]);
-
-        var resetCursorItem = new ToolStripMenuItem("Reset Cursor (fix pointer feel)");
-        resetCursorItem.Click += (_, _) => { SystemParametersInfo(SPI_SETCURSORS, 0, IntPtr.Zero, 0); };
-
-        _startupServiceStatusItem = new ToolStripMenuItem("Startup Service: Checking...")
-        {
-            Enabled = false
-        };
-
-        var aboutItem = new ToolStripMenuItem("About");
-        aboutItem.Click += (_, _) => ShowAboutDialog();
-
-        var exitItem = new ToolStripMenuItem("Exit");
-        exitItem.Click += (_, _) => ExitThread();
-
-        menu.Items.Add(enabledItem);
-        menu.Items.Add(followItem);
-        menu.Items.Add(_displayMenu);
-        menu.Items.Add(autoSwitchItem);
-        menu.Items.Add(smoothItem);
-        menu.Items.Add(autoDisableItem);
-        menu.Items.Add(_stepItem);
-        menu.Items.Add(_maxItem);
-        menu.Items.Add(_fpsMenu);
-        menu.Items.Add(enableKeyRoot);
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(resetCursorItem);
-        menu.Items.Add(_startupServiceStatusItem);
-        menu.Items.Add(aboutItem);
-        menu.Items.Add(exitItem);
-
-        _iconRef = LoadEmbeddedIconBySuffix("magnifier_dark.ico")
-                   ?? Icon.ExtractAssociatedIcon(Application.ExecutablePath)
-                   ?? SystemIcons.Application;
-
-        CreateNotifyIcon();
-
         ApplyThemeFromSystem(force: true);
+        CreateNotifyIcon();
         UpdateStartupServiceStatusLabel();
     }
 
     private void CreateNotifyIcon()
     {
-        if (_menu == null)
-        {
-            return;
-        }
-
         if (_tray != null)
         {
             _tray.Visible = false;
             _tray.Dispose();
         }
 
+        _iconRef ??= LoadEmbeddedIconBySuffix("magnifier_dark.ico")
+                    ?? Icon.ExtractAssociatedIcon(Application.ExecutablePath)
+                    ?? SystemIcons.Application;
+
         _tray = new NotifyIcon
         {
             Icon = _iconRef,
             Visible = true,
-            Text = "QuickZoom",
-            ContextMenuStrip = _menu
+            Text = "QuickZoom"
         };
+        _tray.MouseUp += OnTrayMouseUp;
     }
 
     private void RestoreTrayIcon()
     {
-        if (_menu == null || !IsShellReady())
+        if (!IsShellReady())
         {
             return;
         }
 
         CreateNotifyIcon();
-        ApplyThemeFromSystem(force: true);
+        if (_trayPopup != null && !_trayPopup.IsDisposed)
+        {
+            RebuildTrayPopupIfOpen();
+        }
+    }
+
+    private void OnTrayMouseUp(object? sender, MouseEventArgs e)
+    {
+        if (e.Button is not (MouseButtons.Left or MouseButtons.Right))
+        {
+            return;
+        }
+
+        ToggleTrayPopup(Cursor.Position);
+    }
+
+    private void ToggleTrayPopup(Point anchor)
+    {
+        if (_trayPopup != null && !_trayPopup.IsDisposed)
+        {
+            CloseTrayPopup();
+            return;
+        }
+
+        ShowTrayPopup(anchor);
+    }
+
+    private void ShowTrayPopup(Point anchor)
+    {
+        CloseTrayPopup();
+        _lastTrayPopupAnchor = anchor;
+
+        ThemePalette palette = CurrentTheme;
+        var popup = new TrayPopupWindow(palette);
+        int trayContentWidth = ControlDrawing.ScaleLogical(popup, TrayContentLogicalWidth);
+        popup.FormClosed += (_, _) =>
+        {
+            _magnifyRow = null;
+            _invertRow = null;
+            _followRow = null;
+            _exitRow = null;
+            _magnifyToggle = null;
+            _invertToggle = null;
+            _followToggle = null;
+            _displayRow = null;
+            _displayOptionsHost = null;
+            _startupServiceStatusLabel = null;
+            _trayPopup = null;
+            _pendingExitConfirmation = false;
+            ResumePerMonitorTracking();
+        };
+
+        var root = popup.ContentHost;
+        root.SuspendLayout();
+        root.Controls.Clear();
+        root.MinimumSize = new Size(trayContentWidth, 0);
+        root.MaximumSize = new Size(trayContentWidth, 0);
+        root.Width = trayContentWidth;
+
+        root.Controls.Add(CreateTrayHeader(palette, trayContentWidth));
+
+        var quickSection = CreateTraySectionLabel(L("Tray.SectionQuick"), palette, trayContentWidth);
+        root.Controls.Add(quickSection);
+
+        var quickActions = CreateTrayStack(trayContentWidth);
+
+        _magnifyToggle = new ToggleSwitchControl(palette) { IsOn = _enabled };
+        _magnifyRow = new TrayMenuRow(palette, L("Tray.ToggleMagnify"), toggle: _magnifyToggle);
+        _magnifyRow.Width = trayContentWidth;
+        _magnifyRow.ActionRequested += (_, _) => ExecuteTrayAction(() => SetEnabledState(!_enabled));
+        quickActions.Controls.Add(_magnifyRow);
+
+        _invertToggle = new ToggleSwitchControl(palette) { IsOn = _invertColors };
+        _invertRow = new TrayMenuRow(palette, L("Tray.ToggleInvert"), toggle: _invertToggle);
+        _invertRow.Width = trayContentWidth;
+        _invertRow.ActionRequested += (_, _) => ExecuteTrayAction(ToggleInvertColors);
+        quickActions.Controls.Add(_invertRow);
+
+        _followToggle = new ToggleSwitchControl(palette) { IsOn = _followCursor };
+        _followRow = new TrayMenuRow(palette, L("Tray.ToggleFollow"), toggle: _followToggle);
+        _followRow.Width = trayContentWidth;
+        _followRow.ActionRequested += (_, _) => ExecuteTrayAction(() => SetFollowCursor(!_followCursor));
+        quickActions.Controls.Add(_followRow);
+
+        root.Controls.Add(quickActions);
+
+        var divider = new TrayMenuDivider(palette) { Dock = DockStyle.Top, Width = trayContentWidth };
+        root.Controls.Add(divider);
+
+        var actionsSection = CreateTraySectionLabel(L("Tray.SectionMenu"), palette, trayContentWidth);
+        root.Controls.Add(actionsSection);
+
+        var actions = CreateTrayStack(trayContentWidth);
+
+        _displayRow = new TrayMenuRow(palette, L("Tray.MagnifiedDisplays"));
+        _displayRow.Width = trayContentWidth;
+        _displayRow.ActionRequested += (_, _) => ToggleDisplayOptions();
+        actions.Controls.Add(_displayRow);
+
+        _displayOptionsHost = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            Dock = DockStyle.Top,
+            Margin = new Padding(0, 0, 0, 4),
+            Padding = new Padding(ControlDrawing.ScaleLogical(popup, 10), 0, 0, 0),
+            BackColor = Color.Transparent,
+            Width = trayContentWidth,
+            MinimumSize = new Size(trayContentWidth, 0),
+            Visible = false
+        };
+        actions.Controls.Add(_displayOptionsHost);
+        PopulateDisplayOptionsHost();
+
+        var keyBindsRow = new TrayMenuRow(palette, L("Tray.KeyBinds"));
+        keyBindsRow.Width = trayContentWidth;
+        keyBindsRow.ActionRequested += (_, _) => ExecuteTrayAction(() =>
+        {
+            CloseTrayPopup();
+            ShowSettingsWindow(SettingsPage.Input);
+        });
+        actions.Controls.Add(keyBindsRow);
+
+        var settingsRow = new TrayMenuRow(palette, L("Tray.Settings"));
+        settingsRow.Width = trayContentWidth;
+        settingsRow.ActionRequested += (_, _) => ExecuteTrayAction(() =>
+        {
+            CloseTrayPopup();
+            ShowSettingsWindow(SettingsPage.General);
+        });
+        actions.Controls.Add(settingsRow);
+
+        var resetCursorRow = new TrayMenuRow(palette, L("Tray.ResetCursor"));
+        resetCursorRow.Width = trayContentWidth;
+        resetCursorRow.ActionRequested += (_, _) => ExecuteTrayAction(() =>
+        {
+            ResetExitConfirmation();
+            SystemParametersInfo(SPI_SETCURSORS, 0, IntPtr.Zero, 0);
+        });
+        actions.Controls.Add(resetCursorRow);
+
+        var aboutRow = new TrayMenuRow(palette, L("Tray.About"));
+        aboutRow.Width = trayContentWidth;
+        aboutRow.ActionRequested += (_, _) => ExecuteTrayAction(() =>
+        {
+            CloseTrayPopup();
+            ShowSettingsWindow(SettingsPage.About);
+        });
+        actions.Controls.Add(aboutRow);
+
+        _exitRow = new TrayMenuRow(palette, L("Tray.Exit"));
+        _exitRow.Width = trayContentWidth;
+        _exitRow.ActionRequested += (_, _) => ExecuteTrayAction(HandleExitRequested);
+        actions.Controls.Add(_exitRow);
+
+        root.Controls.Add(actions);
+
+        var footer = new Panel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Width = trayContentWidth,
+            Margin = new Padding(0, 4, 0, 0),
+            Padding = new Padding(8, 0, 8, 0),
+            BackColor = Color.Transparent
+        };
+        _startupServiceStatusLabel = new Label
+        {
+            AutoSize = true,
+            Dock = DockStyle.Left,
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
+            ForeColor = palette.SecondaryText,
+            BackColor = Color.Transparent,
+            Text = StartupTaskService.GetStatusLabel(_language)
+        };
+        footer.Controls.Add(_startupServiceStatusLabel);
+        root.Controls.Add(footer);
+        root.ResumeLayout(performLayout: true);
+
+        _trayPopup = popup;
+        UpdateTrayPopupState();
+        SuspendPerMonitorTracking();
+        popup.ShowAnchored(anchor);
+        popup.RefreshAnchoredLayout(anchor);
+    }
+
+    private Control CreateTrayHeader(ThemePalette palette, int contentWidth)
+    {
+        var panel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Margin = new Padding(0, 0, 0, 6),
+            Padding = new Padding(0),
+            BackColor = Color.Transparent,
+            ColumnCount = 1,
+            RowCount = 2,
+            Width = contentWidth,
+            MinimumSize = new Size(contentWidth, 0)
+        };
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var title = new Label
+        {
+            Text = "QuickZoom",
+            AutoSize = true,
+            Font = new Font("Segoe UI Semibold", 12.75f, FontStyle.Bold),
+            ForeColor = palette.Text,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0)
+        };
+        var subtitle = new Label
+        {
+            Text = L("Tray.QuickSubtitle"),
+            AutoSize = true,
+            MaximumSize = new Size(contentWidth - 20, 0),
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
+            ForeColor = palette.SecondaryText,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0, 2, 0, 0)
+        };
+
+        panel.Controls.Add(title, 0, 0);
+        panel.Controls.Add(subtitle, 0, 1);
+        return panel;
+    }
+
+    private static FlowLayoutPanel CreateTrayStack(int width)
+    {
+        return new FlowLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            Dock = DockStyle.Top,
+            Width = width,
+            MinimumSize = new Size(width, 0),
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+            BackColor = Color.Transparent
+        };
+    }
+
+    private static TrayMenuSectionLabel CreateTraySectionLabel(string text, ThemePalette palette, int width)
+    {
+        var label = new TrayMenuSectionLabel
+        {
+            Text = text,
+            MaximumSize = new Size(width - 16, 0)
+        };
+        label.ApplyTheme(palette);
+        return label;
+    }
+
+    private void ToggleDisplayOptions()
+    {
+        ResetExitConfirmation();
+        if (_displayOptionsHost == null || _displayRow == null)
+        {
+            return;
+        }
+
+        _displayOptionsHost.Visible = !_displayOptionsHost.Visible;
+        _displayRow.Active = _displayOptionsHost.Visible;
+        _trayPopup?.RefreshAnchoredLayout(_lastTrayPopupAnchor == Point.Empty ? Cursor.Position : _lastTrayPopupAnchor);
+    }
+
+    private string GetOnOffText(bool value) => value ? L("Common.On") : L("Common.Off");
+
+    private void RebuildTrayPopupIfOpen()
+    {
+        if (_trayPopup == null || _trayPopup.IsDisposed)
+        {
+            return;
+        }
+
+        Point anchor = _lastTrayPopupAnchor == Point.Empty ? Cursor.Position : _lastTrayPopupAnchor;
+        ShowTrayPopup(anchor);
+    }
+
+    private void CloseTrayPopup()
+    {
+        if (_trayPopup == null || _trayPopup.IsDisposed)
+        {
+            return;
+        }
+
+        try
+        {
+            _trayPopup.Close();
+            _trayPopup.Dispose();
+        }
+        catch
+        {
+            // Ignore shutdown races.
+        }
+        finally
+        {
+            _trayPopup = null;
+        }
     }
 
     private Icon? LoadEmbeddedIconBySuffix(string suffix)
@@ -358,33 +477,59 @@ internal sealed partial class TrayContext
 
         if (_animTimer != null)
         {
-            // Keep zoom animation updates aligned with display cadence to reduce jitter.
             _animTimer.Interval = Math.Max(8, 1000 / Math.Max(60, _fps));
-        }
-    }
-
-    private void RefreshFpsMenuChecks()
-    {
-        if (_fpsMenu == null)
-        {
-            return;
-        }
-
-        foreach (ToolStripItem item in _fpsMenu.DropDownItems)
-        {
-            if (item is ToolStripMenuItem menuItem && int.TryParse(menuItem.Tag?.ToString(), out int f))
-            {
-                menuItem.Checked = f == _fps;
-            }
         }
     }
 
     private void UpdateStartupServiceStatusLabel()
     {
-        if (_startupServiceStatusItem != null)
+        if (_startupServiceStatusLabel != null)
         {
-            _startupServiceStatusItem.Text = StartupTaskService.GetStatusLabel();
+            _startupServiceStatusLabel.Text = StartupTaskService.GetStatusLabel(_language);
         }
+    }
+
+    private void UpdateTrayPopupState()
+    {
+        if (_trayPopup == null || _trayPopup.IsDisposed)
+        {
+            return;
+        }
+
+        ThemePalette palette = CurrentTheme;
+        if (_magnifyRow != null && _magnifyToggle != null)
+        {
+            _magnifyToggle.IsOn = _enabled;
+            _magnifyRow.ApplyTheme(palette);
+        }
+
+        if (_invertRow != null && _invertToggle != null)
+        {
+            _invertToggle.IsOn = _invertColors;
+            _invertRow.ApplyTheme(palette);
+        }
+
+        if (_followRow != null && _followToggle != null)
+        {
+            _followToggle.IsOn = _followCursor;
+            _followRow.ApplyTheme(palette);
+        }
+
+        if (_displayRow != null)
+        {
+            _displayRow.ApplyTheme(palette);
+        }
+
+        if (_exitRow != null)
+        {
+            _exitRow.Title = _pendingExitConfirmation ? L("Tray.ExitConfirm") : L("Tray.Exit");
+            _exitRow.Active = _pendingExitConfirmation;
+            _exitRow.ApplyTheme(palette);
+        }
+
+        UpdateStartupServiceStatusLabel();
+        PopulateDisplayOptionsHost();
+        _trayPopup.RefreshAnchoredLayout(_lastTrayPopupAnchor == Point.Empty ? Cursor.Position : _lastTrayPopupAnchor);
     }
 
     private void InitTimers()
@@ -412,7 +557,6 @@ internal sealed partial class TrayContext
 
             if (_animTimer != null && _animTimer.Enabled)
             {
-                // Animation ticks already update transform continuously.
                 return;
             }
 
@@ -472,9 +616,77 @@ internal sealed partial class TrayContext
         _suspendPerMonitorTrackingForMenu = false;
         SetPerMonitorWindowsVisible(!IsPerMonitorTrackingSuspended);
 
-        if (!IsPerMonitorTrackingSuspended && _magActive && _zoomPercent > 100)
+        if (!IsPerMonitorTrackingSuspended && _magActive && (_zoomPercent > 100 || _invertColors))
         {
             ApplyTransformCurrentPoint();
         }
+    }
+
+    private void SetEnabledState(bool enabled)
+    {
+        ResetExitConfirmation();
+        _enabled = enabled;
+        if (!_enabled)
+        {
+            DisableMagAndReset();
+        }
+        else if (_invertColors || _zoomPercent > 100)
+        {
+            ApplyTransformCurrentPoint();
+        }
+
+        SaveSettings();
+        RefreshMenuAndTrayUi();
+    }
+
+    private void SetFollowCursor(bool followCursor)
+    {
+        ResetExitConfirmation();
+        _followCursor = followCursor;
+        if (_followCursor)
+        {
+            _followTimer?.Start();
+        }
+        else
+        {
+            _followTimer?.Stop();
+        }
+
+        SaveSettings();
+        RefreshMenuAndTrayUi();
+    }
+
+    private void RefreshMenuAndTrayUi(bool rebuildPopup = false)
+    {
+        if (rebuildPopup)
+        {
+            RebuildTrayPopupIfOpen();
+            return;
+        }
+
+        UpdateTrayPopupState();
+    }
+
+    private void HandleExitRequested()
+    {
+        if (!_pendingExitConfirmation)
+        {
+            _pendingExitConfirmation = true;
+            RefreshMenuAndTrayUi();
+            return;
+        }
+
+        ExitThread();
+    }
+
+    private void ResetExitConfirmation()
+    {
+        if (!_pendingExitConfirmation)
+        {
+            return;
+        }
+
+        _pendingExitConfirmation = false;
+        UpdateTrayPopupState();
     }
 }

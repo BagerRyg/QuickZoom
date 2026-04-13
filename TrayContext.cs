@@ -11,10 +11,20 @@ namespace QuickZoom;
 
 internal sealed partial class TrayContext : ApplicationContext
 {
+    private enum InvertTriggerKind
+    {
+        EnableKeyPlusMiddleClick = 0,
+        EnableKeyPlusXButton1 = 1,
+        EnableKeyPlusXButton2 = 2,
+        CustomKey = 3
+    }
+
     private NotifyIcon _tray = null!;
     private Icon? _iconRef;
-    private ContextMenuStrip? _menu;
+    private Control _uiInvoker = null!;
+    private TrayPopupWindow? _trayPopup;
     private bool _useDarkTheme;
+    private UiLanguage _language = UiText.GetDefaultLanguage();
 
     // Hook + timers
     private IntPtr _hook = IntPtr.Zero;
@@ -35,6 +45,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private Screen? _lockedScreen;
     private bool _smoothZoom = true;
     private bool _autoDisableAt100 = true;
+    private bool _invertColors;
     private bool _magActive;
     private bool _useFullscreenBackend;
     private bool _centerCursor;
@@ -46,20 +57,31 @@ internal sealed partial class TrayContext : ApplicationContext
     private int _animTargetPercent = 100;
     private int _wheelDeltaRemainder;
     private bool _enableKeyPressed;
+    private bool _invertKeyPressed;
+    private bool _pendingExitConfirmation;
 
     private POINT _staticCenter;
-    private Keys _enableKey = Keys.ControlKey;
+    private Keys _enableKey = Keys.Menu;
+    private Keys _invertKey = Keys.Menu;
+    private InvertTriggerKind _invertTrigger = InvertTriggerKind.EnableKeyPlusMiddleClick;
 
-    // Menu refs
-    private ToolStripMenuItem? _stepItem;
-    private ToolStripMenuItem? _maxItem;
-    private ToolStripMenuItem? _enableKeyItem;
-    private ToolStripMenuItem? _displayMenu;
-    private ToolStripMenuItem? _startupServiceStatusItem;
+    // Tray popup refs
+    private TrayMenuRow? _magnifyRow;
+    private TrayMenuRow? _invertRow;
+    private TrayMenuRow? _followRow;
+    private TrayMenuRow? _exitRow;
+    private ToggleSwitchControl? _magnifyToggle;
+    private ToggleSwitchControl? _invertToggle;
+    private ToggleSwitchControl? _followToggle;
+    private TrayMenuRow? _displayRow;
+    private FlowLayoutPanel? _displayOptionsHost;
+    private Label? _startupServiceStatusLabel;
+    private Point _lastTrayPopupAnchor;
+    private Form? _settingsWindow;
+    private Action<SettingsPage>? _selectSettingsPageAction;
 
     // Refresh rate
-    private int _fps = 60;
-    private ToolStripMenuItem? _fpsMenu;
+    private int _fps = 120;
     private static readonly int[] _fpsOptions = [30, 40, 50, 60, 90, 120];
     private readonly HashSet<string> _selectedMonitorDeviceNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, MonitorMagnifierWindow> _monitorWindows = new(StringComparer.OrdinalIgnoreCase);
@@ -68,6 +90,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private bool _suspendPerMonitorTrackingForMenu;
     private bool _suspendPerMonitorTrackingForShellUi;
     private bool _monitorLayoutDirty = true;
+    private bool _coreRuntimeInitialized;
     private bool _startupInitialized;
     private System.Windows.Forms.Timer? _startupTimer;
     private ShellMessageWindow? _shellMessageWindow;
@@ -80,6 +103,9 @@ internal sealed partial class TrayContext : ApplicationContext
     public TrayContext()
     {
         LoadSettings();
+        _uiInvoker = new Control();
+        _uiInvoker.CreateControl();
+        InitializeCoreRuntime();
         InitializeShellIntegration();
         StartDeferredStartupIfNeeded();
     }
@@ -105,6 +131,12 @@ internal sealed partial class TrayContext : ApplicationContext
             _startupTimer?.Stop();
             _startupTimer?.Dispose();
             _shellMessageWindow?.Dispose();
+            CloseTrayPopup();
+            if (_settingsWindow != null && !_settingsWindow.IsDisposed)
+            {
+                _settingsWindow.Close();
+                _settingsWindow.Dispose();
+            }
 
             if (_tray != null)
             {
@@ -115,6 +147,7 @@ internal sealed partial class TrayContext : ApplicationContext
             UnsubscribeThemeChanges();
             UnsubscribeDisplayChanges();
             _iconRef?.Dispose();
+            _uiInvoker.Dispose();
         }
         finally
         {
@@ -150,6 +183,73 @@ internal sealed partial class TrayContext : ApplicationContext
             {
                 DestroyHandle();
             }
+        }
+    }
+
+    private string L(string key) => UiText.Get(_language, key);
+
+    private void ExecuteTrayAction(Action action)
+    {
+        try
+        {
+            if (_uiInvoker.IsDisposed)
+            {
+                return;
+            }
+
+            void RunSafely()
+            {
+                try
+                {
+                    action();
+                }
+                catch (Exception ex)
+                {
+                    LogTrayFailure(ex);
+                }
+            }
+
+            if (_uiInvoker.InvokeRequired)
+            {
+                _uiInvoker.BeginInvoke((MethodInvoker)RunSafely);
+            }
+            else
+            {
+                RunSafely();
+            }
+        }
+        catch (Exception ex)
+        {
+            LogTrayFailure(ex);
+        }
+    }
+
+    private void LogTrayFailure(Exception ex)
+    {
+        ErrorLog.Write("TrayContext", ex);
+    }
+
+    private void RunOnUiThread(Action action)
+    {
+        try
+        {
+            if (_uiInvoker.IsDisposed)
+            {
+                return;
+            }
+
+            if (_uiInvoker.InvokeRequired)
+            {
+                _uiInvoker.BeginInvoke((MethodInvoker)(() => action()));
+            }
+            else
+            {
+                action();
+            }
+        }
+        catch
+        {
+            // Ignore shutdown races.
         }
     }
 }

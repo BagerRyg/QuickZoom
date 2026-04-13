@@ -15,7 +15,7 @@ internal sealed partial class TrayContext
 
     private void ShowAboutDialog()
     {
-        string installPath = InstalledAppService.GetCurrentInstalledExecutablePath() ?? "Not installed";
+        string installPath = InstalledAppService.GetCurrentInstalledExecutablePath() ?? L("About.NotInstalled");
         string settingsPath = AppPaths.SettingsPath;
 
         using var dlg = new Form
@@ -43,13 +43,13 @@ internal sealed partial class TrayContext
         var lbl = new Label
         {
             AutoSize = true,
-            Text = "To activate hold the 'Enable' Key down and either scroll on your mouse wheel or use +/- keys on your keyboard.\n\n" +
+            Text = L("About.Help") + "\n\n" +
                    AppInfo.DisplayVersion + "\n" +
-                   "Better and simpler magnification tool for Windows.\n\n" +
-                   StartupTaskService.GetStatusLabel() + "\n\n" +
-                   "Install Path: " + installPath + "\n\n" +
-                   "Settings Path: " + settingsPath + "\n\n" +
-                   "Made by Bager - With the help of AI.",
+                   L("About.Description") + "\n\n" +
+                   StartupTaskService.GetStatusLabel(_language) + "\n\n" +
+                   L("About.InstallPath") + ": " + installPath + "\n\n" +
+                   L("About.SettingsPath") + ": " + settingsPath + "\n\n" +
+                   L("About.Credits"),
             MaximumSize = new Size(640, 0)
         };
 
@@ -66,16 +66,16 @@ internal sealed partial class TrayContext
 
         var openInstallButton = new Button
         {
-            Text = "Open Install Location",
+            Text = L("About.OpenInstall"),
             AutoSize = true,
             MinimumSize = new Size(160, 32),
-            Enabled = !string.Equals(installPath, "Not installed", StringComparison.OrdinalIgnoreCase)
+            Enabled = !string.Equals(installPath, L("About.NotInstalled"), StringComparison.OrdinalIgnoreCase)
         };
         openInstallButton.Click += (_, _) => OpenFileLocation(installPath);
 
         var openSettingsButton = new Button
         {
-            Text = "Open Settings Location",
+            Text = L("About.OpenSettings"),
             AutoSize = true,
             MinimumSize = new Size(170, 32)
         };
@@ -192,6 +192,19 @@ internal sealed partial class TrayContext
                 textBox.BackColor = ctlBg;
                 textBox.ForeColor = fg;
                 textBox.BorderStyle = BorderStyle.FixedSingle;
+            }
+
+            if (control is ComboBox comboBox)
+            {
+                comboBox.BackColor = ctlBg;
+                comboBox.ForeColor = fg;
+                comboBox.FlatStyle = FlatStyle.Flat;
+            }
+
+            if (control is CheckBox checkBox)
+            {
+                checkBox.BackColor = bg;
+                checkBox.ForeColor = fg;
             }
 
             if (control is NumericUpDown nud)
@@ -319,11 +332,11 @@ internal sealed partial class TrayContext
         return form.ShowDialog() == DialogResult.OK ? (int?)num.Value : null;
     }
 
-    private Keys? PromptForKey(Keys current)
+    private Keys? PromptForKey(Keys current, string title = "Press the key you want to hold while scrolling", string? description = null)
     {
         using var form = new Form
         {
-            Text = "Press the key you want to hold while scrolling",
+            Text = title,
             FormBorderStyle = FormBorderStyle.FixedDialog,
             StartPosition = FormStartPosition.CenterScreen,
             MinimizeBox = false,
@@ -340,7 +353,7 @@ internal sealed partial class TrayContext
         {
             AutoSize = true,
             MaximumSize = new Size(560, 0),
-            Text = "Press a single key (letters, F-keys, Ctrl/Alt/Shift). Win key may be reserved by Windows."
+            Text = description ?? "Press a single key (letters, F-keys, Ctrl/Alt/Shift). Win key may be reserved by Windows."
         };
 
         var cur = new Label

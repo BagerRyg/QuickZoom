@@ -1,6 +1,5 @@
 using System;
 using Microsoft.Win32;
-using System.Windows.Forms;
 
 namespace QuickZoom;
 
@@ -39,19 +38,7 @@ internal sealed partial class TrayContext
             return;
         }
 
-        if (_menu == null || _menu.IsDisposed)
-        {
-            return;
-        }
-
-        try
-        {
-            _menu.BeginInvoke((MethodInvoker)(() => ApplyThemeFromSystem(force: false)));
-        }
-        catch
-        {
-            // Ignore if menu handle is gone during shutdown.
-        }
+        RunOnUiThread(() => ApplyThemeFromSystem(force: false));
     }
 
     private void ApplyThemeFromSystem(bool force)
@@ -63,30 +50,7 @@ internal sealed partial class TrayContext
         }
 
         _useDarkTheme = shouldUseDark;
-        var palette = CurrentTheme;
-
-        if (_menu != null)
-        {
-            _menu.Renderer = new TrayMenuRenderer(palette);
-            _menu.BackColor = palette.MenuBackground;
-            _menu.ForeColor = palette.Text;
-            ApplyMenuThemeRecursive(_menu.Items, palette);
-            _menu.Invalidate();
-        }
-    }
-
-    private static void ApplyMenuThemeRecursive(ToolStripItemCollection items, ThemePalette palette)
-    {
-        foreach (ToolStripItem item in items)
-        {
-            item.BackColor = palette.MenuBackground;
-            item.ForeColor = palette.Text;
-
-            if (item is ToolStripMenuItem menuItem)
-            {
-                ApplyMenuThemeRecursive(menuItem.DropDownItems, palette);
-            }
-        }
+        RefreshMenuAndTrayUi(rebuildPopup: true);
     }
 
     private static bool GetWindowsAppsUseDarkMode()
