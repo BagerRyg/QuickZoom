@@ -11,9 +11,9 @@ internal sealed partial class TrayContext
     {
         General,
         Display,
+        Appearance,
         Zoom,
         Input,
-        Language,
         About
     }
 
@@ -46,7 +46,8 @@ internal sealed partial class TrayContext
             ShowInTaskbar = true,
             AutoScaleMode = AutoScaleMode.Dpi,
             BackColor = palette.MenuBackground,
-            ForeColor = palette.Text
+            ForeColor = palette.Text,
+            KeyPreview = true
         };
         WindowChrome.TrySetDarkTitleBar(form, _useDarkTheme);
         _settingsWindow = form;
@@ -107,9 +108,9 @@ internal sealed partial class TrayContext
         {
             (SettingsPage.General.ToString(), L("Settings.General")),
             (SettingsPage.Display.ToString(), L("Settings.Display")),
+            (SettingsPage.Appearance.ToString(), L("Settings.Appearance")),
             (SettingsPage.Zoom.ToString(), L("Settings.Zoom")),
             (SettingsPage.Input.ToString(), L("Settings.Input")),
-            (SettingsPage.Language.ToString(), L("Settings.Language")),
             (SettingsPage.About.ToString(), L("Settings.About"))
         });
 
@@ -119,7 +120,7 @@ internal sealed partial class TrayContext
             Margin = new Padding(0),
             Padding = new Padding(0),
             BackColor = palette.MenuBackground,
-            AutoScroll = true
+            AutoScroll = false
         };
 
         var footer = new FlowLayoutPanel
@@ -135,7 +136,7 @@ internal sealed partial class TrayContext
         };
         var closeButton = new ModernButton
         {
-            Text = L("Settings.Close"),
+            Text = L("Settings.CloseEsc"),
             DialogResult = DialogResult.OK
         };
         closeButton.ApplyTheme(palette, emphasis: false);
@@ -145,26 +146,30 @@ internal sealed partial class TrayContext
         {
             [SettingsPage.General] = BuildGeneralSettingsPage(),
             [SettingsPage.Display] = BuildDisplaySettingsPage(),
+            [SettingsPage.Appearance] = BuildAppearanceSettingsPage(),
             [SettingsPage.Zoom] = BuildZoomSettingsPage(),
             [SettingsPage.Input] = BuildInputSettingsPage(),
-            [SettingsPage.Language] = BuildLanguageSettingsPage(),
             [SettingsPage.About] = BuildAboutSettingsPage()
         };
 
         foreach (SettingsPageView page in pages.Values)
         {
             page.Visible = false;
+            page.Dock = DockStyle.Fill;
             pageHost.Controls.Add(page);
         }
 
         void ShowPage(SettingsPage page)
         {
+            _currentSettingsPage = page;
+            pageHost.SuspendLayout();
             foreach ((SettingsPage key, SettingsPageView view) in pages)
             {
                 view.Visible = key == page;
             }
 
             pageHost.PerformLayout();
+            pageHost.ResumeLayout(performLayout: true);
             tabBar.SelectTab(page.ToString(), notify: false);
         }
 
@@ -182,7 +187,15 @@ internal sealed partial class TrayContext
         root.Controls.Add(footer, 0, 3);
         form.Controls.Add(root);
         form.AcceptButton = closeButton;
+        form.CancelButton = closeButton;
         closeButton.Click += (_, _) => form.Close();
+        form.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Escape)
+            {
+                form.Close();
+            }
+        };
         form.FormClosed += (_, _) =>
         {
             _settingsWindow = null;
@@ -200,7 +213,7 @@ internal sealed partial class TrayContext
     {
         Rectangle area = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1400, 960);
         int width = Math.Min(1280, Math.Max(1100, area.Width - 120));
-        int height = Math.Min(920, Math.Max(820, area.Height - 120));
+        int height = Math.Min(980, Math.Max(880, area.Height - 100));
         return new Size(width, height);
     }
 
@@ -278,30 +291,69 @@ internal sealed partial class TrayContext
         var page = new SettingsPageView(palette, L("Settings.ZoomTitle"), L("Settings.SectionHintZoom"));
         var section = new SettingsSection(palette, L("Settings.ZoomSection"), L("Settings.ZoomSectionHint"));
 
-        section.AddRow(CreateNumericRow(L("Settings.ZoomStep"), L("Settings.ZoomStepHelp"), _stepPercent, 5, 50, value =>
+        section.AddRow(CreateSliderRow(L("Settings.ZoomStep"), L("Settings.ZoomStepHelp"), _stepPercent, 5, 100, 5, value => value + "%", value =>
         {
             _stepPercent = value;
             SaveSettings();
-        }, rightColumnWidth: 180));
+        }, rightColumnWidth: 420));
 
-        section.AddRow(CreateNumericRow(L("Settings.MaxZoom"), L("Settings.MaxZoomHelp"), _maxPercent, 150, 600, value =>
+        section.AddRow(CreateSliderRow(L("Settings.MaxZoom"), L("Settings.MaxZoomHelp"), _maxPercent, 200, 500, 10, value => value + "%", value =>
         {
             _maxPercent = value;
             ClampZoom();
             SaveSettings();
-        }, rightColumnWidth: 180));
+        }, rightColumnWidth: 420));
 
-        section.AddRow(CreateDropdownRow(L("Settings.RefreshRate"), L("Settings.RefreshRateHelp"), BuildRefreshRateItems(), _fps.ToString(), value =>
+        section.AddRow(CreateSliderRow(L("Settings.RefreshRate"), L("Settings.RefreshRateHelp"), _fps, 60, 360, 10, value => value + " Hz", value =>
         {
-            if (int.TryParse(value, out int fps))
+            _fps = value;
+            ApplyFps();
+            SaveSettings();
+        }, rightColumnWidth: 420));
+
+        page.AddSection(section);
+        return page;
+    }
+
+    private SettingsPageView BuildAppearanceSettingsPage()
+    {
+        ThemePalette palette = CurrentTheme;
+        var page = new SettingsPageView(palette, L("Settings.AppearanceTitle"), L("Settings.SectionHintAppearance"));
+        var themeSection = new SettingsSection(palette, L("Settings.AppearanceSection"), L("Settings.AppearanceSectionHint"));
+
+        themeSection.AddRow(CreateDropdownRow(
+            L("Settings.ThemeMode"),
+            L("Settings.ThemeModeHelp"),
+            BuildThemeModeItems(),
+            ThemeModeLabel(_themeMode),
+            value =>
             {
-                _fps = fps;
-                ApplyFps();
-                SaveSettings();
+                ThemeMode nextMode = ParseThemeMode(value);
+                if (nextMode != _themeMode)
+                {
+                    SetThemeMode(nextMode);
+                }
+            },
+            rightColumnWidth: 220));
+
+        var languageSection = new SettingsSection(palette, L("Settings.LanguageSection"), L("Settings.LanguageSectionHint"));
+        languageSection.AddRow(CreateDropdownRow(L("Settings.Language"), L("Settings.LanguageHelp"), BuildLanguageItems(), _language == UiLanguage.Danish ? L("Settings.Danish") : L("Settings.English"), value =>
+        {
+            _language = value == L("Settings.Danish") ? UiLanguage.Danish : UiLanguage.English;
+            SaveSettings();
+            RefreshMenuAndTrayUi(rebuildPopup: true);
+            if (_settingsWindow != null && !_settingsWindow.IsDisposed)
+            {
+                _settingsWindow.BeginInvoke((MethodInvoker)(() => RefreshSettingsWindow(SettingsPage.Appearance)));
+            }
+            else
+            {
+                RefreshSettingsWindow(SettingsPage.Appearance);
             }
         }, rightColumnWidth: 220));
 
-        page.AddSection(section);
+        page.AddSection(themeSection);
+        page.AddSection(languageSection);
         return page;
     }
 
@@ -387,23 +439,6 @@ internal sealed partial class TrayContext
         return page;
     }
 
-    private SettingsPageView BuildLanguageSettingsPage()
-    {
-        ThemePalette palette = CurrentTheme;
-        var page = new SettingsPageView(palette, L("Settings.LanguageTitle"), L("Settings.SectionHintLanguage"));
-        var section = new SettingsSection(palette, L("Settings.LanguageSection"), L("Settings.LanguageSectionHint"));
-
-        section.AddRow(CreateDropdownRow(L("Settings.Language"), L("Settings.LanguageHelp"), BuildLanguageItems(), _language == UiLanguage.Danish ? L("Settings.Danish") : L("Settings.English"), value =>
-        {
-            _language = value == L("Settings.Danish") ? UiLanguage.Danish : UiLanguage.English;
-            SaveSettings();
-            RefreshMenuAndTrayUi(rebuildPopup: true);
-        }, rightColumnWidth: 220));
-
-        page.AddSection(section);
-        return page;
-    }
-
     private SettingsPageView BuildAboutSettingsPage()
     {
         ThemePalette palette = CurrentTheme;
@@ -414,33 +449,24 @@ internal sealed partial class TrayContext
 
         var overviewSection = new SettingsSection(palette, L("Settings.AboutSection"), string.Empty);
         overviewSection.AddRow(CreateInfoRow(
-            L("Settings.Version"),
+            L("Settings.AboutBuildStartup"),
             AppInfo.DisplayVersion,
-            string.Empty));
-        overviewSection.AddRow(CreateInfoRow(
-            L("Settings.StartupService"),
-            StartupTaskService.GetStatusLabel(_language),
-            string.Empty));
-        overviewSection.AddRow(CreateInfoRow(
-            L("About.InstallPath"),
-            installPath,
-            string.Empty,
-            CreateInlineActionButton(L("About.OpenInstall"), () => OpenFileLocation(installPath)),
-            rightColumnWidth: 220));
-        overviewSection.AddRow(CreateInfoRow(
-            L("About.SettingsPath"),
-            settingsPath,
-            string.Empty,
-            CreateInlineActionButton(L("About.OpenSettings"), () => OpenFileLocation(settingsPath)),
-            rightColumnWidth: 220));
-        overviewSection.AddRow(CreateInfoRow(
+            StartupTaskService.GetStatusLabel(_language)));
+        overviewSection.AddRow(new SettingsRow(
+            palette,
+            L("Settings.AboutLocations"),
+            L("Settings.AboutLocationsHelp"),
+            CreateDualActionButtons(
+                new[]
+                {
+                    (L("About.OpenInstallFolder"), (Action)(() => OpenFileLocation(installPath)), !string.Equals(installPath, L("About.NotInstalled"), StringComparison.OrdinalIgnoreCase)),
+                    (L("About.OpenConfigFolder"), (Action)(() => OpenFileLocation(settingsPath)), true)
+                },
+                380),
+            rightColumnWidth: 380));
+        overviewSection.AddRow(CreateTextTileRow(
             L("Settings.UsageHelp"),
-            L("About.Help"),
-            string.Empty));
-        overviewSection.AddRow(CreateInfoRow(
-            L("Settings.Credits"),
-            L("About.Credits"),
-            string.Empty));
+            L("About.HowToUseDetailed")));
 
         page.AddSection(overviewSection);
         return page;
@@ -466,6 +492,58 @@ internal sealed partial class TrayContext
         };
         numeric.ValueChanged += (_, _) => onChanged((int)numeric.Value);
         return new SettingsRow(CurrentTheme, title, description, numeric, rightColumnWidth);
+    }
+
+    private SettingsRow CreateSliderRow(string title, string description, int value, int min, int max, int step, Func<int, string> valueFormatter, Action<int> onChanged, int rightColumnWidth = 420)
+    {
+        var slider = new ModernSlider(CurrentTheme)
+        {
+            Minimum = min,
+            Maximum = max,
+            SnapStep = step,
+            Value = value,
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0, 0, 12, 0)
+        };
+
+        var valueLabel = new Label
+        {
+            AutoSize = false,
+            Width = 72,
+            Height = 28,
+            Text = valueFormatter(value),
+            TextAlign = ContentAlignment.MiddleRight,
+            Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
+            ForeColor = CurrentTheme.Text,
+            BackColor = Color.Transparent,
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0)
+        };
+
+        slider.ValueChanged += (_, _) =>
+        {
+            valueLabel.Text = valueFormatter(slider.Value);
+            onChanged(slider.Value);
+        };
+
+        var host = new TableLayoutPanel
+        {
+            AutoSize = false,
+            Width = rightColumnWidth,
+            Height = 34,
+            ColumnCount = 2,
+            RowCount = 1,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0),
+            Padding = new Padding(0)
+        };
+        host.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        host.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
+        host.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        host.Controls.Add(slider, 0, 0);
+        host.Controls.Add(valueLabel, 1, 0);
+
+        return new SettingsRow(CurrentTheme, title, description, host, rightColumnWidth);
     }
 
     private SettingsRow CreateDropdownRow(string title, string description, string[] items, string current, Action<string> onChanged, Control? actionButton = null, int rightColumnWidth = 260)
@@ -547,6 +625,20 @@ internal sealed partial class TrayContext
         return new SettingsRow(CurrentTheme, title, effectiveDescription, rightControl, rightColumnWidth, actionButton == null ? value : null);
     }
 
+    private SettingsRow CreateTextTileRow(string title, string description)
+    {
+        var spacer = new Label
+        {
+            AutoSize = false,
+            Width = 1,
+            Height = 1,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0)
+        };
+
+        return new SettingsRow(CurrentTheme, title, description, spacer, rightColumnWidth: 96);
+    }
+
     private Control CreateInlineActionButton(string text, Action onClick)
     {
         var button = new ModernButton
@@ -556,17 +648,6 @@ internal sealed partial class TrayContext
         button.ApplyTheme(CurrentTheme, emphasis: false);
         button.Click += (_, _) => onClick();
         return button;
-    }
-
-    private string[] BuildRefreshRateItems()
-    {
-        string[] items = new string[_fpsOptions.Length];
-        for (int i = 0; i < _fpsOptions.Length; i++)
-        {
-            items[i] = _fpsOptions[i].ToString();
-        }
-
-        return items;
     }
 
     private string[] BuildEnableKeyItems() => ["Ctrl", "Alt", "Shift"];
@@ -580,4 +661,84 @@ internal sealed partial class TrayContext
     ];
 
     private string[] BuildLanguageItems() => [L("Settings.English"), L("Settings.Danish")];
+
+    private string[] BuildThemeModeItems() => [L("Settings.ThemeAuto"), L("Settings.ThemeDark"), L("Settings.ThemeLight")];
+
+    private string ThemeModeLabel(ThemeMode mode) => mode switch
+    {
+        ThemeMode.Dark => L("Settings.ThemeDark"),
+        ThemeMode.Light => L("Settings.ThemeLight"),
+        _ => L("Settings.ThemeAuto")
+    };
+
+    private ThemeMode ParseThemeMode(string value)
+    {
+        if (string.Equals(value, L("Settings.ThemeDark"), StringComparison.Ordinal))
+        {
+            return ThemeMode.Dark;
+        }
+
+        if (string.Equals(value, L("Settings.ThemeLight"), StringComparison.Ordinal))
+        {
+            return ThemeMode.Light;
+        }
+
+        return ThemeMode.AutoSystem;
+    }
+
+    private Control CreateDualActionButtons((string Text, Action OnClick, bool Enabled)[] buttons, int width)
+    {
+        var host = new TableLayoutPanel
+        {
+            AutoSize = false,
+            Width = width,
+            Height = 38,
+            ColumnCount = buttons.Length,
+            RowCount = 1,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0),
+            Padding = new Padding(0)
+        };
+
+        for (int i = 0; i < buttons.Length; i++)
+        {
+            host.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / buttons.Length));
+            var buttonSpec = buttons[i];
+
+            var button = new ModernButton
+            {
+                Text = buttonSpec.Text,
+                Enabled = buttonSpec.Enabled,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(i == 0 ? 0 : 8, 0, 0, 0)
+            };
+            button.ApplyTheme(CurrentTheme, emphasis: false);
+            button.Click += (_, _) => buttonSpec.OnClick();
+            host.Controls.Add(button, i, 0);
+        }
+
+        return host;
+    }
+
+    private void RefreshSettingsWindow(SettingsPage page)
+    {
+        if (_settingsWindow == null || _settingsWindow.IsDisposed)
+        {
+            return;
+        }
+
+        if (_settingsWindow.InvokeRequired)
+        {
+            _settingsWindow.BeginInvoke((MethodInvoker)(() => RefreshSettingsWindow(page)));
+            return;
+        }
+
+        if (_settingsWindow == null || _settingsWindow.IsDisposed)
+        {
+            return;
+        }
+
+        _settingsWindow.Close();
+        ShowSettingsWindow(page);
+    }
 }

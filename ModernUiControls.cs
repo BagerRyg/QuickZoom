@@ -508,6 +508,7 @@ internal sealed class TrayMenuDivider : Control
 
 internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider
 {
+    private readonly FluentIconControl? _iconControl;
     private readonly Label _titleLabel;
     private readonly Label? _rightLabel;
     private readonly ToggleSwitchControl? _toggle;
@@ -515,8 +516,9 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider
     private bool _hovered;
     private bool _pressed;
     private bool _active;
+    private bool _isDestructive;
 
-    public TrayMenuRow(ThemePalette palette, string title, string? rightText = null, ToggleSwitchControl? toggle = null)
+    public TrayMenuRow(ThemePalette palette, string title, string? rightText = null, ToggleSwitchControl? toggle = null, TrayFluentIcon? icon = null)
     {
         _palette = palette;
         SuspendLayout();
@@ -534,6 +536,12 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider
         Cursor = Cursors.Hand;
         TabStop = true;
         BackColor = Color.Transparent;
+
+        if (icon.HasValue)
+        {
+            _iconControl = new FluentIconControl(palette, icon.Value);
+            Controls.Add(_iconControl);
+        }
 
         _titleLabel = new Label
         {
@@ -618,12 +626,29 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider
         }
     }
 
+    public bool IsDestructive
+    {
+        get => _isDestructive;
+        set
+        {
+            _isDestructive = value;
+            Invalidate();
+        }
+    }
+
     public Color SurfaceBackgroundColor
     {
         get
         {
             if (_hovered || _pressed || _active)
             {
+                if (_isDestructive)
+                {
+                    return _pressed
+                        ? Color.FromArgb(108, 28, 36)
+                        : Color.FromArgb(84, 24, 31);
+                }
+
                 return _pressed
                     ? _palette.ButtonPressed
                     : _hovered
@@ -639,6 +664,10 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider
     {
         _palette = palette;
         _titleLabel.ForeColor = palette.Text;
+        if (_iconControl != null)
+        {
+            _iconControl.ApplyTheme(palette);
+        }
         if (_rightLabel != null)
         {
             _rightLabel.ForeColor = palette.SecondaryText;
@@ -659,22 +688,31 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider
         int innerHeight = Height - Padding.Vertical;
         int y = Padding.Top;
         int right = Width - Padding.Right;
+        int left = Padding.Left;
+
+        if (_iconControl != null)
+        {
+            int iconWidth = 20;
+            int iconHeight = Math.Min(innerHeight, ControlDrawing.ScaleLogical(this, 18));
+            _iconControl.Bounds = new Rectangle(left, y + Math.Max(0, (innerHeight - iconHeight) / 2), iconWidth, iconHeight);
+            left = _iconControl.Right + 10;
+        }
 
         if (_toggle != null)
         {
             Size toggleSize = _toggle.Size;
             _toggle.Location = new Point(right - toggleSize.Width, y + Math.Max(0, (innerHeight - toggleSize.Height) / 2));
-            _titleLabel.Bounds = new Rectangle(Padding.Left, y, Math.Max(40, _toggle.Left - Padding.Left - 10), innerHeight);
+            _titleLabel.Bounds = new Rectangle(left, y, Math.Max(40, _toggle.Left - left - 10), innerHeight);
         }
         else if (_rightLabel != null)
         {
             int accessoryWidth = Math.Max(72, Math.Min(120, TextRenderer.MeasureText(_rightLabel.Text, _rightLabel.Font).Width + 8));
             _rightLabel.Bounds = new Rectangle(right - accessoryWidth, y, accessoryWidth, innerHeight);
-            _titleLabel.Bounds = new Rectangle(Padding.Left, y, Math.Max(40, _rightLabel.Left - Padding.Left - 10), innerHeight);
+            _titleLabel.Bounds = new Rectangle(left, y, Math.Max(40, _rightLabel.Left - left - 10), innerHeight);
         }
         else
         {
-            _titleLabel.Bounds = new Rectangle(Padding.Left, y, Width - Padding.Horizontal, innerHeight);
+            _titleLabel.Bounds = new Rectangle(left, y, Width - Padding.Right - left, innerHeight);
         }
     }
 
@@ -738,7 +776,11 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider
             using GraphicsPath path = ControlDrawing.RoundedRect(fillRect, 9);
             Color fill = SurfaceBackgroundColor;
             using SolidBrush fillBrush = new(fill);
-            using Pen borderPen = new(Color.FromArgb(_active ? 72 : 28, _active ? _palette.Accent : _palette.Border));
+            Color borderColor = _isDestructive
+                ? Color.FromArgb(186, 82, 92)
+                : (_active ? _palette.Accent : _palette.Border);
+            int borderAlpha = _isDestructive ? 76 : (_active ? 72 : 28);
+            using Pen borderPen = new(Color.FromArgb(borderAlpha, borderColor));
             e.Graphics.FillPath(fillBrush, path);
             e.Graphics.DrawPath(borderPen, path);
         }
@@ -1061,66 +1103,315 @@ internal sealed class ModernTabBar : Panel
     }
 }
 
-internal sealed class ModernDropdown : ComboBox
+internal sealed class ModernDropdown : Control, ISurfaceBackgroundProvider
 {
     private ThemePalette _palette;
+    private readonly List<string> _items = new();
+    private int _selectedIndex = -1;
+    private bool _hovered;
+    private bool _pressed;
+    private ContextMenuStrip? _activeMenu;
 
     public ModernDropdown(ThemePalette palette)
     {
         _palette = palette;
-        DrawMode = DrawMode.OwnerDrawFixed;
-        DropDownStyle = ComboBoxStyle.DropDownList;
-        FlatStyle = FlatStyle.Flat;
+        SetStyle(
+            ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.OptimizedDoubleBuffer |
+            ControlStyles.ResizeRedraw |
+            ControlStyles.SupportsTransparentBackColor |
+            ControlStyles.UserPaint |
+            ControlStyles.Selectable,
+            true);
         Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
-        IntegralHeight = false;
-        ItemHeight = 32;
         Height = 36;
         Width = 240;
+        Cursor = Cursors.Hand;
+        TabStop = true;
+        BackColor = Color.Transparent;
         ApplyTheme(palette);
     }
+
+    public event EventHandler? SelectedIndexChanged;
+
+    public List<string> Items => _items;
+
+    public int SelectedIndex
+    {
+        get => _selectedIndex;
+        set
+        {
+            int next = value < 0 || value >= _items.Count ? -1 : value;
+            if (_selectedIndex == next)
+            {
+                return;
+            }
+
+            _selectedIndex = next;
+            Invalidate();
+            SelectedIndexChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    public string? SelectedItem => _selectedIndex >= 0 && _selectedIndex < _items.Count ? _items[_selectedIndex] : null;
 
     public void ApplyTheme(ThemePalette palette)
     {
         _palette = palette;
-        BackColor = palette.ButtonBackground;
-        ForeColor = palette.Text;
         Invalidate();
     }
 
-    protected override void OnDrawItem(DrawItemEventArgs e)
+    public Color SurfaceBackgroundColor => _pressed ? _palette.ButtonPressed : _hovered ? _palette.ButtonHover : _palette.ButtonBackground;
+
+    protected override void OnMouseEnter(EventArgs e)
     {
-        e.DrawBackground();
-
-        Rectangle bounds = e.Bounds;
-        bool selected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
-        using SolidBrush background = new(selected ? _palette.ButtonHover : _palette.ButtonBackground);
-        using SolidBrush foreground = new(_palette.Text);
-        e.Graphics.FillRectangle(background, bounds);
-
-        string text = string.Empty;
-        if (e.Index >= 0)
-        {
-            text = GetItemText(Items[e.Index]) ?? string.Empty;
-        }
-        else if (!string.IsNullOrWhiteSpace(Text))
-        {
-            text = Text;
-        }
-
-        if (!string.IsNullOrWhiteSpace(text))
-        {
-            Rectangle textBounds = Rectangle.FromLTRB(bounds.Left + 10, bounds.Top, bounds.Right - 24, bounds.Bottom);
-            TextRenderer.DrawText(
-                e.Graphics,
-                text,
-                Font,
-                textBounds,
-                _palette.Text,
-                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-        }
-
-        e.DrawFocusRectangle();
+        _hovered = true;
+        Invalidate();
+        base.OnMouseEnter(e);
     }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        _hovered = false;
+        _pressed = false;
+        Invalidate();
+        base.OnMouseLeave(e);
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        _pressed = true;
+        Invalidate();
+        base.OnMouseDown(e);
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        _pressed = false;
+        Invalidate();
+        base.OnMouseUp(e);
+    }
+
+    protected override void OnClick(EventArgs e)
+    {
+        base.OnClick(e);
+        ShowMenu();
+    }
+
+    protected override bool IsInputKey(Keys keyData)
+    {
+        return keyData is Keys.Enter or Keys.Space or Keys.Down or Keys.Up || base.IsInputKey(keyData);
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        switch (e.KeyCode)
+        {
+            case Keys.Enter:
+            case Keys.Space:
+                ShowMenu();
+                e.Handled = true;
+                break;
+            case Keys.Down:
+                if (_items.Count > 0)
+                {
+                    SelectedIndex = Math.Min(_items.Count - 1, Math.Max(0, _selectedIndex + 1));
+                }
+                e.Handled = true;
+                break;
+            case Keys.Up:
+                if (_items.Count > 0)
+                {
+                    SelectedIndex = Math.Max(0, _selectedIndex <= 0 ? 0 : _selectedIndex - 1);
+                }
+                e.Handled = true;
+                break;
+        }
+
+        base.OnKeyDown(e);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        Rectangle rect = new(0, 0, Width - 1, Height - 1);
+        using GraphicsPath path = ControlDrawing.RoundedRect(rect, 10);
+        using SolidBrush fill = new(SurfaceBackgroundColor);
+        using Pen border = new(Color.FromArgb(48, _palette.Border));
+        e.Graphics.FillPath(fill, path);
+        e.Graphics.DrawPath(border, path);
+
+        string text = SelectedItem ?? string.Empty;
+        Rectangle textBounds = Rectangle.FromLTRB(12, 0, Width - 34, Height);
+        TextRenderer.DrawText(
+            e.Graphics,
+            text,
+            Font,
+            textBounds,
+            _palette.Text,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+        Point center = new(Width - 17, Height / 2);
+        using GraphicsPath chevron = new();
+        chevron.AddLines(new Point[]
+        {
+            new Point(center.X - 4, center.Y - 2),
+            new Point(center.X, center.Y + 2),
+            new Point(center.X + 4, center.Y - 2)
+        });
+        using Pen chevronPen = new(_palette.SecondaryText, 1.6f)
+        {
+            StartCap = LineCap.Round,
+            EndCap = LineCap.Round
+        };
+        e.Graphics.DrawPath(chevronPen, chevron);
+
+        if (Focused)
+        {
+            Rectangle focusRect = new(0, 0, Width - 1, Height - 1);
+            using GraphicsPath focusPath = ControlDrawing.RoundedRect(focusRect, 10);
+            using Pen focusPen = new(Color.FromArgb(120, _palette.Accent), 1.5f);
+            e.Graphics.DrawPath(focusPen, focusPath);
+        }
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs pevent)
+    {
+        Color backColor = Parent is ISurfaceBackgroundProvider provider
+            ? provider.SurfaceBackgroundColor
+            : ControlDrawing.EffectiveBackColor(this);
+        using SolidBrush brush = new(backColor);
+        pevent.Graphics.FillRectangle(brush, ClientRectangle);
+    }
+
+    private void ShowMenu()
+    {
+        if (_items.Count == 0)
+        {
+            return;
+        }
+
+        if (_activeMenu != null && !_activeMenu.IsDisposed && _activeMenu.Visible)
+        {
+            return;
+        }
+
+        if (_activeMenu != null)
+        {
+            _activeMenu.Dispose();
+            _activeMenu = null;
+        }
+
+        var menu = new ContextMenuStrip
+        {
+            ShowImageMargin = false,
+            ShowCheckMargin = false,
+            AutoSize = true,
+            BackColor = _palette.MenuBackground,
+            ForeColor = _palette.Text,
+            Font = Font,
+            Renderer = new DarkMenuRenderer(_palette)
+        };
+        menu.MinimumSize = new Size(Math.Max(Width, MinimumSize.Width), 0);
+
+        for (int i = 0; i < _items.Count; i++)
+        {
+            string itemText = _items[i];
+            int itemIndex = i;
+            var item = new ToolStripMenuItem(itemText);
+            item.Click += (_, _) => SelectedIndex = itemIndex;
+            menu.Items.Add(item);
+        }
+
+        _activeMenu = menu;
+        menu.Closed += (_, _) =>
+        {
+            if (_activeMenu != menu)
+            {
+                return;
+            }
+
+            _activeMenu = null;
+            if (IsHandleCreated && !IsDisposed)
+            {
+                BeginInvoke((MethodInvoker)(() =>
+                {
+                    if (!menu.IsDisposed)
+                    {
+                        menu.Dispose();
+                    }
+                }));
+            }
+            else if (!menu.IsDisposed)
+            {
+                menu.Dispose();
+            }
+        };
+        menu.Show(this, new Point(0, Height));
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            if (_activeMenu != null)
+            {
+                _activeMenu.Dispose();
+                _activeMenu = null;
+            }
+        }
+
+        base.Dispose(disposing);
+    }
+}
+
+internal sealed class DarkMenuRenderer : ToolStripProfessionalRenderer
+{
+    private readonly ThemePalette _palette;
+
+    public DarkMenuRenderer(ThemePalette palette) : base(new DarkMenuColorTable(palette))
+    {
+        _palette = palette;
+    }
+
+    protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
+    {
+        Rectangle rect = new(2, 1, e.Item.Width - 4, e.Item.Height - 2);
+        Color backColor = e.Item.Selected ? _palette.ButtonHover : _palette.MenuBackground;
+        using SolidBrush brush = new(backColor);
+        e.Graphics.FillRectangle(brush, rect);
+    }
+
+    protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+    {
+        e.TextColor = _palette.Text;
+        base.OnRenderItemText(e);
+    }
+}
+
+internal sealed class DarkMenuColorTable : ProfessionalColorTable
+{
+    private readonly ThemePalette _palette;
+
+    public DarkMenuColorTable(ThemePalette palette)
+    {
+        _palette = palette;
+        UseSystemColors = false;
+    }
+
+    public override Color ToolStripDropDownBackground => _palette.MenuBackground;
+    public override Color MenuBorder => _palette.Border;
+    public override Color MenuItemBorder => Color.Transparent;
+    public override Color MenuItemSelected => _palette.ButtonHover;
+    public override Color MenuItemSelectedGradientBegin => _palette.ButtonHover;
+    public override Color MenuItemSelectedGradientEnd => _palette.ButtonHover;
+    public override Color MenuItemPressedGradientBegin => _palette.ButtonPressed;
+    public override Color MenuItemPressedGradientMiddle => _palette.ButtonPressed;
+    public override Color MenuItemPressedGradientEnd => _palette.ButtonPressed;
+    public override Color ImageMarginGradientBegin => _palette.MenuBackground;
+    public override Color ImageMarginGradientMiddle => _palette.MenuBackground;
+    public override Color ImageMarginGradientEnd => _palette.MenuBackground;
 }
 
 internal sealed class ModernNumberInput : NumericUpDown
@@ -1156,6 +1447,224 @@ internal sealed class ModernNumberInput : NumericUpDown
         {
             // Best effort.
         }
+    }
+}
+
+internal sealed class ModernSlider : Control
+{
+    private ThemePalette _palette;
+    private int _minimum;
+    private int _maximum = 100;
+    private int _value;
+    private int _snapStep = 1;
+    private bool _dragging;
+    private bool _hovered;
+
+    public ModernSlider(ThemePalette palette)
+    {
+        _palette = palette;
+        SetStyle(
+            ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.OptimizedDoubleBuffer |
+            ControlStyles.ResizeRedraw |
+            ControlStyles.SupportsTransparentBackColor |
+            ControlStyles.UserPaint |
+            ControlStyles.Selectable,
+            true);
+        BackColor = Color.Transparent;
+        TabStop = true;
+        Cursor = Cursors.Hand;
+        Height = 28;
+        Width = 280;
+    }
+
+    public event EventHandler? ValueChanged;
+
+    public int Minimum
+    {
+        get => _minimum;
+        set
+        {
+            _minimum = value;
+            if (_maximum < _minimum)
+            {
+                _maximum = _minimum;
+            }
+
+            Value = Math.Clamp(_value, _minimum, _maximum);
+            Invalidate();
+        }
+    }
+
+    public int Maximum
+    {
+        get => _maximum;
+        set
+        {
+            _maximum = Math.Max(value, _minimum);
+            Value = Math.Clamp(_value, _minimum, _maximum);
+            Invalidate();
+        }
+    }
+
+    public int SnapStep
+    {
+        get => _snapStep;
+        set => _snapStep = Math.Max(1, value);
+    }
+
+    public int Value
+    {
+        get => _value;
+        set
+        {
+            int next = Snap(Math.Clamp(value, _minimum, _maximum));
+            if (_value == next)
+            {
+                return;
+            }
+
+            _value = next;
+            Invalidate();
+            ValueChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    public void ApplyTheme(ThemePalette palette)
+    {
+        _palette = palette;
+        Invalidate();
+    }
+
+    protected override void OnMouseEnter(EventArgs e)
+    {
+        _hovered = true;
+        Invalidate();
+        base.OnMouseEnter(e);
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        _hovered = false;
+        Invalidate();
+        base.OnMouseLeave(e);
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        Focus();
+        _dragging = true;
+        UpdateValueFromX(e.X);
+        base.OnMouseDown(e);
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        if (_dragging)
+        {
+            UpdateValueFromX(e.X);
+        }
+
+        base.OnMouseMove(e);
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        _dragging = false;
+        base.OnMouseUp(e);
+    }
+
+    protected override bool IsInputKey(Keys keyData)
+    {
+        return keyData is Keys.Left or Keys.Right or Keys.Up or Keys.Down or Keys.Home or Keys.End
+            || base.IsInputKey(keyData);
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        switch (e.KeyCode)
+        {
+            case Keys.Left:
+            case Keys.Down:
+                Value -= _snapStep;
+                e.Handled = true;
+                break;
+            case Keys.Right:
+            case Keys.Up:
+                Value += _snapStep;
+                e.Handled = true;
+                break;
+            case Keys.Home:
+                Value = _minimum;
+                e.Handled = true;
+                break;
+            case Keys.End:
+                Value = _maximum;
+                e.Handled = true;
+                break;
+        }
+
+        base.OnKeyDown(e);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+        Rectangle trackRect = new(0, (Height / 2) - 3, Width - 1, 6);
+        using GraphicsPath trackPath = ControlDrawing.RoundedRect(trackRect, 3);
+        using SolidBrush trackBrush = new(_palette.ButtonBackground);
+        using Pen trackBorder = new(Color.FromArgb(60, _palette.Border));
+        e.Graphics.FillPath(trackBrush, trackPath);
+        e.Graphics.DrawPath(trackBorder, trackPath);
+
+        float ratio = _maximum == _minimum ? 1f : (float)(_value - _minimum) / (_maximum - _minimum);
+        int fillWidth = Math.Max(6, (int)Math.Round(trackRect.Width * ratio));
+        Rectangle fillRect = new(trackRect.X, trackRect.Y, Math.Min(trackRect.Width, fillWidth), trackRect.Height);
+        using GraphicsPath fillPath = ControlDrawing.RoundedRect(fillRect, 3);
+        using SolidBrush fillBrush = new(_hovered ? _palette.AccentHover : _palette.Accent);
+        e.Graphics.FillPath(fillBrush, fillPath);
+
+        int knobSize = 18;
+        int knobX = Math.Clamp(trackRect.X + (int)Math.Round((trackRect.Width - knobSize) * ratio), trackRect.X, trackRect.Right - knobSize);
+        Rectangle knobRect = new(knobX, (Height - knobSize) / 2, knobSize, knobSize);
+        using SolidBrush knobBrush = new(Color.FromArgb(244, 246, 249));
+        using Pen knobBorder = new(Color.FromArgb(56, 60, 66));
+        e.Graphics.FillEllipse(knobBrush, knobRect);
+        e.Graphics.DrawEllipse(knobBorder, knobRect);
+
+        if (Focused)
+        {
+            Rectangle focusRect = new(0, 0, Width - 1, Height - 1);
+            using GraphicsPath focusPath = ControlDrawing.RoundedRect(focusRect, 8);
+            using Pen focusPen = new(Color.FromArgb(130, _palette.Accent), 1.5f);
+            e.Graphics.DrawPath(focusPen, focusPath);
+        }
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs pevent)
+    {
+        Color backColor = Parent is ISurfaceBackgroundProvider provider
+            ? provider.SurfaceBackgroundColor
+            : ControlDrawing.EffectiveBackColor(this);
+        using SolidBrush brush = new(backColor);
+        pevent.Graphics.FillRectangle(brush, ClientRectangle);
+    }
+
+    private void UpdateValueFromX(int x)
+    {
+        int usableWidth = Math.Max(1, Width - 18);
+        float ratio = Math.Clamp((float)(x - 9) / usableWidth, 0f, 1f);
+        int rawValue = _minimum + (int)Math.Round((_maximum - _minimum) * ratio);
+        Value = rawValue;
+    }
+
+    private int Snap(int value)
+    {
+        int normalized = value - _minimum;
+        int snapped = (int)Math.Round(normalized / (double)_snapStep) * _snapStep;
+        return Math.Clamp(_minimum + snapped, _minimum, _maximum);
     }
 }
 
@@ -1522,6 +2031,20 @@ internal sealed class TrayPopupWindow : Form
             if (e.KeyCode == Keys.Escape)
             {
                 Close();
+            }
+        };
+
+        Deactivate += (_, _) =>
+        {
+            if (!IsDisposed && Visible)
+            {
+                BeginInvoke((MethodInvoker)(() =>
+                {
+                    if (!IsDisposed && Visible && !ContainsFocus)
+                    {
+                        Close();
+                    }
+                }));
             }
         };
     }

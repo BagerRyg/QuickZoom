@@ -5,12 +5,15 @@ using System.IO;
 using System.Security.Principal;
 using System.Text;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace QuickZoom;
 
 internal static class Program
 {
+    private const string SingleInstanceMutexName = @"Local\QuickZoom2.SingleInstance";
+    private static Mutex? _singleInstanceMutex;
     // Per-monitor v2 gives physical pixel coordinates across mixed-DPI setups.
     private static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new(-4);
     private const string StartupTaskInstallFlag = "--install-startup-task";
@@ -43,6 +46,12 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (!TryAcquireSingleInstanceMutex())
+        {
+            ErrorLog.Write("Startup", "Another QuickZoom instance is already running. Exiting duplicate launch.");
+            return;
+        }
+
         EnablePerMonitorDpiAwareness();
         try { Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); } catch { }
         Application.EnableVisualStyles();
@@ -57,6 +66,7 @@ internal static class Program
         bool isElevatedLaunch = HasArg(args, ElevatedFlag);
         bool shouldInstallStartupTask = HasArg(args, StartupTaskInstallFlag);
         bool isManagedInstall = InstalledAppService.IsManagedInstallPath(exePath);
+        bool needsSecureInstallMigration = InstalledAppService.NeedsSecureInstallMigration(exePath);
 
         if (shouldInstallStartupTask)
         {
@@ -98,6 +108,18 @@ internal static class Program
             }
         }
 
+        if (isAdmin && isManagedInstall && needsSecureInstallMigration && !shouldInstallStartupTask)
+        {
+            if (TryInstallElevatedScheduledTask(out string migratedExePath, out string? migrationError))
+            {
+                ErrorLog.Write("StartupMigration", "Migrated elevated startup payload to secured install path: " + migratedExePath);
+            }
+            else
+            {
+                ErrorLog.Write("StartupMigration", "Could not migrate the legacy startup install to the secured install path. " + (migrationError ?? string.Empty));
+            }
+        }
+
         if (!isAdmin && !isElevatedLaunch)
         {
             if (!isManagedInstall && InstalledAppService.ShouldOfferInstallOrUpdate(exePath))
@@ -116,12 +138,13 @@ internal static class Program
             }
             else
             {
-                if (TryStartElevatedScheduledTask())
+                StartupTaskStatus startupTaskStatus = StartupTaskService.GetStatus();
+                if (startupTaskStatus == StartupTaskStatus.Ready && TryStartElevatedScheduledTask())
                 {
                     return;
                 }
 
-                bool wantsStartupTaskSetup = PromptToInstallPermanentStartupCopy(false);
+                bool wantsStartupTaskSetup = PromptToInstallPermanentStartupCopy(startupTaskStatus is StartupTaskStatus.Ready or StartupTaskStatus.Broken);
                 if (wantsStartupTaskSetup && TryRelaunchAsAdministrator(args, StartupTaskInstallFlag))
                 {
                     return;
@@ -137,7 +160,48 @@ internal static class Program
                           "Zoom hotkeys may not work while an Administrator app is focused until you set up elevated startup.");
             }
         }
-        Application.Run(new TrayContext());
+        try
+        {
+            Application.Run(new TrayContext());
+        }
+        finally
+        {
+            try
+            {
+                _singleInstanceMutex?.ReleaseMutex();
+            }
+            catch
+            {
+                // Ignore shutdown races.
+            }
+
+            _singleInstanceMutex?.Dispose();
+            _singleInstanceMutex = null;
+        }
+    }
+
+    private static bool TryAcquireSingleInstanceMutex()
+    {
+        try
+        {
+            bool createdNew;
+            var mutex = new Mutex(initiallyOwned: true, name: SingleInstanceMutexName, createdNew: out createdNew);
+            _singleInstanceMutex = mutex;
+            if (!createdNew)
+            {
+                mutex.Dispose();
+                _singleInstanceMutex = null;
+                return false;
+            }
+
+            return true;
+        }
+        catch
+        {
+            // If mutex creation fails, do not block startup.
+            ErrorLog.Write("Startup", "Could not create the single-instance mutex. Continuing without duplicate-instance protection.");
+            return true;
+        }
     }
 
     private static bool IsRunningAsAdministrator()
@@ -148,8 +212,9 @@ internal static class Program
             var principal = new WindowsPrincipal(identity);
             return principal.IsInRole(WindowsBuiltInRole.Administrator);
         }
-        catch
+        catch (Exception ex)
         {
+            ErrorLog.Write("Elevation", ex);
             return false;
         }
     }
@@ -194,8 +259,9 @@ internal static class Program
         {
             return false;
         }
-        catch
+        catch (Exception ex)
         {
+            ErrorLog.Write("Elevation", ex);
             return false;
         }
     }
@@ -220,9 +286,10 @@ internal static class Program
         {
             currentUser = WindowsIdentity.GetCurrent().Name;
         }
-        catch
+        catch (Exception ex)
         {
             errorMessage = "QuickZoom could not determine the current Windows user.";
+            ErrorLog.Write("StartupTaskInstall", ex);
             return false;
         }
 
@@ -244,7 +311,9 @@ internal static class Program
             FileName = psExe,
             Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command " + QuoteArgument(command),
             CreateNoWindow = true,
-            UseShellExecute = false
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
 
         try
@@ -256,18 +325,41 @@ internal static class Program
                 return false;
             }
 
-            process.WaitForExit(5000);
+            if (!process.WaitForExit(8000))
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch
+                {
+                    // Best effort.
+                }
+
+                errorMessage = "PowerShell timed out while registering the elevated startup task.";
+                ErrorLog.Write("StartupTaskInstall", errorMessage);
+                return false;
+            }
+
+            string output = process.StandardOutput.ReadToEnd().Trim();
+            string error = process.StandardError.ReadToEnd().Trim();
             bool success = process.ExitCode == 0;
             if (!success)
             {
-                errorMessage = "PowerShell failed while registering the elevated startup task.";
+                errorMessage = string.IsNullOrWhiteSpace(error)
+                    ? "PowerShell failed while registering the elevated startup task."
+                    : error;
+                ErrorLog.Write("StartupTaskInstall", "Task registration failed. StdOut: " + output + " StdErr: " + error);
+                return false;
             }
 
+            StartupTaskService.InvalidateCache();
             return success;
         }
-        catch
+        catch (Exception ex)
         {
             errorMessage = "QuickZoom encountered an unexpected error while registering the startup task.";
+            ErrorLog.Write("StartupTaskInstall", ex);
             return false;
         }
     }
@@ -279,7 +371,9 @@ internal static class Program
             FileName = "schtasks.exe",
             Arguments = "/Run /TN \"" + StartupTaskService.ElevatedStartupTaskName + "\"",
             CreateNoWindow = true,
-            UseShellExecute = false
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
 
         try
@@ -290,11 +384,34 @@ internal static class Program
                 return false;
             }
 
-            process.WaitForExit(1500);
-            return process.ExitCode == 0;
+            if (!process.WaitForExit(3000))
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch
+                {
+                    // Best effort.
+                }
+
+                ErrorLog.Write("StartupTaskRun", "Timed out while starting the elevated scheduled task.");
+                return false;
+            }
+
+            string output = process.StandardOutput.ReadToEnd().Trim();
+            string error = process.StandardError.ReadToEnd().Trim();
+            bool success = process.ExitCode == 0;
+            if (!success)
+            {
+                ErrorLog.Write("StartupTaskRun", "Could not start the elevated scheduled task. StdOut: " + output + " StdErr: " + error);
+            }
+
+            return success;
         }
-        catch
+        catch (Exception ex)
         {
+            ErrorLog.Write("StartupTaskRun", ex);
             return false;
         }
     }

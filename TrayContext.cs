@@ -11,6 +11,13 @@ namespace QuickZoom;
 
 internal sealed partial class TrayContext : ApplicationContext
 {
+    private enum ThemeMode
+    {
+        AutoSystem = 0,
+        Dark = 1,
+        Light = 2
+    }
+
     private enum InvertTriggerKind
     {
         EnableKeyPlusMiddleClick = 0,
@@ -24,6 +31,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private Control _uiInvoker = null!;
     private TrayPopupWindow? _trayPopup;
     private bool _useDarkTheme;
+    private ThemeMode _themeMode = ThemeMode.AutoSystem;
     private UiLanguage _language = UiText.GetDefaultLanguage();
 
     // Hook + timers
@@ -45,6 +53,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private Screen? _lockedScreen;
     private bool _smoothZoom = true;
     private bool _autoDisableAt100 = true;
+    private bool _invertEnabled = true;
     private bool _invertColors;
     private bool _magActive;
     private bool _useFullscreenBackend;
@@ -79,6 +88,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private Point _lastTrayPopupAnchor;
     private Form? _settingsWindow;
     private Action<SettingsPage>? _selectSettingsPageAction;
+    private SettingsPage _currentSettingsPage = SettingsPage.General;
 
     // Refresh rate
     private int _fps = 120;
@@ -92,6 +102,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private bool _monitorLayoutDirty = true;
     private bool _coreRuntimeInitialized;
     private bool _startupInitialized;
+    private bool _magInitializationFailureLogged;
     private System.Windows.Forms.Timer? _startupTimer;
     private ShellMessageWindow? _shellMessageWindow;
     private int _taskbarCreatedMessage;

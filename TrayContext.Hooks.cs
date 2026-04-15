@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
@@ -64,6 +65,7 @@ internal sealed partial class TrayContext
         _hook = SetWindowsHookEx(WH_MOUSE_LL, _proc, GetModuleHandle(curModule.ModuleName!), 0);
         if (_hook == IntPtr.Zero)
         {
+            ErrorLog.Write("InstallHook", new Win32Exception(Marshal.GetLastWin32Error(), "Failed to set the low-level mouse hook."));
             MessageBox.Show("Failed to set low-level mouse hook.", "QuickZoom", MessageBoxButtons.OK, MessageBoxIcon.Error);
             ExitThread();
         }
@@ -78,6 +80,7 @@ internal sealed partial class TrayContext
         _kbdHook = SetWindowsHookEx(WH_KEYBOARD_LL, _kbdProc, GetModuleHandle(curModule.ModuleName!), 0);
         if (_kbdHook == IntPtr.Zero)
         {
+            ErrorLog.Write("InstallKeyboardHook", new Win32Exception(Marshal.GetLastWin32Error(), "Failed to set the low-level keyboard hook."));
             MessageBox.Show("Failed to set low-level keyboard hook.", "QuickZoom", MessageBoxButtons.OK, MessageBoxIcon.Error);
             ExitThread();
         }
@@ -85,7 +88,7 @@ internal sealed partial class TrayContext
 
     private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (!_enabled)
+        if (!_enabled && !_invertEnabled)
         {
             _enableKeyPressed = false;
             _invertKeyPressed = false;
@@ -97,7 +100,8 @@ internal sealed partial class TrayContext
         {
             int message = wParam.ToInt32();
 
-            if ((message == WM_MBUTTONDOWN || message == WM_XBUTTONDOWN) &&
+            if (_invertEnabled &&
+                (message == WM_MBUTTONDOWN || message == WM_XBUTTONDOWN) &&
                 MatchesInvertMouseTrigger(Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam), message))
             {
                 ToggleInvertColors();
@@ -106,7 +110,7 @@ internal sealed partial class TrayContext
 
             if (message == WM_MOUSEWHEEL)
             {
-                if (_enableKeyPressed)
+                if (_enabled && _enableKeyPressed)
                 {
                     var data = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
                     int wheelDelta = (short)((data.mouseData >> 16) & 0xFFFF);
@@ -128,7 +132,7 @@ internal sealed partial class TrayContext
 
     private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (!_enabled)
+        if (!_enabled && !_invertEnabled)
         {
             _enableKeyPressed = false;
             _invertKeyPressed = false;
@@ -146,12 +150,12 @@ internal sealed partial class TrayContext
 
         if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN)
         {
-            if (IsEnableKeyMatch(_enableKey, vk))
+            if ((_enabled || _invertEnabled) && IsEnableKeyMatch(_enableKey, vk))
             {
                 _enableKeyPressed = true;
             }
 
-            if (_invertTrigger == InvertTriggerKind.CustomKey && IsInvertKeyMatch(vk))
+            if (_invertEnabled && _invertTrigger == InvertTriggerKind.CustomKey && IsInvertKeyMatch(vk))
             {
                 if (!_invertKeyPressed)
                 {
@@ -162,7 +166,7 @@ internal sealed partial class TrayContext
                 return (IntPtr)1;
             }
 
-            if (_enableKeyPressed)
+            if (_enabled && _enableKeyPressed)
             {
                 const int VK_OEM_PLUS = 0xBB;
                 const int VK_OEM_MINUS = 0xBD;
@@ -184,13 +188,13 @@ internal sealed partial class TrayContext
         }
         else if (message == WM_KEYUP || message == WM_SYSKEYUP)
         {
-            if (IsEnableKeyMatch(_enableKey, vk))
+            if ((_enabled || _invertEnabled) && IsEnableKeyMatch(_enableKey, vk))
             {
                 _enableKeyPressed = false;
                 _wheelDeltaRemainder = 0;
             }
 
-            if (_invertTrigger == InvertTriggerKind.CustomKey && IsInvertKeyMatch(vk))
+            if (_invertEnabled && _invertTrigger == InvertTriggerKind.CustomKey && IsInvertKeyMatch(vk))
             {
                 _invertKeyPressed = false;
                 return (IntPtr)1;

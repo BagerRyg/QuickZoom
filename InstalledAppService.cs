@@ -1,18 +1,24 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
+using System.Text;
 
 namespace QuickZoom;
 
 internal static class InstalledAppService
 {
-    private static readonly string InstallRoot = Path.Combine(
+    private static readonly string StateRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "QuickZoom");
 
+    private static readonly string InstallRoot = Path.Combine(StateRoot, "managed-install");
     private static readonly string VersionsRoot = Path.Combine(InstallRoot, "versions");
     private static readonly string CurrentInstallPointerPath = Path.Combine(InstallRoot, "current.txt");
+    private static readonly string LegacyVersionsRoot = Path.Combine(StateRoot, "versions");
+    private static readonly string LegacyCurrentInstallPointerPath = Path.Combine(StateRoot, "current.txt");
 
     private static readonly string[] OptionalPayloadFileNames =
     [
@@ -32,19 +38,39 @@ internal static class InstalledAppService
         }
 
         string fullPath = Path.GetFullPath(exePath);
-        string managedRoot = EnsureTrailingSeparator(Path.GetFullPath(VersionsRoot));
-        return fullPath.StartsWith(managedRoot, StringComparison.OrdinalIgnoreCase);
+        return IsUnderRoot(fullPath, VersionsRoot) || IsUnderRoot(fullPath, LegacyVersionsRoot);
     }
 
-    internal static bool ShouldOfferInstallOrUpdate(string? currentExePath)
+    internal static bool NeedsSecureInstallMigration(string? exePath)
     {
-        if (string.IsNullOrWhiteSpace(currentExePath) || IsManagedInstallPath(currentExePath))
+        if (string.IsNullOrWhiteSpace(exePath))
         {
             return false;
         }
 
+        string fullPath = Path.GetFullPath(exePath);
+        return IsUnderRoot(fullPath, LegacyVersionsRoot) && !IsUnderRoot(fullPath, VersionsRoot);
+    }
+
+    internal static bool ShouldOfferInstallOrUpdate(string? currentExePath)
+    {
+        if (string.IsNullOrWhiteSpace(currentExePath))
+        {
+            return false;
+        }
+
+        if (IsManagedInstallPath(currentExePath))
+        {
+            return NeedsSecureInstallMigration(currentExePath);
+        }
+
         string? installedExePath = GetCurrentInstalledExecutablePath();
         if (string.IsNullOrWhiteSpace(installedExePath) || !File.Exists(installedExePath))
+        {
+            return true;
+        }
+
+        if (NeedsSecureInstallMigration(installedExePath))
         {
             return true;
         }
@@ -59,33 +85,25 @@ internal static class InstalledAppService
     {
         try
         {
-            if (File.Exists(CurrentInstallPointerPath))
+            string? currentPointerTarget = ReadInstalledExecutablePointer(CurrentInstallPointerPath);
+            if (!string.IsNullOrWhiteSpace(currentPointerTarget))
             {
-                string? pointer = File.ReadAllText(CurrentInstallPointerPath).Trim();
-                if (!string.IsNullOrWhiteSpace(pointer) && File.Exists(pointer))
-                {
-                    return Path.GetFullPath(pointer);
-                }
+                return currentPointerTarget;
             }
 
-            if (!Directory.Exists(VersionsRoot))
+            string? legacyPointerTarget = ReadInstalledExecutablePointer(LegacyCurrentInstallPointerPath);
+            if (!string.IsNullOrWhiteSpace(legacyPointerTarget))
             {
-                return null;
+                return legacyPointerTarget;
             }
 
-            DateTime newestWrite = DateTime.MinValue;
-            string? newestExe = null;
-            foreach (string candidate in Directory.GetFiles(VersionsRoot, "QuickZoom.exe", SearchOption.AllDirectories))
+            string? managedInstall = FindNewestExecutableUnder(VersionsRoot);
+            if (!string.IsNullOrWhiteSpace(managedInstall))
             {
-                DateTime writeTime = File.GetLastWriteTimeUtc(candidate);
-                if (writeTime > newestWrite)
-                {
-                    newestWrite = writeTime;
-                    newestExe = candidate;
-                }
+                return managedInstall;
             }
 
-            return newestExe;
+            return FindNewestExecutableUnder(LegacyVersionsRoot);
         }
         catch
         {
@@ -104,9 +122,15 @@ internal static class InstalledAppService
             string sourceDirectory = Path.GetDirectoryName(sourceExePath)
                 ?? throw new InvalidOperationException("Could not determine the source directory.");
 
+            Directory.CreateDirectory(InstallRoot);
+            Directory.CreateDirectory(VersionsRoot);
+            HardenInstallDirectory(InstallRoot);
+            HardenInstallDirectory(VersionsRoot);
+
             string payloadId = GetPayloadId(sourceExePath);
             string targetDirectory = Path.Combine(VersionsRoot, payloadId);
             Directory.CreateDirectory(targetDirectory);
+            HardenInstallDirectory(targetDirectory);
 
             foreach (string sourceFile in EnumeratePayloadFiles(sourceExePath, sourceDirectory))
             {
@@ -120,15 +144,55 @@ internal static class InstalledAppService
             }
 
             installedExePath = Path.Combine(targetDirectory, Path.GetFileName(sourceExePath));
-            Directory.CreateDirectory(InstallRoot);
-            File.WriteAllText(CurrentInstallPointerPath, installedExePath);
+            FilePersistence.WriteAllTextAtomic(CurrentInstallPointerPath, installedExePath);
+            HardenInstallDirectory(targetDirectory);
+            HardenInstallFile(CurrentInstallPointerPath);
             return File.Exists(installedExePath);
         }
         catch (Exception ex)
         {
             errorMessage = ex.Message;
+            ErrorLog.Write("InstalledAppService", ex);
             return false;
         }
+    }
+
+    private static string? ReadInstalledExecutablePointer(string pointerPath)
+    {
+        if (!File.Exists(pointerPath))
+        {
+            return null;
+        }
+
+        string? pointer = File.ReadAllText(pointerPath).Trim();
+        if (!string.IsNullOrWhiteSpace(pointer) && File.Exists(pointer))
+        {
+            return Path.GetFullPath(pointer);
+        }
+
+        return null;
+    }
+
+    private static string? FindNewestExecutableUnder(string rootPath)
+    {
+        if (!Directory.Exists(rootPath))
+        {
+            return null;
+        }
+
+        DateTime newestWrite = DateTime.MinValue;
+        string? newestExe = null;
+        foreach (string candidate in Directory.GetFiles(rootPath, "QuickZoom.exe", SearchOption.AllDirectories))
+        {
+            DateTime writeTime = File.GetLastWriteTimeUtc(candidate);
+            if (writeTime > newestWrite)
+            {
+                newestWrite = writeTime;
+                newestExe = candidate;
+            }
+        }
+
+        return newestExe;
     }
 
     private static IEnumerable<string> EnumeratePayloadFiles(string sourceExePath, string sourceDirectory)
@@ -157,10 +221,87 @@ internal static class InstalledAppService
 
     private static string GetPayloadId(string exePath)
     {
-        using var stream = File.OpenRead(exePath);
-        using var sha256 = SHA256.Create();
-        byte[] hash = sha256.ComputeHash(stream);
-        return Convert.ToHexString(hash.AsSpan(0, 8));
+        exePath = Path.GetFullPath(exePath);
+        string sourceDirectory = Path.GetDirectoryName(exePath)
+            ?? throw new InvalidOperationException("Could not determine the source directory.");
+
+        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (string file in EnumeratePayloadFiles(exePath, sourceDirectory))
+        {
+            string fullPath = Path.GetFullPath(file);
+            byte[] nameBytes = Encoding.UTF8.GetBytes(Path.GetFileName(fullPath));
+            hash.AppendData(nameBytes);
+            hash.AppendData([0]);
+
+            using FileStream stream = File.OpenRead(fullPath);
+            byte[] buffer = new byte[81920];
+            int bytesRead;
+            while ((bytesRead = stream.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                hash.AppendData(buffer, 0, bytesRead);
+            }
+        }
+
+        byte[] digest = hash.GetHashAndReset();
+        return Convert.ToHexString(digest.AsSpan(0, 8));
+    }
+
+    private static void HardenInstallDirectory(string path)
+    {
+        if (!Directory.Exists(path))
+        {
+            return;
+        }
+
+        DirectoryInfo directoryInfo = new(path);
+        directoryInfo.SetAccessControl(CreateInstallDirectorySecurity());
+    }
+
+    private static void HardenInstallFile(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        FileInfo fileInfo = new(path);
+        fileInfo.SetAccessControl(CreateInstallFileSecurity());
+    }
+
+    private static DirectorySecurity CreateInstallDirectorySecurity()
+    {
+        SecurityIdentifier userSid = WindowsIdentity.GetCurrent().User
+            ?? throw new InvalidOperationException("Could not determine the current Windows user.");
+        SecurityIdentifier adminsSid = new(WellKnownSidType.BuiltinAdministratorsSid, null);
+        SecurityIdentifier systemSid = new(WellKnownSidType.LocalSystemSid, null);
+
+        DirectorySecurity security = new();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(systemSid, FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(adminsSid, FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(userSid, FileSystemRights.ReadAndExecute, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        return security;
+    }
+
+    private static FileSecurity CreateInstallFileSecurity()
+    {
+        SecurityIdentifier userSid = WindowsIdentity.GetCurrent().User
+            ?? throw new InvalidOperationException("Could not determine the current Windows user.");
+        SecurityIdentifier adminsSid = new(WellKnownSidType.BuiltinAdministratorsSid, null);
+        SecurityIdentifier systemSid = new(WellKnownSidType.LocalSystemSid, null);
+
+        FileSecurity security = new();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(systemSid, FileSystemRights.FullControl, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(adminsSid, FileSystemRights.FullControl, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(userSid, FileSystemRights.ReadAndExecute, AccessControlType.Allow));
+        return security;
+    }
+
+    private static bool IsUnderRoot(string fullPath, string rootPath)
+    {
+        string normalizedRoot = EnsureTrailingSeparator(Path.GetFullPath(rootPath));
+        return fullPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string EnsureTrailingSeparator(string path)

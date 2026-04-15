@@ -7,9 +7,40 @@ param(
 
 $ErrorActionPreference = "Stop"
 $startupTaskPriority = 3
-$installRoot = Join-Path $env:LOCALAPPDATA "QuickZoom"
+$installRoot = Join-Path $env:LOCALAPPDATA "QuickZoom\\managed-install"
 $versionsRoot = Join-Path $installRoot "versions"
 $currentInstallPointerPath = Join-Path $installRoot "current.txt"
+
+function Protect-InstallLocation {
+    param(
+        [string]$Path,
+        [switch]$Directory
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $systemSid = "S-1-5-18"
+    $adminsSid = "S-1-5-32-544"
+
+    if ($Directory) {
+        $userGrant = "*$userSid:(OI)(CI)(RX)"
+        $systemGrant = "*$systemSid:(OI)(CI)(F)"
+        $adminsGrant = "*$adminsSid:(OI)(CI)(F)"
+    }
+    else {
+        $userGrant = "*$userSid:(RX)"
+        $systemGrant = "*$systemSid:(F)"
+        $adminsGrant = "*$adminsSid:(F)"
+    }
+
+    & icacls.exe $Path /inheritance:r /grant:r $systemGrant $adminsGrant $userGrant | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not harden permissions on $Path"
+    }
+}
 
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -64,8 +95,13 @@ function Install-AppPayload {
     $sourceExe = (Resolve-Path -LiteralPath $SourceExe).Path
     $sourceDir = Split-Path -Parent $sourceExe
     $payloadId = Get-PayloadId -Path $sourceExe
+    New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
+    New-Item -ItemType Directory -Force -Path $versionsRoot | Out-Null
+    Protect-InstallLocation -Path $installRoot -Directory
+    Protect-InstallLocation -Path $versionsRoot -Directory
     $targetDir = Join-Path $versionsRoot $payloadId
     New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+    Protect-InstallLocation -Path $targetDir -Directory
 
     $files = [System.Collections.Generic.List[string]]::new()
     $files.Add($sourceExe)
@@ -102,8 +138,8 @@ function Install-AppPayload {
     }
 
     $installedExe = Join-Path $targetDir (Split-Path -Leaf $sourceExe)
-    New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
     Set-Content -LiteralPath $currentInstallPointerPath -Value $installedExe -NoNewline
+    Protect-InstallLocation -Path $currentInstallPointerPath
     return $installedExe
 }
 

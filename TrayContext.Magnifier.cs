@@ -367,6 +367,18 @@ internal sealed partial class TrayContext
         if (active && !_magActive)
         {
             _magActive = MagInitialize();
+            if (!_magActive)
+            {
+                if (!_magInitializationFailureLogged)
+                {
+                    _magInitializationFailureLogged = true;
+                    ErrorLog.Write("Magnification", "MagInitialize failed. Magnification is not available in the current session.");
+                }
+
+                return;
+            }
+
+            _magInitializationFailureLogged = false;
             _monitorLayoutDirty = true;
             if (!_autoSwitchMonitor && GetCursorPos(out var ptLock))
             {
@@ -477,8 +489,9 @@ internal sealed partial class TrayContext
                     window = new MonitorMagnifierWindow(screen.Bounds);
                     _monitorWindows[screen.DeviceName] = window;
                 }
-                catch
+                catch (Exception ex)
                 {
+                    ErrorLog.Write("SyncMonitorWindows", ex);
                     DisableMagAndReset();
                     MessageBox.Show(
                         "QuickZoom could not initialize monitor magnification windows on this system. " +

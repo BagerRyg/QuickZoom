@@ -38,12 +38,18 @@ internal sealed partial class TrayContext
             return;
         }
 
-        RunOnUiThread(() => ApplyThemeFromSystem(force: false));
+        RunOnUiThread(() => ApplyThemePreference(force: false));
     }
 
-    private void ApplyThemeFromSystem(bool force)
+    private void ApplyThemePreference(bool force)
     {
-        bool shouldUseDark = GetWindowsAppsUseDarkMode();
+        bool shouldUseDark = _themeMode switch
+        {
+            ThemeMode.Dark => true,
+            ThemeMode.Light => false,
+            _ => GetWindowsAppsUseDarkMode()
+        };
+
         if (!force && shouldUseDark == _useDarkTheme)
         {
             return;
@@ -51,6 +57,14 @@ internal sealed partial class TrayContext
 
         _useDarkTheme = shouldUseDark;
         RefreshMenuAndTrayUi(rebuildPopup: true);
+        RefreshSettingsWindow(_currentSettingsPage);
+    }
+
+    private void SetThemeMode(ThemeMode mode)
+    {
+        _themeMode = mode;
+        SaveSettings();
+        ApplyThemePreference(force: true);
     }
 
     private static bool GetWindowsAppsUseDarkMode()

@@ -29,7 +29,7 @@ internal sealed partial class TrayContext
             return;
         }
 
-        ApplyThemeFromSystem(force: true);
+        ApplyThemePreference(force: true);
         SubscribeThemeChanges();
         SubscribeDisplayChanges();
         InstallHook();
@@ -103,7 +103,7 @@ internal sealed partial class TrayContext
 
     private void BuildMenuAndTray()
     {
-        ApplyThemeFromSystem(force: true);
+        ApplyThemePreference(force: true);
         CreateNotifyIcon();
         UpdateStartupServiceStatusLabel();
     }
@@ -204,19 +204,19 @@ internal sealed partial class TrayContext
         var quickActions = CreateTrayStack(trayContentWidth);
 
         _magnifyToggle = new ToggleSwitchControl(palette) { IsOn = _enabled };
-        _magnifyRow = new TrayMenuRow(palette, L("Tray.ToggleMagnify"), toggle: _magnifyToggle);
+        _magnifyRow = new TrayMenuRow(palette, L("Tray.ToggleMagnify"), toggle: _magnifyToggle, icon: TrayFluentIcon.Enabled);
         _magnifyRow.Width = trayContentWidth;
         _magnifyRow.ActionRequested += (_, _) => ExecuteTrayAction(() => SetEnabledState(!_enabled));
         quickActions.Controls.Add(_magnifyRow);
 
-        _invertToggle = new ToggleSwitchControl(palette) { IsOn = _invertColors };
-        _invertRow = new TrayMenuRow(palette, L("Tray.ToggleInvert"), toggle: _invertToggle);
+        _invertToggle = new ToggleSwitchControl(palette) { IsOn = _invertEnabled };
+        _invertRow = new TrayMenuRow(palette, L("Tray.ToggleInvert"), toggle: _invertToggle, icon: TrayFluentIcon.InvertColors);
         _invertRow.Width = trayContentWidth;
-        _invertRow.ActionRequested += (_, _) => ExecuteTrayAction(ToggleInvertColors);
+        _invertRow.ActionRequested += (_, _) => ExecuteTrayAction(() => SetInvertEnabledState(!_invertEnabled));
         quickActions.Controls.Add(_invertRow);
 
         _followToggle = new ToggleSwitchControl(palette) { IsOn = _followCursor };
-        _followRow = new TrayMenuRow(palette, L("Tray.ToggleFollow"), toggle: _followToggle);
+        _followRow = new TrayMenuRow(palette, L("Tray.ToggleFollow"), toggle: _followToggle, icon: TrayFluentIcon.FollowCursor);
         _followRow.Width = trayContentWidth;
         _followRow.ActionRequested += (_, _) => ExecuteTrayAction(() => SetFollowCursor(!_followCursor));
         quickActions.Controls.Add(_followRow);
@@ -231,7 +231,7 @@ internal sealed partial class TrayContext
 
         var actions = CreateTrayStack(trayContentWidth);
 
-        _displayRow = new TrayMenuRow(palette, L("Tray.MagnifiedDisplays"));
+        _displayRow = new TrayMenuRow(palette, L("Tray.MagnifiedDisplays"), icon: TrayFluentIcon.MagnifiedDisplays);
         _displayRow.Width = trayContentWidth;
         _displayRow.ActionRequested += (_, _) => ToggleDisplayOptions();
         actions.Controls.Add(_displayRow);
@@ -253,7 +253,7 @@ internal sealed partial class TrayContext
         actions.Controls.Add(_displayOptionsHost);
         PopulateDisplayOptionsHost();
 
-        var keyBindsRow = new TrayMenuRow(palette, L("Tray.KeyBinds"));
+        var keyBindsRow = new TrayMenuRow(palette, L("Tray.KeyBinds"), icon: TrayFluentIcon.KeyBinds);
         keyBindsRow.Width = trayContentWidth;
         keyBindsRow.ActionRequested += (_, _) => ExecuteTrayAction(() =>
         {
@@ -262,7 +262,7 @@ internal sealed partial class TrayContext
         });
         actions.Controls.Add(keyBindsRow);
 
-        var settingsRow = new TrayMenuRow(palette, L("Tray.Settings"));
+        var settingsRow = new TrayMenuRow(palette, L("Tray.Settings"), icon: TrayFluentIcon.Settings);
         settingsRow.Width = trayContentWidth;
         settingsRow.ActionRequested += (_, _) => ExecuteTrayAction(() =>
         {
@@ -271,7 +271,7 @@ internal sealed partial class TrayContext
         });
         actions.Controls.Add(settingsRow);
 
-        var resetCursorRow = new TrayMenuRow(palette, L("Tray.ResetCursor"));
+        var resetCursorRow = new TrayMenuRow(palette, L("Tray.ResetCursor"), icon: TrayFluentIcon.ResetCursor);
         resetCursorRow.Width = trayContentWidth;
         resetCursorRow.ActionRequested += (_, _) => ExecuteTrayAction(() =>
         {
@@ -280,7 +280,7 @@ internal sealed partial class TrayContext
         });
         actions.Controls.Add(resetCursorRow);
 
-        var aboutRow = new TrayMenuRow(palette, L("Tray.About"));
+        var aboutRow = new TrayMenuRow(palette, L("Tray.About"), icon: TrayFluentIcon.About);
         aboutRow.Width = trayContentWidth;
         aboutRow.ActionRequested += (_, _) => ExecuteTrayAction(() =>
         {
@@ -289,8 +289,9 @@ internal sealed partial class TrayContext
         });
         actions.Controls.Add(aboutRow);
 
-        _exitRow = new TrayMenuRow(palette, L("Tray.Exit"));
+        _exitRow = new TrayMenuRow(palette, L("Tray.Exit"), icon: TrayFluentIcon.Exit);
         _exitRow.Width = trayContentWidth;
+        _exitRow.IsDestructive = true;
         _exitRow.ActionRequested += (_, _) => ExecuteTrayAction(HandleExitRequested);
         actions.Controls.Add(_exitRow);
 
@@ -333,15 +334,14 @@ internal sealed partial class TrayContext
             Dock = DockStyle.Top,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Margin = new Padding(0, 0, 0, 6),
+            Margin = new Padding(0, 0, 0, 10),
             Padding = new Padding(0),
             BackColor = Color.Transparent,
             ColumnCount = 1,
-            RowCount = 2,
+            RowCount = 1,
             Width = contentWidth,
             MinimumSize = new Size(contentWidth, 0)
         };
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var title = new Label
@@ -353,19 +353,7 @@ internal sealed partial class TrayContext
             BackColor = Color.Transparent,
             Margin = new Padding(0)
         };
-        var subtitle = new Label
-        {
-            Text = L("Tray.QuickSubtitle"),
-            AutoSize = true,
-            MaximumSize = new Size(contentWidth - 20, 0),
-            Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-            ForeColor = palette.SecondaryText,
-            BackColor = Color.Transparent,
-            Margin = new Padding(0, 2, 0, 0)
-        };
-
         panel.Controls.Add(title, 0, 0);
-        panel.Controls.Add(subtitle, 0, 1);
         return panel;
     }
 
@@ -505,7 +493,7 @@ internal sealed partial class TrayContext
 
         if (_invertRow != null && _invertToggle != null)
         {
-            _invertToggle.IsOn = _invertColors;
+            _invertToggle.IsOn = _invertEnabled;
             _invertRow.ApplyTheme(palette);
         }
 
@@ -628,11 +616,42 @@ internal sealed partial class TrayContext
         _enabled = enabled;
         if (!_enabled)
         {
-            DisableMagAndReset();
+            _zoomPercent = 100;
+            _animTargetPercent = 100;
+            _animTimer?.Stop();
+            if (_invertColors)
+            {
+                ApplyTransformCurrentPoint();
+            }
+            else
+            {
+                DisableMagAndReset();
+            }
         }
         else if (_invertColors || _zoomPercent > 100)
         {
             ApplyTransformCurrentPoint();
+        }
+
+        SaveSettings();
+        RefreshMenuAndTrayUi();
+    }
+
+    private void SetInvertEnabledState(bool enabled)
+    {
+        ResetExitConfirmation();
+        _invertEnabled = enabled;
+        if (!_invertEnabled)
+        {
+            _invertColors = false;
+            if (_zoomPercent > 100)
+            {
+                ApplyTransformCurrentPoint();
+            }
+            else
+            {
+                DisableMagAndReset();
+            }
         }
 
         SaveSettings();
@@ -690,3 +709,4 @@ internal sealed partial class TrayContext
         UpdateTrayPopupState();
     }
 }
+

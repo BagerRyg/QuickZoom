@@ -11,8 +11,11 @@ internal sealed partial class TrayContext
 {
     private sealed class Settings
     {
+        public int ThemeMode { get; set; } = (int)TrayContext.ThemeMode.AutoSystem;
         public int StepPercent { get; set; } = 15;
         public int MaxPercent { get; set; } = 300;
+        public bool MagnificationEnabled { get; set; } = true;
+        public bool InvertEnabled { get; set; } = true;
         public bool FollowCursor { get; set; } = true;
         public int EnableKey { get; set; } = (int)Keys.Menu;
         public int Language { get; set; } = (int)UiLanguage.English;
@@ -50,8 +53,13 @@ internal sealed partial class TrayContext
                 return;
             }
 
-            _stepPercent = Math.Clamp(s.StepPercent, 1, 100);
-            _maxPercent = Math.Clamp(s.MaxPercent, 150, 600);
+            _stepPercent = Math.Clamp(s.StepPercent, 5, 100);
+            _maxPercent = Math.Clamp(s.MaxPercent, 200, 500);
+            _themeMode = Enum.IsDefined(typeof(ThemeMode), s.ThemeMode)
+                ? (ThemeMode)s.ThemeMode
+                : ThemeMode.AutoSystem;
+            _enabled = s.MagnificationEnabled;
+            _invertEnabled = s.InvertEnabled;
             _followCursor = s.FollowCursor;
             _autoSwitchMonitor = s.AutoSwitchMonitor;
             _enableKey = (Keys)s.EnableKey;
@@ -65,14 +73,23 @@ internal sealed partial class TrayContext
                 : InvertTriggerKind.EnableKeyPlusMiddleClick;
             _smoothZoom = s.SmoothZoom;
             _autoDisableAt100 = s.AutoDisableAt100;
-            _fps = Math.Clamp(s.Fps, 5, 240);
+            _fps = Math.Clamp(s.Fps, 60, 360);
             _centerCursor = s.CenterCursor;
             _useCursorMonitorSelection = s.UseCursorMonitorSelection;
+            if (!_invertEnabled)
+            {
+                _invertColors = false;
+            }
             _selectedMonitorDeviceNames.Clear();
             foreach (string name in s.SelectedMonitorDeviceNames.Where(n => !string.IsNullOrWhiteSpace(n)))
             {
                 _selectedMonitorDeviceNames.Add(name);
             }
+        }
+        catch (JsonException ex)
+        {
+            TryQuarantineCorruptSettingsFile();
+            ErrorLog.Write("LoadSettings", ex);
         }
         catch (Exception ex)
         {
@@ -92,8 +109,11 @@ internal sealed partial class TrayContext
 
             var s = new Settings
             {
+                ThemeMode = (int)_themeMode,
                 StepPercent = _stepPercent,
                 MaxPercent = _maxPercent,
+                MagnificationEnabled = _enabled,
+                InvertEnabled = _invertEnabled,
                 FollowCursor = _followCursor,
                 AutoSwitchMonitor = _autoSwitchMonitor,
                 EnableKey = (int)_enableKey,
@@ -109,7 +129,9 @@ internal sealed partial class TrayContext
                 SelectedMonitorDeviceNames = _selectedMonitorDeviceNames.ToList()
             };
 
-            File.WriteAllText(_settingsPath, JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true }));
+            FilePersistence.WriteAllTextAtomic(
+                _settingsPath,
+                JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex)
         {
@@ -147,5 +169,26 @@ internal sealed partial class TrayContext
         return template
             .Replace("Enable Key", KeyLabel(_enableKey), StringComparison.Ordinal)
             .Replace("Aktiveringstast", KeyLabel(_enableKey), StringComparison.Ordinal);
+    }
+
+    private void TryQuarantineCorruptSettingsFile()
+    {
+        try
+        {
+            if (!File.Exists(_settingsPath))
+            {
+                return;
+            }
+
+            string backupPath = Path.Combine(
+                Path.GetDirectoryName(_settingsPath)!,
+                Path.GetFileNameWithoutExtension(_settingsPath) + ".corrupt-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + Path.GetExtension(_settingsPath));
+
+            File.Move(_settingsPath, backupPath);
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("LoadSettings", "Could not quarantine corrupt settings file: " + ex.Message);
+        }
     }
 }
