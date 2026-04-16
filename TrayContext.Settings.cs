@@ -26,6 +26,7 @@ internal sealed partial class TrayContext
         public bool AutoDisableAt100 { get; set; } = true;
         public int Fps { get; set; } = 120;
         public bool CenterCursor { get; set; }
+        public bool WiggleSpotlightEnabled { get; set; } = true;
         public bool AutoSwitchMonitor { get; set; } = true;
         public bool UseCursorMonitorSelection { get; set; }
         public List<string> SelectedMonitorDeviceNames { get; set; } = new();
@@ -75,6 +76,7 @@ internal sealed partial class TrayContext
             _autoDisableAt100 = s.AutoDisableAt100;
             _fps = Math.Clamp(s.Fps, 60, 360);
             _centerCursor = s.CenterCursor;
+            _wiggleSpotlightEnabled = s.WiggleSpotlightEnabled;
             _useCursorMonitorSelection = s.UseCursorMonitorSelection;
             if (!_invertEnabled)
             {
@@ -125,6 +127,7 @@ internal sealed partial class TrayContext
                 AutoDisableAt100 = _autoDisableAt100,
                 Fps = _fps,
                 CenterCursor = _centerCursor,
+                WiggleSpotlightEnabled = _wiggleSpotlightEnabled,
                 UseCursorMonitorSelection = _useCursorMonitorSelection,
                 SelectedMonitorDeviceNames = _selectedMonitorDeviceNames.ToList()
             };

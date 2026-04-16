@@ -246,6 +246,19 @@ internal sealed partial class TrayContext
             SaveSettings();
         }, rightColumnWidth: 96));
 
+        section.AddRow(CreateToggleRow(L("Settings.WiggleSpotlight"), L("Settings.WiggleSpotlightHelp"), _wiggleSpotlightEnabled, value =>
+        {
+            _wiggleSpotlightEnabled = value;
+            if (!_wiggleSpotlightEnabled)
+            {
+                _recentCursorSamples.Clear();
+                _cursorSpotlightVisibleUntilTick = 0;
+                _cursorSpotlightOverlay?.HideSpotlight();
+            }
+
+            SaveSettings();
+        }, rightColumnWidth: 96));
+
         page.AddSection(section);
         return page;
     }

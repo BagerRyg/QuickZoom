@@ -41,6 +41,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private LowLevelKeyboardProc _kbdProc = null!;
     private System.Windows.Forms.Timer _followTimer = null!;
     private System.Windows.Forms.Timer _animTimer = null!;
+    private System.Windows.Forms.Timer _cursorSpotlightTimer = null!;
 
     // Zoom state
     private int _zoomPercent = 100;
@@ -58,6 +59,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private bool _magActive;
     private bool _useFullscreenBackend;
     private bool _centerCursor;
+    private bool _wiggleSpotlightEnabled = true;
 
     // Animation
     private int _animDurationMs = 140;
@@ -106,6 +108,11 @@ internal sealed partial class TrayContext : ApplicationContext
     private System.Windows.Forms.Timer? _startupTimer;
     private ShellMessageWindow? _shellMessageWindow;
     private int _taskbarCreatedMessage;
+    private CursorSpotlightOverlay? _cursorSpotlightOverlay;
+    private readonly List<(long Tick, Point Point)> _recentCursorSamples = new();
+    private long _lastCursorSpotlightTriggerTick;
+    private long _cursorSpotlightVisibleUntilTick;
+    private bool _cursorSpotlightHidesSystemCursor;
 
     // Settings
     private readonly string _settingsPath = AppPaths.SettingsPath;
@@ -139,9 +146,14 @@ internal sealed partial class TrayContext : ApplicationContext
 
             _followTimer?.Stop();
             _animTimer?.Stop();
+            _cursorSpotlightTimer?.Stop();
+            _cursorSpotlightTimer?.Dispose();
             _startupTimer?.Stop();
             _startupTimer?.Dispose();
             _shellMessageWindow?.Dispose();
+            RestoreSystemCursorVisibility();
+            _cursorSpotlightOverlay?.HideSpotlight();
+            _cursorSpotlightOverlay?.Dispose();
             CloseTrayPopup();
             if (_settingsWindow != null && !_settingsWindow.IsDisposed)
             {

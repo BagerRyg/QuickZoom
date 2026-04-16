@@ -580,6 +580,184 @@ internal sealed partial class TrayContext
                 _animTimer.Stop();
             }
         };
+
+        _cursorSpotlightTimer = new System.Windows.Forms.Timer
+        {
+            Interval = 20
+        };
+        _cursorSpotlightTimer.Tick += (_, _) => HandleCursorSpotlightTick();
+        _cursorSpotlightTimer.Start();
+    }
+
+    private void HandleCursorSpotlightTick()
+    {
+        const int spotlightHoldDurationMs = 2000;
+        const int spotlightShrinkDurationMs = 220;
+        const int spotlightTotalDurationMs = spotlightHoldDurationMs + spotlightShrinkDurationMs;
+        long now = Environment.TickCount64;
+        bool isVisible = _cursorSpotlightVisibleUntilTick > now;
+
+        if (!GetCursorPos(out var pt))
+        {
+            RestoreSystemCursorVisibility();
+            if (!isVisible)
+            {
+                _cursorSpotlightOverlay?.HideSpotlight();
+            }
+
+            return;
+        }
+
+        Point currentPoint = new(pt.X, pt.Y);
+        PruneCursorSamples(now);
+
+        if (_wiggleSpotlightEnabled)
+        {
+            AddCursorSample(now, currentPoint);
+            if (!isVisible &&
+                now - _lastCursorSpotlightTriggerTick >= 1500 &&
+                ShouldTriggerCursorSpotlight())
+            {
+                _lastCursorSpotlightTriggerTick = now;
+                _cursorSpotlightVisibleUntilTick = now + spotlightTotalDurationMs;
+                isVisible = true;
+            }
+        }
+        else
+        {
+            _recentCursorSamples.Clear();
+            _cursorSpotlightVisibleUntilTick = 0;
+            isVisible = false;
+        }
+
+        if (!isVisible)
+        {
+            RestoreSystemCursorVisibility();
+            _cursorSpotlightOverlay?.HideSpotlight();
+            return;
+        }
+
+        EnsureSystemCursorHidden();
+        long remainingMs = _cursorSpotlightVisibleUntilTick - now;
+        double progress = remainingMs > spotlightShrinkDurationMs
+            ? 0d
+            : 1d - (remainingMs / (double)spotlightShrinkDurationMs);
+        _cursorSpotlightOverlay ??= new CursorSpotlightOverlay();
+        _cursorSpotlightOverlay.UpdateSpotlight(currentPoint, progress);
+    }
+
+    private void AddCursorSample(long now, Point point)
+    {
+        if (_recentCursorSamples.Count > 0)
+        {
+            Point last = _recentCursorSamples[_recentCursorSamples.Count - 1].Point;
+            if (last == point)
+            {
+                return;
+            }
+        }
+
+        _recentCursorSamples.Add((now, point));
+    }
+
+    private void PruneCursorSamples(long now)
+    {
+        while (_recentCursorSamples.Count > 0 && now - _recentCursorSamples[0].Tick > 1000)
+        {
+            _recentCursorSamples.RemoveAt(0);
+        }
+    }
+
+    private bool ShouldTriggerCursorSpotlight()
+    {
+        if (_recentCursorSamples.Count < 5)
+        {
+            return false;
+        }
+
+        long durationMs = _recentCursorSamples[_recentCursorSamples.Count - 1].Tick - _recentCursorSamples[0].Tick;
+        if (durationMs < 550)
+        {
+            return false;
+        }
+
+        double pathLength = 0d;
+        int minX = _recentCursorSamples[0].Point.X;
+        int maxX = minX;
+        int minY = _recentCursorSamples[0].Point.Y;
+        int maxY = minY;
+        int xChanges = 0;
+        int yChanges = 0;
+        int prevDirX = 0;
+        int prevDirY = 0;
+
+        for (int i = 1; i < _recentCursorSamples.Count; i++)
+        {
+            Point prev = _recentCursorSamples[i - 1].Point;
+            Point current = _recentCursorSamples[i].Point;
+            int dx = current.X - prev.X;
+            int dy = current.Y - prev.Y;
+            pathLength += Math.Sqrt((dx * dx) + (dy * dy));
+
+            minX = Math.Min(minX, current.X);
+            maxX = Math.Max(maxX, current.X);
+            minY = Math.Min(minY, current.Y);
+            maxY = Math.Max(maxY, current.Y);
+
+            int dirX = Math.Abs(dx) >= 10 ? Math.Sign(dx) : 0;
+            int dirY = Math.Abs(dy) >= 10 ? Math.Sign(dy) : 0;
+
+            if (dirX != 0)
+            {
+                if (prevDirX != 0 && dirX != prevDirX)
+                {
+                    xChanges++;
+                }
+
+                prevDirX = dirX;
+            }
+
+            if (dirY != 0)
+            {
+                if (prevDirY != 0 && dirY != prevDirY)
+                {
+                    yChanges++;
+                }
+
+                prevDirY = dirY;
+            }
+        }
+
+        int width = maxX - minX;
+        int height = maxY - minY;
+        int directionChanges = xChanges + yChanges;
+
+        return pathLength >= 760d &&
+            width <= 280 &&
+            height <= 280 &&
+            directionChanges >= 6;
+    }
+
+    private void EnsureSystemCursorHidden()
+    {
+        if (_cursorSpotlightHidesSystemCursor)
+        {
+            return;
+        }
+
+        Cursor.Hide();
+        _cursorSpotlightHidesSystemCursor = true;
+    }
+
+    private void RestoreSystemCursorVisibility()
+    {
+        if (!_cursorSpotlightHidesSystemCursor)
+        {
+            return;
+        }
+
+        Cursor.Show();
+        _cursorSpotlightHidesSystemCursor = false;
     }
 
     private void SuspendPerMonitorTracking()
