@@ -12,15 +12,15 @@ internal sealed partial class TrayContext
     private sealed class Settings
     {
         public int ThemeMode { get; set; } = (int)TrayContext.ThemeMode.AutoSystem;
-        public int StepPercent { get; set; } = 15;
-        public int MaxPercent { get; set; } = 300;
+        public int StepPercent { get; set; } = 25;
+        public int MaxPercent { get; set; } = 400;
         public bool MagnificationEnabled { get; set; } = true;
-        public bool InvertEnabled { get; set; } = true;
+        public bool InvertEnabled { get; set; }
         public bool FollowCursor { get; set; } = true;
         public int EnableKey { get; set; } = (int)Keys.Menu;
-        public int Language { get; set; } = (int)UiLanguage.English;
+        public int Language { get; set; } = (int)UiText.GetDefaultLanguage();
         public bool InvertColors { get; set; }
-        public int InvertKey { get; set; } = (int)Keys.Menu;
+        public int InvertKey { get; set; } = (int)Keys.I;
         public int InvertTrigger { get; set; } = (int)InvertTriggerKind.EnableKeyPlusMiddleClick;
         public bool SmoothZoom { get; set; } = true;
         public bool AutoDisableAt100 { get; set; } = true;

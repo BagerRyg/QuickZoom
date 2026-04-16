@@ -45,15 +45,15 @@ internal sealed partial class TrayContext : ApplicationContext
     // Zoom state
     private int _zoomPercent = 100;
     private const int MinPercent = 100;
-    private int _maxPercent = 300;
-    private int _stepPercent = 15;
+    private int _maxPercent = 400;
+    private int _stepPercent = 25;
     private bool _enabled = true;
     private bool _followCursor = true;
     private bool _autoSwitchMonitor = true;
     private Screen? _lockedScreen;
     private bool _smoothZoom = true;
     private bool _autoDisableAt100 = true;
-    private bool _invertEnabled = true;
+    private bool _invertEnabled;
     private bool _invertColors;
     private bool _magActive;
     private bool _useFullscreenBackend;
@@ -71,7 +71,7 @@ internal sealed partial class TrayContext : ApplicationContext
 
     private POINT _staticCenter;
     private Keys _enableKey = Keys.Menu;
-    private Keys _invertKey = Keys.Menu;
+    private Keys _invertKey = Keys.I;
     private InvertTriggerKind _invertTrigger = InvertTriggerKind.EnableKeyPlusMiddleClick;
 
     // Tray popup refs

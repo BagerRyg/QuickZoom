@@ -111,6 +111,25 @@ internal static class InstalledAppService
         }
     }
 
+    internal static bool IsCurrentInstalledExecutablePath(string? exePath)
+    {
+        if (string.IsNullOrWhiteSpace(exePath))
+        {
+            return false;
+        }
+
+        string? installedExePath = GetCurrentInstalledExecutablePath();
+        if (string.IsNullOrWhiteSpace(installedExePath))
+        {
+            return false;
+        }
+
+        return string.Equals(
+            Path.GetFullPath(exePath),
+            Path.GetFullPath(installedExePath),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
     internal static bool TryPrepareInstalledPayload(string sourceExePath, out string installedExePath, out string? errorMessage)
     {
         installedExePath = sourceExePath;

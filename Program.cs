@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -46,10 +47,20 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
-        if (!TryAcquireSingleInstanceMutex())
+        string? exePath = GetExecutablePath();
+        bool isElevatedLaunch = HasArg(args, ElevatedFlag);
+        bool shouldInstallStartupTask = HasArg(args, StartupTaskInstallFlag);
+        bool acquiredMutex = false;
+
+        if (!shouldInstallStartupTask)
         {
-            ErrorLog.Write("Startup", "Another QuickZoom instance is already running. Exiting duplicate launch.");
-            return;
+            if (!TryAcquireSingleInstanceMutex())
+            {
+                ErrorLog.Write("Startup", "Another QuickZoom instance is already running. Exiting duplicate launch.");
+                return;
+            }
+
+            acquiredMutex = true;
         }
 
         EnablePerMonitorDpiAwareness();
@@ -61,10 +72,7 @@ internal static class Program
         AppDomain.CurrentDomain.UnhandledException += (_, e) => LogFatalException("AppDomain", e.ExceptionObject as Exception);
         ErrorLog.Write("Startup", $"Launching {AppInfo.DisplayVersion} from {AppContext.BaseDirectory}");
 
-        string? exePath = GetExecutablePath();
         bool isAdmin = IsRunningAsAdministrator();
-        bool isElevatedLaunch = HasArg(args, ElevatedFlag);
-        bool shouldInstallStartupTask = HasArg(args, StartupTaskInstallFlag);
         bool isManagedInstall = InstalledAppService.IsManagedInstallPath(exePath);
         bool needsSecureInstallMigration = InstalledAppService.NeedsSecureInstallMigration(exePath);
 
@@ -106,6 +114,25 @@ internal static class Program
                         15);
                 }
             }
+
+            shouldInstallStartupTask = false;
+            isElevatedLaunch = true;
+
+            if (!PathsEqual(exePath, installedExePath) && TryLaunchInstalledCopy(installedExePath, ElevatedFlag))
+            {
+                return;
+            }
+
+            if (!acquiredMutex)
+            {
+                if (!TryAcquireSingleInstanceMutex())
+                {
+                    ErrorLog.Write("Startup", "The elevated startup-service helper finished setup, but another QuickZoom instance was already active. Exiting helper process.");
+                    return;
+                }
+
+                acquiredMutex = true;
+            }
         }
 
         if (isAdmin && isManagedInstall && needsSecureInstallMigration && !shouldInstallStartupTask)
@@ -118,6 +145,11 @@ internal static class Program
             {
                 ErrorLog.Write("StartupMigration", "Could not migrate the legacy startup install to the secured install path. " + (migrationError ?? string.Empty));
             }
+        }
+
+        if (ShouldYieldToNewerInstance(exePath))
+        {
+            return;
         }
 
         if (!isAdmin && !isElevatedLaunch)
@@ -499,6 +531,195 @@ internal static class Program
     private static string ToPowerShellSingleQuoted(string value)
     {
         return "'" + value.Replace("'", "''") + "'";
+    }
+
+    private static bool TryLaunchInstalledCopy(string installedExePath, params string[] extraFlags)
+    {
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = installedExePath,
+                UseShellExecute = false,
+                Arguments = BuildArguments(Array.Empty<string>(), extraFlags)
+            };
+
+            using Process? process = Process.Start(startInfo);
+            bool success = process != null;
+            if (!success)
+            {
+                ErrorLog.Write("Startup", "Could not launch the installed QuickZoom copy after startup-service setup.");
+            }
+
+            return success;
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("Startup", ex);
+            return false;
+        }
+    }
+
+    private static bool ShouldYieldToNewerInstance(string? exePath)
+    {
+        if (string.IsNullOrWhiteSpace(exePath))
+        {
+            return false;
+        }
+
+        string currentExePath = Path.GetFullPath(exePath);
+        string? currentInstalledExePath = InstalledAppService.GetCurrentInstalledExecutablePath();
+        bool currentIsInstalledPreferred = InstalledAppService.IsCurrentInstalledExecutablePath(currentExePath);
+        DateTime currentWriteTimeUtc = TryGetExecutableWriteTimeUtc(currentExePath);
+        Process currentProcess = Process.GetCurrentProcess();
+
+        foreach (Process otherProcess in Process.GetProcessesByName(currentProcess.ProcessName))
+        {
+            using (otherProcess)
+            {
+                if (otherProcess.Id == currentProcess.Id || otherProcess.SessionId != currentProcess.SessionId)
+                {
+                    continue;
+                }
+
+                string? otherExePath = TryGetProcessExecutablePath(otherProcess);
+                if (string.IsNullOrWhiteSpace(otherExePath))
+                {
+                    continue;
+                }
+
+                bool otherIsInstalledPreferred = InstalledAppService.IsCurrentInstalledExecutablePath(otherExePath);
+                InstancePreference preference = CompareInstancePreference(
+                    currentExePath,
+                    currentWriteTimeUtc,
+                    currentIsInstalledPreferred,
+                    currentProcess,
+                    otherExePath,
+                    otherIsInstalledPreferred,
+                    otherProcess);
+
+                if (preference == InstancePreference.OtherWins)
+                {
+                    ErrorLog.Write("Startup", "Yielding to a newer or preferred QuickZoom instance at " + otherExePath);
+                    return true;
+                }
+
+                if (preference == InstancePreference.CurrentWins)
+                {
+                    TryTerminateOlderQuickZoom(otherProcess, otherExePath, currentInstalledExePath);
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private enum InstancePreference
+    {
+        Undetermined,
+        CurrentWins,
+        OtherWins
+    }
+
+    private static InstancePreference CompareInstancePreference(
+        string currentExePath,
+        DateTime currentWriteTimeUtc,
+        bool currentIsInstalledPreferred,
+        Process currentProcess,
+        string otherExePath,
+        bool otherIsInstalledPreferred,
+        Process otherProcess)
+    {
+        if (currentIsInstalledPreferred != otherIsInstalledPreferred)
+        {
+            return currentIsInstalledPreferred ? InstancePreference.CurrentWins : InstancePreference.OtherWins;
+        }
+
+        DateTime otherWriteTimeUtc = TryGetExecutableWriteTimeUtc(otherExePath);
+        if (currentWriteTimeUtc != DateTime.MinValue &&
+            otherWriteTimeUtc != DateTime.MinValue &&
+            currentWriteTimeUtc != otherWriteTimeUtc)
+        {
+            return currentWriteTimeUtc > otherWriteTimeUtc
+                ? InstancePreference.CurrentWins
+                : InstancePreference.OtherWins;
+        }
+
+        if (PathsEqual(currentExePath, otherExePath))
+        {
+            return currentProcess.StartTime <= otherProcess.StartTime
+                ? InstancePreference.CurrentWins
+                : InstancePreference.OtherWins;
+        }
+
+        try
+        {
+            return currentProcess.StartTime <= otherProcess.StartTime
+                ? InstancePreference.CurrentWins
+                : InstancePreference.OtherWins;
+        }
+        catch
+        {
+            return InstancePreference.Undetermined;
+        }
+    }
+
+    private static void TryTerminateOlderQuickZoom(Process otherProcess, string otherExePath, string? currentInstalledExePath)
+    {
+        try
+        {
+            if (currentInstalledExePath != null && PathsEqual(otherExePath, currentInstalledExePath))
+            {
+                return;
+            }
+
+            ErrorLog.Write("Startup", "Attempting to stop an older QuickZoom instance at " + otherExePath);
+            otherProcess.Kill(entireProcessTree: false);
+            otherProcess.WaitForExit(2000);
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("Startup", "Could not stop older QuickZoom instance at " + otherExePath + ". " + ex.Message);
+        }
+    }
+
+    private static string? TryGetProcessExecutablePath(Process process)
+    {
+        try
+        {
+            return process.MainModule?.FileName is string path && !string.IsNullOrWhiteSpace(path)
+                ? Path.GetFullPath(path)
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static DateTime TryGetExecutableWriteTimeUtc(string exePath)
+    {
+        try
+        {
+            return File.GetLastWriteTimeUtc(exePath);
+        }
+        catch
+        {
+            return DateTime.MinValue;
+        }
+    }
+
+    private static bool PathsEqual(string? left, string? right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+        {
+            return false;
+        }
+
+        return string.Equals(
+            Path.GetFullPath(left),
+            Path.GetFullPath(right),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static void LogFatalException(string source, Exception? exception)

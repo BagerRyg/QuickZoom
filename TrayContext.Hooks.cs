@@ -155,7 +155,12 @@ internal sealed partial class TrayContext
                 _enableKeyPressed = true;
             }
 
-            if (_invertEnabled && _invertTrigger == InvertTriggerKind.CustomKey && IsInvertKeyMatch(vk))
+            bool invertKeyPressed = _invertEnabled &&
+                                    !IsEnableKeyMatch(_enableKey, vk) &&
+                                    IsInvertKeyMatch(vk) &&
+                                    (_enableKeyPressed || _invertTrigger == InvertTriggerKind.CustomKey);
+
+            if (invertKeyPressed)
             {
                 if (!_invertKeyPressed)
                 {
@@ -194,7 +199,12 @@ internal sealed partial class TrayContext
                 _wheelDeltaRemainder = 0;
             }
 
-            if (_invertEnabled && _invertTrigger == InvertTriggerKind.CustomKey && IsInvertKeyMatch(vk))
+            bool invertKeyReleased = _invertEnabled &&
+                                     !IsEnableKeyMatch(_enableKey, vk) &&
+                                     IsInvertKeyMatch(vk) &&
+                                     (_enableKeyPressed || _invertTrigger == InvertTriggerKind.CustomKey);
+
+            if (invertKeyReleased)
             {
                 _invertKeyPressed = false;
                 return (IntPtr)1;

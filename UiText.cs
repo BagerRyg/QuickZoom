@@ -29,7 +29,7 @@ internal static class UiText
         ["Tray.ResetCursor"] = "Reset Cursor",
         ["Tray.About"] = "About",
         ["Tray.Exit"] = "Exit",
-        ["Tray.ExitConfirm"] = "Confirm Exit",
+        ["Tray.ExitConfirm"] = "Are you sure?",
         ["Tray.StartupConfigured"] = "Startup Service: Configured",
         ["Tray.StartupMissing"] = "Startup Service: Not configured",
         ["Tray.StartupBroken"] = "Startup Service: Needs repair",
@@ -170,7 +170,7 @@ internal static class UiText
         ["Tray.ResetCursor"] = "Nulstil markor",
         ["Tray.About"] = "Om",
         ["Tray.Exit"] = "Afslut",
-        ["Tray.ExitConfirm"] = "Bekraeft afslutning",
+        ["Tray.ExitConfirm"] = "Er du sikker?",
         ["Tray.StartupConfigured"] = "Startservice: Konfigureret",
         ["Tray.StartupMissing"] = "Startservice: Ikke konfigureret",
         ["Tray.StartupBroken"] = "Startservice: Kraever reparation",
@@ -296,7 +296,12 @@ internal static class UiText
 
     internal static UiLanguage GetDefaultLanguage()
     {
-        string name = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+        string name = CultureInfo.InstalledUICulture.TwoLetterISOLanguageName;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            name = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+        }
+
         return string.Equals(name, "da", StringComparison.OrdinalIgnoreCase)
             ? UiLanguage.Danish
             : UiLanguage.English;
