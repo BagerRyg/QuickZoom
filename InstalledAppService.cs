@@ -19,6 +19,7 @@ internal static class InstalledAppService
     private static readonly string CurrentInstallPointerPath = Path.Combine(InstallRoot, "current.txt");
     private static readonly string LegacyVersionsRoot = Path.Combine(StateRoot, "versions");
     private static readonly string LegacyCurrentInstallPointerPath = Path.Combine(StateRoot, "current.txt");
+    private const string LocalesFolderName = "locales";
 
     private static readonly string[] OptionalPayloadFileNames =
     [
@@ -151,15 +152,22 @@ internal static class InstalledAppService
             Directory.CreateDirectory(targetDirectory);
             HardenInstallDirectory(targetDirectory);
 
-            foreach (string sourceFile in EnumeratePayloadFiles(sourceExePath, sourceDirectory))
+            foreach ((string sourcePath, string relativePath) in EnumeratePayloadFiles(sourceExePath, sourceDirectory))
             {
-                string destinationFile = Path.Combine(targetDirectory, Path.GetFileName(sourceFile));
-                if (string.Equals(Path.GetFullPath(sourceFile), Path.GetFullPath(destinationFile), StringComparison.OrdinalIgnoreCase))
+                string destinationFile = Path.Combine(targetDirectory, NormalizeRelativePath(relativePath));
+                string? destinationDirectory = Path.GetDirectoryName(destinationFile);
+                if (!string.IsNullOrWhiteSpace(destinationDirectory))
+                {
+                    Directory.CreateDirectory(destinationDirectory);
+                    HardenInstallDirectory(destinationDirectory);
+                }
+
+                if (string.Equals(Path.GetFullPath(sourcePath), Path.GetFullPath(destinationFile), StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
 
-                File.Copy(sourceFile, destinationFile, true);
+                File.Copy(sourcePath, destinationFile, true);
             }
 
             installedExePath = Path.Combine(targetDirectory, Path.GetFileName(sourceExePath));
@@ -214,16 +222,16 @@ internal static class InstalledAppService
         return newestExe;
     }
 
-    private static IEnumerable<string> EnumeratePayloadFiles(string sourceExePath, string sourceDirectory)
+    private static IEnumerable<(string SourcePath, string RelativePath)> EnumeratePayloadFiles(string sourceExePath, string sourceDirectory)
     {
-        yield return sourceExePath;
+        yield return (sourceExePath, Path.GetFileName(sourceExePath));
 
         foreach (string fileName in OptionalPayloadFileNames)
         {
             string candidate = Path.Combine(sourceDirectory, fileName);
             if (File.Exists(candidate) && !string.Equals(candidate, sourceExePath, StringComparison.OrdinalIgnoreCase))
             {
-                yield return candidate;
+                yield return (candidate, fileName);
             }
         }
 
@@ -233,8 +241,19 @@ internal static class InstalledAppService
             string candidate = Path.Combine(sourceDirectory, baseName + extension);
             if (File.Exists(candidate))
             {
-                yield return candidate;
+                yield return (candidate, Path.GetFileName(candidate));
             }
+        }
+
+        string localesDirectory = Path.Combine(sourceDirectory, LocalesFolderName);
+        if (!Directory.Exists(localesDirectory))
+        {
+            yield break;
+        }
+
+        foreach (string localeFile in Directory.GetFiles(localesDirectory, "*.json", SearchOption.TopDirectoryOnly))
+        {
+            yield return (localeFile, Path.Combine(LocalesFolderName, Path.GetFileName(localeFile)));
         }
     }
 
@@ -245,14 +264,13 @@ internal static class InstalledAppService
             ?? throw new InvalidOperationException("Could not determine the source directory.");
 
         using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        foreach (string file in EnumeratePayloadFiles(exePath, sourceDirectory))
+        foreach ((string sourcePath, string relativePath) in EnumeratePayloadFiles(exePath, sourceDirectory))
         {
-            string fullPath = Path.GetFullPath(file);
-            byte[] nameBytes = Encoding.UTF8.GetBytes(Path.GetFileName(fullPath));
+            byte[] nameBytes = Encoding.UTF8.GetBytes(NormalizeRelativePath(relativePath));
             hash.AppendData(nameBytes);
             hash.AppendData([0]);
 
-            using FileStream stream = File.OpenRead(fullPath);
+            using FileStream stream = File.OpenRead(sourcePath);
             byte[] buffer = new byte[81920];
             int bytesRead;
             while ((bytesRead = stream.Read(buffer, 0, buffer.Length)) > 0)
@@ -263,6 +281,11 @@ internal static class InstalledAppService
 
         byte[] digest = hash.GetHashAndReset();
         return Convert.ToHexString(digest.AsSpan(0, 8));
+    }
+
+    private static string NormalizeRelativePath(string relativePath)
+    {
+        return relativePath.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
     }
 
     private static void HardenInstallDirectory(string path)

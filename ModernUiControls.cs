@@ -1805,11 +1805,12 @@ internal sealed class SettingsSection : Panel
 
     public SettingsSection(ThemePalette palette, string title, string description)
     {
+        bool hasTitle = !string.IsNullOrWhiteSpace(title);
         bool hasDescription = !string.IsNullOrWhiteSpace(description);
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
         Dock = DockStyle.Top;
-        Margin = new Padding(0, 0, 0, 28);
+        Margin = new Padding(0, 0, 0, 22);
         Padding = new Padding(0);
         BackColor = Color.Transparent;
 
@@ -1819,17 +1820,11 @@ internal sealed class SettingsSection : Panel
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 1,
-            RowCount = hasDescription ? 3 : 2,
+            RowCount = 1,
             BackColor = Color.Transparent,
             Margin = new Padding(0),
             Padding = new Padding(0)
         };
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        if (hasDescription)
-        {
-            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        }
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         _titleLabel = new Label
         {
@@ -1864,23 +1859,28 @@ internal sealed class SettingsSection : Panel
         };
         _rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-        layout.Controls.Add(_titleLabel, 0, 0);
+        int rowIndex = 0;
+        if (hasTitle)
+        {
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.Controls.Add(_titleLabel, 0, rowIndex++);
+        }
+
         if (hasDescription)
         {
-            layout.Controls.Add(_descriptionLabel, 0, 1);
-            layout.Controls.Add(_rows, 0, 2);
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.Controls.Add(_descriptionLabel, 0, rowIndex++);
         }
-        else
-        {
-            layout.Controls.Add(_rows, 0, 1);
-        }
+
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.Controls.Add(_rows, 0, rowIndex);
         Controls.Add(layout);
     }
 
     public void AddRow(Control row)
     {
         row.Dock = DockStyle.Top;
-        row.Margin = new Padding(0, 0, 0, 12);
+        row.Margin = new Padding(0, 0, 0, 10);
         row.MinimumSize = new Size(1120, row.MinimumSize.Height);
         row.Width = 1120;
         _rows.RowCount++;
@@ -1898,6 +1898,7 @@ internal sealed class SettingsPageView : Panel
 
     public SettingsPageView(ThemePalette palette, string title, string description)
     {
+        bool hasTitle = !string.IsNullOrWhiteSpace(title);
         bool hasDescription = !string.IsNullOrWhiteSpace(description);
         Dock = DockStyle.Top;
         AutoSize = true;
@@ -1912,7 +1913,7 @@ internal sealed class SettingsPageView : Panel
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 1,
-            RowCount = hasDescription ? 3 : 2,
+            RowCount = 1,
             Margin = new Padding(0),
             Padding = new Padding(0),
             BackColor = Color.Transparent
@@ -1950,16 +1951,21 @@ internal sealed class SettingsPageView : Panel
         };
         _sectionHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-        layout.Controls.Add(_titleLabel, 0, 0);
+        int rowIndex = 0;
+        if (hasTitle)
+        {
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.Controls.Add(_titleLabel, 0, rowIndex++);
+        }
+
         if (hasDescription)
         {
-            layout.Controls.Add(_descriptionLabel, 0, 1);
-            layout.Controls.Add(_sectionHost, 0, 2);
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.Controls.Add(_descriptionLabel, 0, rowIndex++);
         }
-        else
-        {
-            layout.Controls.Add(_sectionHost, 0, 1);
-        }
+
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.Controls.Add(_sectionHost, 0, rowIndex);
         Controls.Add(layout);
     }
 

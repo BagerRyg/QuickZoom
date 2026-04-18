@@ -10,6 +10,7 @@ $startupTaskPriority = 3
 $installRoot = Join-Path $env:LOCALAPPDATA "QuickZoom\\managed-install"
 $versionsRoot = Join-Path $installRoot "versions"
 $currentInstallPointerPath = Join-Path $installRoot "current.txt"
+$localesFolderName = "locales"
 
 function Protect-InstallLocation {
     param(
@@ -103,8 +104,11 @@ function Install-AppPayload {
     New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
     Protect-InstallLocation -Path $targetDir -Directory
 
-    $files = [System.Collections.Generic.List[string]]::new()
-    $files.Add($sourceExe)
+    $files = [System.Collections.Generic.List[object]]::new()
+    $files.Add([pscustomobject]@{
+        SourcePath = $sourceExe
+        RelativePath = [System.IO.Path]::GetFileName($sourceExe)
+    })
 
     foreach ($name in @(
         "D3DCompiler_47_cor3.dll",
@@ -116,7 +120,10 @@ function Install-AppPayload {
     )) {
         $candidate = Join-Path $sourceDir $name
         if (Test-Path -LiteralPath $candidate) {
-            $files.Add((Resolve-Path -LiteralPath $candidate).Path)
+            $files.Add([pscustomobject]@{
+                SourcePath = (Resolve-Path -LiteralPath $candidate).Path
+                RelativePath = $name
+            })
         }
     }
 
@@ -124,17 +131,37 @@ function Install-AppPayload {
     foreach ($suffix in @(".json", ".runtimeconfig.json", ".deps.json")) {
         $candidate = Join-Path $sourceDir ($baseName + $suffix)
         if (Test-Path -LiteralPath $candidate) {
-            $files.Add((Resolve-Path -LiteralPath $candidate).Path)
+            $files.Add([pscustomobject]@{
+                SourcePath = (Resolve-Path -LiteralPath $candidate).Path
+                RelativePath = [System.IO.Path]::GetFileName($candidate)
+            })
         }
     }
 
-    foreach ($file in $files | Select-Object -Unique) {
-        $destination = Join-Path $targetDir (Split-Path -Leaf $file)
-        if ([string]::Equals($file, $destination, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $localesDir = Join-Path $sourceDir $localesFolderName
+    if (Test-Path -LiteralPath $localesDir) {
+        foreach ($localeFile in Get-ChildItem -LiteralPath $localesDir -File -Filter '*.json') {
+            $files.Add([pscustomobject]@{
+                SourcePath = $localeFile.FullName
+                RelativePath = (Join-Path $localesFolderName $localeFile.Name)
+            })
+        }
+    }
+
+    foreach ($file in ($files | Group-Object RelativePath | ForEach-Object { $_.Group[0] })) {
+        $relativePath = $file.RelativePath -replace '/', '\'
+        $destination = Join-Path $targetDir $relativePath
+        $destinationDir = Split-Path -Parent $destination
+        if (-not [string]::IsNullOrWhiteSpace($destinationDir)) {
+            New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
+            Protect-InstallLocation -Path $destinationDir -Directory
+        }
+
+        if ([string]::Equals($file.SourcePath, $destination, [System.StringComparison]::OrdinalIgnoreCase)) {
             continue
         }
 
-        Copy-Item -LiteralPath $file -Destination $destination -Force
+        Copy-Item -LiteralPath $file.SourcePath -Destination $destination -Force
     }
 
     $installedExe = Join-Path $targetDir (Split-Path -Leaf $sourceExe)

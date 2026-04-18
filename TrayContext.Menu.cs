@@ -637,13 +637,20 @@ internal sealed partial class TrayContext
             return;
         }
 
-        EnsureSystemCursorHidden();
         long remainingMs = _cursorSpotlightVisibleUntilTick - now;
         double progress = remainingMs > spotlightShrinkDurationMs
             ? 0d
             : 1d - (remainingMs / (double)spotlightShrinkDurationMs);
         _cursorSpotlightOverlay ??= new CursorSpotlightOverlay();
-        _cursorSpotlightOverlay.UpdateSpotlight(currentPoint, progress);
+        bool overlayVisible = _cursorSpotlightOverlay.UpdateSpotlight(currentPoint, progress);
+        if (overlayVisible)
+        {
+            EnsureSystemCursorHidden();
+        }
+        else
+        {
+            RestoreSystemCursorVisibility();
+        }
     }
 
     private void AddCursorSample(long now, Point point)

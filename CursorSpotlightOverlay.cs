@@ -13,6 +13,7 @@ internal sealed class CursorSpotlightOverlay : Form
     private const int WS_EX_TOOLWINDOW = 0x00000080;
     private const int WS_EX_NOACTIVATE = 0x08000000;
     private const int WS_EX_TOPMOST = 0x00000008;
+    private static readonly IntPtr HWND_TOPMOST = new(-1);
     private const int WM_NCHITTEST = 0x0084;
     private const int WM_MOUSEACTIVATE = 0x0021;
     private const int MA_NOACTIVATE = 0x0003;
@@ -21,9 +22,23 @@ internal sealed class CursorSpotlightOverlay : Form
     private const int DI_NORMAL = 0x0003;
     private const int SM_CXCURSOR = 13;
     private const int SM_CYCURSOR = 14;
+    private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_NOACTIVATE = 0x0010;
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool GetCursorInfo(ref CURSORINFO pci);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(
+        IntPtr hWnd,
+        IntPtr hWndInsertAfter,
+        int X,
+        int Y,
+        int cx,
+        int cy,
+        uint uFlags);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool DrawIconEx(
@@ -104,12 +119,12 @@ internal sealed class CursorSpotlightOverlay : Form
         }
     }
 
-    public void UpdateSpotlight(Point cursorPoint, double progress)
+    public bool UpdateSpotlight(Point cursorPoint, double progress)
     {
         if (!TryPrepareCursor(cursorPoint, progress))
         {
             HideSpotlight();
-            return;
+            return false;
         }
 
         if (!Visible)
@@ -117,7 +132,20 @@ internal sealed class CursorSpotlightOverlay : Form
             Show();
         }
 
+        if (Handle != IntPtr.Zero)
+        {
+            _ = SetWindowPos(
+                Handle,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+
         Invalidate();
+        return true;
     }
 
     public void HideSpotlight()

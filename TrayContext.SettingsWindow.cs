@@ -49,6 +49,12 @@ internal sealed partial class TrayContext
             ForeColor = palette.Text,
             KeyPreview = true
         };
+        _iconRef ??= LoadEmbeddedIconBySuffix("magnifier_dark.ico");
+        if (_iconRef != null)
+        {
+            form.Icon = (Icon)_iconRef.Clone();
+        }
+
         WindowChrome.TrySetDarkTitleBar(form, _useDarkTheme);
         _settingsWindow = form;
 
@@ -70,8 +76,8 @@ internal sealed partial class TrayContext
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 2,
-            Margin = new Padding(0, 0, 0, 18),
+            RowCount = 1,
+            Margin = new Padding(0, 0, 0, 14),
             Padding = new Padding(0),
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
@@ -86,18 +92,7 @@ internal sealed partial class TrayContext
             ForeColor = palette.Text,
             BackColor = Color.Transparent
         };
-        var subtitle = new Label
-        {
-            Text = L("Settings.Subtitle"),
-            AutoSize = true,
-            MaximumSize = new Size(860, 0),
-            Font = new Font("Segoe UI", 10f, FontStyle.Regular),
-            Margin = new Padding(0, 8, 0, 0),
-            ForeColor = palette.SecondaryText,
-            BackColor = Color.Transparent
-        };
         header.Controls.Add(title, 0, 0);
-        header.Controls.Add(subtitle, 0, 1);
 
         var tabBar = new ModernTabBar(palette)
         {
@@ -118,7 +113,7 @@ internal sealed partial class TrayContext
         {
             Dock = DockStyle.Fill,
             Margin = new Padding(0),
-            Padding = new Padding(0, 0, 8, 8),
+            Padding = new Padding(0, 0, 0, 0),
             BackColor = palette.MenuBackground,
             AutoScroll = true
         };
@@ -172,8 +167,21 @@ internal sealed partial class TrayContext
                 }
             }
 
+            pageHost.AutoScroll = false;
             pageHost.AutoScrollPosition = new Point(0, 0);
             pageHost.PerformLayout();
+            if (pages.TryGetValue(page, out SettingsPageView? activePage))
+            {
+                Size preferredSize = activePage.GetPreferredSize(new Size(pageHost.ClientSize.Width, 0));
+                int viewportHeight = Math.Max(1, pageHost.ClientSize.Height);
+                bool needsVerticalScroll = preferredSize.Height > viewportHeight;
+                pageHost.AutoScroll = needsVerticalScroll;
+                pageHost.VerticalScroll.Visible = needsVerticalScroll;
+                pageHost.HorizontalScroll.Visible = false;
+                pageHost.HorizontalScroll.Enabled = false;
+                pageHost.AutoScrollMinSize = needsVerticalScroll ? new Size(0, preferredSize.Height) : Size.Empty;
+            }
+
             pageHost.ResumeLayout(performLayout: true);
             tabBar.SelectTab(page.ToString(), notify: false);
         }
@@ -218,15 +226,15 @@ internal sealed partial class TrayContext
     {
         Rectangle area = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1400, 960);
         int width = Math.Min(1280, Math.Max(1100, area.Width - 120));
-        int height = Math.Min(980, Math.Max(880, area.Height - 100));
+        int height = Math.Min(1020, Math.Max(920, area.Height - 80));
         return new Size(width, height);
     }
 
     private SettingsPageView BuildGeneralSettingsPage()
     {
         ThemePalette palette = CurrentTheme;
-        var page = new SettingsPageView(palette, L("Settings.GeneralTitle"), L("Settings.SectionHintGeneral"));
-        var section = new SettingsSection(palette, L("Settings.GeneralSection"), L("Settings.GeneralSectionHint"));
+        var page = new SettingsPageView(palette, L("Settings.GeneralTitle"), string.Empty);
+        var section = new SettingsSection(palette, L("Settings.GeneralSection"), string.Empty);
 
         section.AddRow(CreateToggleRow(L("Settings.SmoothZoom"), L("Settings.SmoothZoomHelp"), _smoothZoom, value =>
         {
@@ -271,8 +279,8 @@ internal sealed partial class TrayContext
     private SettingsPageView BuildDisplaySettingsPage()
     {
         ThemePalette palette = CurrentTheme;
-        var page = new SettingsPageView(palette, L("Settings.DisplayTitle"), L("Settings.SectionHintDisplay"));
-        var section = new SettingsSection(palette, L("Settings.DisplaySection"), L("Settings.DisplaySectionHint"));
+        var page = new SettingsPageView(palette, L("Settings.DisplayTitle"), string.Empty);
+        var section = new SettingsSection(palette, L("Settings.DisplaySection"), string.Empty);
 
         section.AddRow(CreateToggleRow(L("Settings.AutoSwitchMonitor"), L("Settings.AutoSwitchMonitorHelp"), _autoSwitchMonitor, value =>
         {
@@ -306,8 +314,8 @@ internal sealed partial class TrayContext
     private SettingsPageView BuildZoomSettingsPage()
     {
         ThemePalette palette = CurrentTheme;
-        var page = new SettingsPageView(palette, L("Settings.ZoomTitle"), L("Settings.SectionHintZoom"));
-        var section = new SettingsSection(palette, L("Settings.ZoomSection"), L("Settings.ZoomSectionHint"));
+        var page = new SettingsPageView(palette, L("Settings.ZoomTitle"), string.Empty);
+        var section = new SettingsSection(palette, L("Settings.ZoomSection"), string.Empty);
 
         section.AddRow(CreateSliderRow(L("Settings.ZoomStep"), L("Settings.ZoomStepHelp"), _stepPercent, 5, 100, 5, value => value + "%", value =>
         {
@@ -336,8 +344,8 @@ internal sealed partial class TrayContext
     private SettingsPageView BuildAppearanceSettingsPage()
     {
         ThemePalette palette = CurrentTheme;
-        var page = new SettingsPageView(palette, L("Settings.AppearanceTitle"), L("Settings.SectionHintAppearance"));
-        var themeSection = new SettingsSection(palette, L("Settings.AppearanceSection"), L("Settings.AppearanceSectionHint"));
+        var page = new SettingsPageView(palette, L("Settings.AppearanceTitle"), string.Empty);
+        var themeSection = new SettingsSection(palette, L("Settings.AppearanceSection"), string.Empty);
 
         themeSection.AddRow(CreateDropdownRow(
             L("Settings.ThemeMode"),
@@ -354,7 +362,7 @@ internal sealed partial class TrayContext
             },
             rightColumnWidth: 220));
 
-        var languageSection = new SettingsSection(palette, L("Settings.LanguageSection"), L("Settings.LanguageSectionHint"));
+        var languageSection = new SettingsSection(palette, L("Settings.LanguageSection"), string.Empty);
         languageSection.AddRow(CreateDropdownRow(L("Settings.Language"), L("Settings.LanguageHelp"), BuildLanguageItems(), UiText.GetLanguageDisplayName(_language, _language), value =>
         {
             _language = UiText.ParseLanguageDisplayName(_language, value);
@@ -378,8 +386,8 @@ internal sealed partial class TrayContext
     private SettingsPageView BuildInputSettingsPage()
     {
         ThemePalette palette = CurrentTheme;
-        var page = new SettingsPageView(palette, L("Settings.InputTitle"), L("Settings.SectionHintInput"));
-        var section = new SettingsSection(palette, L("Settings.InputSection"), L("Settings.InputSectionHint"));
+        var page = new SettingsPageView(palette, L("Settings.InputTitle"), string.Empty);
+        var section = new SettingsSection(palette, L("Settings.InputSection"), string.Empty);
 
         section.AddRow(CreateDropdownRow(
             L("Settings.EnableKey"),
