@@ -202,6 +202,19 @@ internal static class StartupTaskService
                 };
             }
 
+            string? currentInstalledExePath = InstalledAppService.GetCurrentInstalledExecutablePath();
+            if (!string.IsNullOrWhiteSpace(currentInstalledExePath) &&
+                !PathsEqual(executePath, currentInstalledExePath))
+            {
+                return new StartupTaskInfo
+                {
+                    Status = StartupTaskStatus.Broken,
+                    ExecutePath = executePath,
+                    Arguments = arguments,
+                    Details = "The startup task points to an older QuickZoom install instead of the current managed build."
+                };
+            }
+
             if (string.IsNullOrWhiteSpace(arguments) ||
                 arguments.IndexOf(ElevatedLaunchFlag, StringComparison.OrdinalIgnoreCase) < 0)
             {
@@ -236,7 +249,18 @@ internal static class StartupTaskService
     {
         return combined.IndexOf("cannot find", StringComparison.OrdinalIgnoreCase) >= 0 ||
                combined.IndexOf("cannot find the file", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               combined.IndexOf("cannot find the path", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               combined.IndexOf("the system cannot find the path specified", StringComparison.OrdinalIgnoreCase) >= 0 ||
                combined.IndexOf("kan ikke finde", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               combined.IndexOf("sti blev ikke fundet", StringComparison.OrdinalIgnoreCase) >= 0 ||
                combined.IndexOf("taskname", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        return string.Equals(
+            Path.GetFullPath(left),
+            Path.GetFullPath(right),
+            StringComparison.OrdinalIgnoreCase);
     }
 }

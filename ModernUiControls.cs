@@ -979,13 +979,27 @@ internal sealed class ModernButton : Button
         TextAlign = ContentAlignment.MiddleCenter;
     }
 
-    public void ApplyTheme(ThemePalette palette, bool emphasis = false)
+    public void ApplyTheme(ThemePalette palette, bool emphasis = false, bool destructive = false, bool destructiveHoverEnabled = false)
     {
-        BackColor = emphasis ? palette.Accent : palette.ButtonBackground;
-        ForeColor = emphasis ? Color.FromArgb(16, 22, 18) : palette.Text;
-        FlatAppearance.BorderColor = emphasis ? palette.Accent : palette.Border;
-        FlatAppearance.MouseOverBackColor = emphasis ? palette.AccentHover : palette.ButtonHover;
-        FlatAppearance.MouseDownBackColor = emphasis ? palette.AccentPressed : palette.ButtonPressed;
+        Color destructiveBack = Color.FromArgb(74, 24, 31);
+        Color destructiveHoverColor = Color.FromArgb(96, 28, 36);
+        Color destructivePressed = Color.FromArgb(118, 32, 42);
+        Color destructiveBorder = Color.FromArgb(132, 58, 66);
+        bool useDestructiveBorder = destructive || destructiveHoverEnabled;
+
+        BackColor = destructive
+            ? destructiveBack
+            : emphasis ? palette.Accent : palette.ButtonBackground;
+        ForeColor = emphasis && !destructive ? Color.FromArgb(16, 22, 18) : palette.Text;
+        FlatAppearance.BorderColor = useDestructiveBorder
+            ? destructiveBorder
+            : emphasis ? palette.Accent : palette.Border;
+        FlatAppearance.MouseOverBackColor = destructive || destructiveHoverEnabled
+            ? destructiveHoverColor
+            : emphasis ? palette.AccentHover : palette.ButtonHover;
+        FlatAppearance.MouseDownBackColor = destructive || destructiveHoverEnabled
+            ? destructivePressed
+            : emphasis ? palette.AccentPressed : palette.ButtonPressed;
     }
 }
 
@@ -1111,6 +1125,7 @@ internal sealed class ModernDropdown : Control, ISurfaceBackgroundProvider
     private bool _hovered;
     private bool _pressed;
     private ContextMenuStrip? _activeMenu;
+    private int _menuMinimumWidth;
 
     public ModernDropdown(ThemePalette palette)
     {
@@ -1154,6 +1169,12 @@ internal sealed class ModernDropdown : Control, ISurfaceBackgroundProvider
     }
 
     public string? SelectedItem => _selectedIndex >= 0 && _selectedIndex < _items.Count ? _items[_selectedIndex] : null;
+
+    public int MenuMinimumWidth
+    {
+        get => _menuMinimumWidth;
+        set => _menuMinimumWidth = Math.Max(0, value);
+    }
 
     public void ApplyTheme(ThemePalette palette)
     {
@@ -1307,19 +1328,32 @@ internal sealed class ModernDropdown : Control, ISurfaceBackgroundProvider
         {
             ShowImageMargin = false,
             ShowCheckMargin = false,
-            AutoSize = true,
+            AutoSize = false,
             BackColor = _palette.MenuBackground,
             ForeColor = _palette.Text,
             Font = Font,
             Renderer = new DarkMenuRenderer(_palette)
         };
-        menu.MinimumSize = new Size(Math.Max(Width, MinimumSize.Width), 0);
+        int desiredWidth = Math.Max(Math.Max(Width, MinimumSize.Width), _menuMinimumWidth);
+        foreach (string itemText in _items)
+        {
+            int textWidth = TextRenderer.MeasureText(itemText, Font).Width;
+            desiredWidth = Math.Max(desiredWidth, textWidth + 28);
+        }
+
+        int itemHeight = Math.Max(28, Font.Height + 12);
+        menu.MinimumSize = new Size(desiredWidth, 0);
+        menu.Size = new Size(desiredWidth, Math.Max(1, _items.Count * itemHeight + 4));
 
         for (int i = 0; i < _items.Count; i++)
         {
             string itemText = _items[i];
             int itemIndex = i;
-            var item = new ToolStripMenuItem(itemText);
+            var item = new ToolStripMenuItem(itemText)
+            {
+                AutoSize = false,
+                Size = new Size(desiredWidth - 2, itemHeight)
+            };
             item.Click += (_, _) => SelectedIndex = itemIndex;
             menu.Items.Add(item);
         }
@@ -1412,42 +1446,6 @@ internal sealed class DarkMenuColorTable : ProfessionalColorTable
     public override Color ImageMarginGradientBegin => _palette.MenuBackground;
     public override Color ImageMarginGradientMiddle => _palette.MenuBackground;
     public override Color ImageMarginGradientEnd => _palette.MenuBackground;
-}
-
-internal sealed class ModernNumberInput : NumericUpDown
-{
-    private ThemePalette _palette;
-
-    public ModernNumberInput(ThemePalette palette)
-    {
-        _palette = palette;
-        BorderStyle = BorderStyle.FixedSingle;
-        Font = new Font("Segoe UI", 10f, FontStyle.Regular);
-        Width = 120;
-        Height = 36;
-        ApplyTheme(palette);
-    }
-
-    public void ApplyTheme(ThemePalette palette)
-    {
-        _palette = palette;
-        BackColor = palette.ButtonBackground;
-        ForeColor = palette.Text;
-        BorderStyle = BorderStyle.FixedSingle;
-
-        try
-        {
-            foreach (Control child in Controls)
-            {
-                child.BackColor = palette.ButtonBackground;
-                child.ForeColor = palette.Text;
-            }
-        }
-        catch
-        {
-            // Best effort.
-        }
-    }
 }
 
 internal sealed class ModernSlider : Control
@@ -2042,11 +2040,16 @@ internal sealed class TrayPopupWindow : Form
 
         Deactivate += (_, _) =>
         {
+            if (IgnoreDeactivateClose)
+            {
+                return;
+            }
+
             if (!IsDisposed && Visible)
             {
                 BeginInvoke((MethodInvoker)(() =>
                 {
-                    if (!IsDisposed && Visible && !ContainsFocus)
+                    if (!IsDisposed && Visible && !ContainsFocus && !IgnoreDeactivateClose)
                     {
                         Close();
                     }
@@ -2056,6 +2059,7 @@ internal sealed class TrayPopupWindow : Form
     }
 
     public FlowLayoutPanel ContentHost { get; }
+    public bool IgnoreDeactivateClose { get; set; }
 
     protected override CreateParams CreateParams
     {

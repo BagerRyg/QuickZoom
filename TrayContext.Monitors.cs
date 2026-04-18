@@ -140,9 +140,7 @@ internal sealed partial class TrayContext
         int index = 1;
         foreach (Screen screen in screens)
         {
-            string label = screen.Primary
-                ? string.Format(L("Tray.PrimaryDisplay"), screen.DeviceName)
-                : string.Format(L("Tray.DisplayN"), index, screen.DeviceName);
+            string label = GetFriendlyScreenLabel(screen, index);
 
             bool selected = !_useCursorMonitorSelection && _selectedMonitorDeviceNames.Contains(screen.DeviceName);
             var screenRow = new TrayMenuRow(palette, label, selected ? L("Tray.DisplayIncluded") : string.Empty)
@@ -204,6 +202,35 @@ internal sealed partial class TrayContext
             .OrderByDescending(screen => screen.Primary)
             .ThenBy(screen => screen.DeviceName, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private string GetFriendlyScreenLabel(Screen screen, int fallbackIndex)
+    {
+        int displayNumber = TryGetDisplayNumber(screen.DeviceName) ?? fallbackIndex;
+        return displayNumber switch
+        {
+            1 => L("Tray.PrimaryDisplay"),
+            2 => L("Tray.SecondaryDisplay"),
+            _ => L("Tray.MonitorNumber", displayNumber)
+        };
+    }
+
+    private static int? TryGetDisplayNumber(string? deviceName)
+    {
+        if (string.IsNullOrWhiteSpace(deviceName))
+        {
+            return null;
+        }
+
+        const string marker = "DISPLAY";
+        int markerIndex = deviceName.LastIndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (markerIndex < 0)
+        {
+            return null;
+        }
+
+        string numericPart = deviceName[(markerIndex + marker.Length)..];
+        return int.TryParse(numericPart, out int value) ? value : null;
     }
 
     private List<Screen> GetSelectedScreens()

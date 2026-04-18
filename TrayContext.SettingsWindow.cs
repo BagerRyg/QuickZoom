@@ -135,7 +135,15 @@ internal sealed partial class TrayContext
             DialogResult = DialogResult.OK
         };
         closeButton.ApplyTheme(palette, emphasis: false);
+        _resetDefaultsButton = new ModernButton
+        {
+            Text = L("Settings.ResetDefaults"),
+            MinimumSize = new Size(170, 38)
+        };
+        ApplyResetDefaultsButtonTheme();
+        _resetDefaultsButton.Click += (_, _) => HandleResetDefaultsRequested();
         footer.Controls.Add(closeButton);
+        footer.Controls.Add(_resetDefaultsButton);
 
         var pages = new Dictionary<SettingsPage, SettingsPageView>
         {
@@ -211,6 +219,15 @@ internal sealed partial class TrayContext
         };
         form.FormClosed += (_, _) =>
         {
+            if (_resetDefaultsConfirmTimer != null)
+            {
+                _resetDefaultsConfirmTimer.Stop();
+                _resetDefaultsConfirmTimer.Dispose();
+                _resetDefaultsConfirmTimer = null;
+            }
+
+            _resetDefaultsButton = null;
+            _pendingResetDefaultsConfirmation = false;
             _settingsWindow = null;
             _selectSettingsPageAction = null;
         };
@@ -360,7 +377,7 @@ internal sealed partial class TrayContext
                     SetThemeMode(nextMode);
                 }
             },
-            rightColumnWidth: 220));
+            rightColumnWidth: 260));
 
         var languageSection = new SettingsSection(palette, L("Settings.LanguageSection"), string.Empty);
         languageSection.AddRow(CreateDropdownRow(L("Settings.Language"), L("Settings.LanguageHelp"), BuildLanguageItems(), UiText.GetLanguageDisplayName(_language, _language), value =>
@@ -376,7 +393,7 @@ internal sealed partial class TrayContext
             {
                 RefreshSettingsWindow(SettingsPage.Appearance);
             }
-        }, rightColumnWidth: 220));
+        }, rightColumnWidth: 260));
 
         page.AddSection(themeSection);
         page.AddSection(languageSection);
@@ -511,18 +528,6 @@ internal sealed partial class TrayContext
         };
         toggle.Click += (_, _) => onChanged(toggle.IsOn);
         return new SettingsRow(CurrentTheme, title, description, toggle, rightColumnWidth);
-    }
-
-    private SettingsRow CreateNumericRow(string title, string description, int value, int min, int max, Action<int> onChanged, int rightColumnWidth = 180)
-    {
-        var numeric = new ModernNumberInput(CurrentTheme)
-        {
-            Minimum = min,
-            Maximum = max,
-            Value = value
-        };
-        numeric.ValueChanged += (_, _) => onChanged((int)numeric.Value);
-        return new SettingsRow(CurrentTheme, title, description, numeric, rightColumnWidth);
     }
 
     private SettingsRow CreateSliderRow(string title, string description, int value, int min, int max, int step, Func<int, string> valueFormatter, Action<int> onChanged, int rightColumnWidth = 420)
@@ -780,5 +785,57 @@ internal sealed partial class TrayContext
 
         _settingsWindow.Close();
         ShowSettingsWindow(page);
+    }
+
+    private void HandleResetDefaultsRequested()
+    {
+        if (!_pendingResetDefaultsConfirmation)
+        {
+            _pendingResetDefaultsConfirmation = true;
+            ApplyResetDefaultsButtonTheme();
+
+            _resetDefaultsConfirmTimer ??= new System.Windows.Forms.Timer { Interval = 5000 };
+            _resetDefaultsConfirmTimer.Stop();
+            _resetDefaultsConfirmTimer.Tick -= OnResetDefaultsConfirmTimeout;
+            _resetDefaultsConfirmTimer.Tick += OnResetDefaultsConfirmTimeout;
+            _resetDefaultsConfirmTimer.Start();
+            return;
+        }
+
+        CancelResetDefaultsConfirmation();
+        ResetSettingsToDefaults();
+    }
+
+    private void OnResetDefaultsConfirmTimeout(object? sender, EventArgs e)
+    {
+        CancelResetDefaultsConfirmation();
+    }
+
+    private void CancelResetDefaultsConfirmation()
+    {
+        _pendingResetDefaultsConfirmation = false;
+        if (_resetDefaultsConfirmTimer != null)
+        {
+            _resetDefaultsConfirmTimer.Stop();
+        }
+
+        ApplyResetDefaultsButtonTheme();
+    }
+
+    private void ApplyResetDefaultsButtonTheme()
+    {
+        if (_resetDefaultsButton == null)
+        {
+            return;
+        }
+
+        _resetDefaultsButton.Text = _pendingResetDefaultsConfirmation
+            ? L("Settings.ResetDefaultsConfirm")
+            : L("Settings.ResetDefaults");
+        _resetDefaultsButton.ApplyTheme(
+            CurrentTheme,
+            emphasis: false,
+            destructive: _pendingResetDefaultsConfirmation,
+            destructiveHoverEnabled: true);
     }
 }

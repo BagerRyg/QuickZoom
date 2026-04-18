@@ -123,7 +123,9 @@ internal static class Program
                 StartupDialogs.ShowWarning(
                     T("Common.AppName"),
                     T("Startup.SetupIncompleteHeading"),
-                    T("Startup.SetupCopyFailedBody"));
+                    string.IsNullOrWhiteSpace(installError)
+                        ? T("Startup.SetupCopyFailedBody")
+                        : installError);
             }
             else
             {
@@ -868,8 +870,10 @@ internal static class Program
                     continue;
                 }
 
-                DeleteScheduledTask(taskName);
-                ErrorLog.Write("StartupCleanup.Task", "Removed legacy scheduled task: " + taskName);
+                if (DeleteScheduledTask(taskName))
+                {
+                    ErrorLog.Write("StartupCleanup.Task", "Removed legacy scheduled task: " + taskName);
+                }
             }
             catch (Exception ex)
             {
@@ -943,7 +947,7 @@ internal static class Program
         return names;
     }
 
-    private static void DeleteScheduledTask(string taskName)
+    private static bool DeleteScheduledTask(string taskName)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -958,7 +962,7 @@ internal static class Program
         using Process? process = Process.Start(startInfo);
         if (process == null)
         {
-            return;
+            return false;
         }
 
         if (!process.WaitForExit(4000))
@@ -971,7 +975,20 @@ internal static class Program
             {
                 // Best effort.
             }
+
+            ErrorLog.Write("StartupCleanup.Task", "Timed out while deleting scheduled task '" + taskName + "'.");
+            return false;
         }
+
+        string output = process.StandardOutput.ReadToEnd().Trim();
+        string error = process.StandardError.ReadToEnd().Trim();
+        bool success = process.ExitCode == 0;
+        if (!success && !string.IsNullOrWhiteSpace(output + error))
+        {
+            ErrorLog.Write("StartupCleanup.Task", "Delete failed for '" + taskName + "'. StdOut: " + output + " StdErr: " + error);
+        }
+
+        return success;
     }
 
     private static bool LooksLikeQuickZoomStartupReference(string name, string? value)

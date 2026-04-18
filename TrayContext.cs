@@ -137,6 +137,9 @@ internal sealed partial class TrayContext : ApplicationContext
     private Form? _settingsWindow;
     private Action<SettingsPage>? _selectSettingsPageAction;
     private SettingsPage _currentSettingsPage = SettingsPage.General;
+    private ModernButton? _resetDefaultsButton;
+    private System.Windows.Forms.Timer? _resetDefaultsConfirmTimer;
+    private bool _pendingResetDefaultsConfirmation;
 
     // Refresh rate
     private int _fps = 120;
@@ -159,7 +162,6 @@ internal sealed partial class TrayContext : ApplicationContext
     private long _lastCursorSpotlightTriggerTick;
     private long _cursorSpotlightVisibleUntilTick;
     private bool _cursorSpotlightHidesSystemCursor;
-    private int _cursorHideAdjustments;
     private bool _cursorSpotlightOverridesSystemCursors;
 
     // Settings
@@ -194,7 +196,9 @@ internal sealed partial class TrayContext : ApplicationContext
             }
 
             _followTimer?.Stop();
+            _followTimer?.Dispose();
             _animTimer?.Stop();
+            _animTimer?.Dispose();
             _cursorSpotlightTimer?.Stop();
             _cursorSpotlightTimer?.Dispose();
             _startupTimer?.Stop();

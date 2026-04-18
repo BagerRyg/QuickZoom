@@ -89,6 +89,8 @@
   "Settings.OpenTrayButton": "Open Tray Panel",
   "Settings.RefreshRate": "Refresh rate",
   "Settings.RefreshRateHelp": "Higher values can feel smoother but use more resources.",
+  "Settings.ResetDefaults": "Reset to defaults",
+  "Settings.ResetDefaultsConfirm": "Reset all settings?",
   "Settings.SectionHintAppearance": "Theme and language.",
   "Settings.SectionHintDisplay": "Monitor behavior and display tools.",
   "Settings.SectionHintGeneral": "Core QuickZoom behavior.",
@@ -165,12 +167,13 @@
   "Tray.MonitorUnderCursor": "Monitor Under Cursor",
   "Tray.OpenAction": "Open",
   "Tray.OpenSettingsHint": "Open the full settings window.",
-  "Tray.PrimaryDisplay": "Primary ({0})",
+  "Tray.PrimaryDisplay": "Primary",
   "Tray.ResetCursor": "Reset Cursor",
   "Tray.ResetCursorHint": "Refresh the Windows cursor feel if it seems off.",
   "Tray.RunAction": "Run",
   "Tray.SectionMenu": "MENU",
   "Tray.SectionQuick": "QUICK CONTROLS",
+  "Tray.SecondaryDisplay": "Secondary",
   "Tray.Settings": "Settings",
   "Tray.StartupBroken": "Startup Service: Needs repair",
   "Tray.StartupConfigured": "Startup Service: Configured",
@@ -178,5 +181,6 @@
   "Tray.StartupUnknown": "Startup Service: Status unavailable",
   "Tray.ToggleFollow": "Follow Cursor",
   "Tray.ToggleInvert": "Inverted Colors",
-  "Tray.ToggleMagnify": "Enabled"
+  "Tray.ToggleMagnify": "Enabled",
+  "Tray.MonitorNumber": "Monitor {0}"
 }

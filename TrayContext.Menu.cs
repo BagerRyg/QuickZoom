@@ -600,6 +600,10 @@ internal sealed partial class TrayContext
         if (!GetCursorPos(out var pt))
         {
             RestoreSystemCursorVisibility();
+            if (_trayPopup != null && !_trayPopup.IsDisposed)
+            {
+                _trayPopup.IgnoreDeactivateClose = false;
+            }
             if (!isVisible)
             {
                 _cursorSpotlightOverlay?.HideSpotlight();
@@ -633,8 +637,17 @@ internal sealed partial class TrayContext
         if (!isVisible)
         {
             RestoreSystemCursorVisibility();
+            if (_trayPopup != null && !_trayPopup.IsDisposed)
+            {
+                _trayPopup.IgnoreDeactivateClose = false;
+            }
             _cursorSpotlightOverlay?.HideSpotlight();
             return;
+        }
+
+        if (_trayPopup != null && !_trayPopup.IsDisposed)
+        {
+            _trayPopup.IgnoreDeactivateClose = true;
         }
 
         long remainingMs = _cursorSpotlightVisibleUntilTick - now;
@@ -752,19 +765,8 @@ internal sealed partial class TrayContext
             return;
         }
 
-        _cursorHideAdjustments = 0;
-        while (ShowCursor(false) >= 0)
-        {
-            _cursorHideAdjustments++;
-            if (_cursorHideAdjustments > 32)
-            {
-                break;
-            }
-        }
-
-        _cursorHideAdjustments++;
-        _cursorSpotlightHidesSystemCursor = true;
         TryApplyTransparentSystemCursors();
+        _cursorSpotlightHidesSystemCursor = _cursorSpotlightOverridesSystemCursors;
     }
 
     private void RestoreSystemCursorVisibility()
@@ -775,13 +777,6 @@ internal sealed partial class TrayContext
         }
 
         RestoreSystemCursorScheme();
-
-        for (int i = 0; i < Math.Max(1, _cursorHideAdjustments); i++)
-        {
-            _ = ShowCursor(true);
-        }
-
-        _cursorHideAdjustments = 0;
         _cursorSpotlightHidesSystemCursor = false;
     }
 

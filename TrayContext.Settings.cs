@@ -32,6 +32,88 @@ internal sealed partial class TrayContext
         public List<string> SelectedMonitorDeviceNames { get; set; } = new();
     }
 
+    private static Settings CreateDefaultSettings()
+    {
+        return new Settings
+        {
+            ThemeMode = (int)ThemeMode.AutoSystem,
+            StepPercent = 25,
+            MaxPercent = 400,
+            MagnificationEnabled = true,
+            InvertEnabled = false,
+            FollowCursor = true,
+            EnableKey = (int)Keys.Menu,
+            Language = (int)UiText.GetDefaultLanguage(),
+            InvertColors = false,
+            InvertKey = (int)Keys.I,
+            InvertTrigger = (int)InvertTriggerKind.EnableKeyPlusMiddleClick,
+            SmoothZoom = true,
+            AutoDisableAt100 = true,
+            Fps = 120,
+            CenterCursor = false,
+            WiggleSpotlightEnabled = true,
+            AutoSwitchMonitor = true,
+            UseCursorMonitorSelection = false,
+            SelectedMonitorDeviceNames = new List<string>()
+        };
+    }
+
+    private void ApplySettingsModel(Settings s)
+    {
+        _stepPercent = Math.Clamp(s.StepPercent, 5, 100);
+        _maxPercent = Math.Clamp(s.MaxPercent, 200, 500);
+        _themeMode = Enum.IsDefined(typeof(ThemeMode), s.ThemeMode)
+            ? (ThemeMode)s.ThemeMode
+            : ThemeMode.AutoSystem;
+        _enabled = s.MagnificationEnabled;
+        _invertEnabled = s.InvertEnabled;
+        _followCursor = s.FollowCursor;
+        _autoSwitchMonitor = s.AutoSwitchMonitor;
+        _enableKey = (Keys)s.EnableKey;
+        _language = Enum.IsDefined(typeof(UiLanguage), s.Language)
+            ? (UiLanguage)s.Language
+            : UiText.GetDefaultLanguage();
+        _invertColors = s.InvertColors;
+        _invertKey = (Keys)s.InvertKey;
+        _invertTrigger = Enum.IsDefined(typeof(InvertTriggerKind), s.InvertTrigger)
+            ? (InvertTriggerKind)s.InvertTrigger
+            : InvertTriggerKind.EnableKeyPlusMiddleClick;
+        _smoothZoom = s.SmoothZoom;
+        _autoDisableAt100 = s.AutoDisableAt100;
+        _fps = Math.Clamp(s.Fps, 60, 360);
+        _centerCursor = s.CenterCursor;
+        _wiggleSpotlightEnabled = s.WiggleSpotlightEnabled;
+        _useCursorMonitorSelection = s.UseCursorMonitorSelection;
+        if (!_invertEnabled)
+        {
+            _invertColors = false;
+        }
+
+        _enableKeyPressed = false;
+        _invertKeyPressed = false;
+        _wheelDeltaRemainder = 0;
+        _pendingExitConfirmation = false;
+        _lockedScreen = null;
+
+        _selectedMonitorDeviceNames.Clear();
+        foreach (string name in s.SelectedMonitorDeviceNames.Where(n => !string.IsNullOrWhiteSpace(n)))
+        {
+            _selectedMonitorDeviceNames.Add(name);
+        }
+
+        EnsureSelectedMonitorsValid();
+        ApplyThemePreference(force: true);
+        ApplyFps();
+        if (_followCursor)
+        {
+            _followTimer?.Start();
+        }
+        else
+        {
+            _followTimer?.Stop();
+        }
+    }
+
     private void LoadSettings()
     {
         try
@@ -54,39 +136,7 @@ internal sealed partial class TrayContext
                 return;
             }
 
-            _stepPercent = Math.Clamp(s.StepPercent, 5, 100);
-            _maxPercent = Math.Clamp(s.MaxPercent, 200, 500);
-            _themeMode = Enum.IsDefined(typeof(ThemeMode), s.ThemeMode)
-                ? (ThemeMode)s.ThemeMode
-                : ThemeMode.AutoSystem;
-            _enabled = s.MagnificationEnabled;
-            _invertEnabled = s.InvertEnabled;
-            _followCursor = s.FollowCursor;
-            _autoSwitchMonitor = s.AutoSwitchMonitor;
-            _enableKey = (Keys)s.EnableKey;
-            _language = Enum.IsDefined(typeof(UiLanguage), s.Language)
-                ? (UiLanguage)s.Language
-                : UiText.GetDefaultLanguage();
-            _invertColors = s.InvertColors;
-            _invertKey = (Keys)s.InvertKey;
-            _invertTrigger = Enum.IsDefined(typeof(InvertTriggerKind), s.InvertTrigger)
-                ? (InvertTriggerKind)s.InvertTrigger
-                : InvertTriggerKind.EnableKeyPlusMiddleClick;
-            _smoothZoom = s.SmoothZoom;
-            _autoDisableAt100 = s.AutoDisableAt100;
-            _fps = Math.Clamp(s.Fps, 60, 360);
-            _centerCursor = s.CenterCursor;
-            _wiggleSpotlightEnabled = s.WiggleSpotlightEnabled;
-            _useCursorMonitorSelection = s.UseCursorMonitorSelection;
-            if (!_invertEnabled)
-            {
-                _invertColors = false;
-            }
-            _selectedMonitorDeviceNames.Clear();
-            foreach (string name in s.SelectedMonitorDeviceNames.Where(n => !string.IsNullOrWhiteSpace(n)))
-            {
-                _selectedMonitorDeviceNames.Add(name);
-            }
+            ApplySettingsModel(s);
         }
         catch (JsonException ex)
         {
@@ -97,9 +147,6 @@ internal sealed partial class TrayContext
         {
             ErrorLog.Write("LoadSettings", ex);
         }
-
-        EnsureSelectedMonitorsValid();
-
         UpdateMenuLabels();
     }
 
@@ -142,6 +189,22 @@ internal sealed partial class TrayContext
         }
 
         UpdateMenuLabels();
+    }
+
+    private void ResetSettingsToDefaults()
+    {
+        ApplySettingsModel(CreateDefaultSettings());
+        _animTimer?.Stop();
+        _zoomPercent = 100;
+        _animTargetPercent = 100;
+        DisableMagAndReset();
+        SaveSettings();
+        RefreshMenuAndTrayUi(rebuildPopup: true);
+
+        if (_settingsWindow != null && !_settingsWindow.IsDisposed)
+        {
+            RefreshSettingsWindow(SettingsPage.General);
+        }
     }
 
     private void UpdateMenuLabels()
