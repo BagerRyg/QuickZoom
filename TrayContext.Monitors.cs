@@ -9,6 +9,13 @@ namespace QuickZoom;
 
 internal sealed partial class TrayContext
 {
+    private enum DisplaySelectionMode
+    {
+        AllDisplays = 0,
+        MonitorUnderCursor = 1,
+        CustomSelection = 2
+    }
+
     private void SubscribeDisplayChanges()
     {
         try
@@ -42,6 +49,7 @@ internal sealed partial class TrayContext
             _monitorLayoutDirty = true;
             PopulateDisplayOptionsHost();
             UpdateTrayPopupState();
+            RefreshDisplaySettingsUi();
 
             if (_magActive)
             {
@@ -64,6 +72,15 @@ internal sealed partial class TrayContext
             {
                 _selectedMonitorDeviceNames.Add(screen.DeviceName);
             }
+        }
+
+        if (_displaySelectionMode == DisplaySelectionMode.MonitorUnderCursor)
+        {
+            _useCursorMonitorSelection = true;
+        }
+        else
+        {
+            _useCursorMonitorSelection = false;
         }
     }
 
@@ -100,22 +117,24 @@ internal sealed partial class TrayContext
 
         var cursorRow = new TrayMenuRow(palette, L("Tray.MonitorUnderCursor"), _useCursorMonitorSelection ? L("Tray.DisplaySelected") : string.Empty)
         {
-            Active = _useCursorMonitorSelection,
+            Active = _displaySelectionMode == DisplaySelectionMode.MonitorUnderCursor,
             Width = rowWidth
         };
         cursorRow.ActionRequested += (_, _) =>
         {
+            _displaySelectionMode = DisplaySelectionMode.MonitorUnderCursor;
             _useCursorMonitorSelection = true;
             _lockedScreen = null;
             _monitorLayoutDirty = true;
             SaveSettings();
             UpdateTrayPopupState();
+            RefreshDisplaySettingsUi();
             ApplyTransformCurrentPoint();
         };
         _displayOptionsHost.Controls.Add(cursorRow);
 
         List<Screen> screens = GetOrderedScreens();
-        bool allDisplaysSelected = !_useCursorMonitorSelection && _selectedMonitorDeviceNames.Count == screens.Count;
+        bool allDisplaysSelected = _displaySelectionMode == DisplaySelectionMode.AllDisplays;
 
         var allRow = new TrayMenuRow(palette, L("Tray.AllDisplays"), allDisplaysSelected ? L("Tray.DisplaySelected") : string.Empty)
         {
@@ -124,6 +143,7 @@ internal sealed partial class TrayContext
         };
         allRow.ActionRequested += (_, _) =>
         {
+            _displaySelectionMode = DisplaySelectionMode.AllDisplays;
             _useCursorMonitorSelection = false;
             foreach (Screen screen in screens)
             {
@@ -133,6 +153,7 @@ internal sealed partial class TrayContext
             _monitorLayoutDirty = true;
             SaveSettings();
             UpdateTrayPopupState();
+            RefreshDisplaySettingsUi();
             ApplyTransformCurrentPoint();
         };
         _displayOptionsHost.Controls.Add(allRow);
@@ -142,10 +163,11 @@ internal sealed partial class TrayContext
         {
             string label = GetFriendlyScreenLabel(screen, index);
 
-            bool selected = !_useCursorMonitorSelection && _selectedMonitorDeviceNames.Contains(screen.DeviceName);
+            bool selected = _displaySelectionMode == DisplaySelectionMode.AllDisplays ||
+                            (_displaySelectionMode == DisplaySelectionMode.CustomSelection && _selectedMonitorDeviceNames.Contains(screen.DeviceName));
             var screenRow = new TrayMenuRow(palette, label, selected ? L("Tray.DisplayIncluded") : string.Empty)
             {
-                Active = selected,
+                Active = _displaySelectionMode == DisplaySelectionMode.CustomSelection && _selectedMonitorDeviceNames.Contains(screen.DeviceName),
                 Width = rowWidth
             };
             string deviceName = screen.DeviceName;
@@ -158,9 +180,19 @@ internal sealed partial class TrayContext
 
     private void ToggleScreenSelection(string deviceName)
     {
+        SetScreenSelection(deviceName, !_selectedMonitorDeviceNames.Contains(deviceName));
+    }
+
+    private void SetScreenSelection(string deviceName, bool included)
+    {
         ResetExitConfirmation();
+        _displaySelectionMode = DisplaySelectionMode.CustomSelection;
         _useCursorMonitorSelection = false;
-        if (_selectedMonitorDeviceNames.Contains(deviceName))
+        if (included)
+        {
+            _selectedMonitorDeviceNames.Add(deviceName);
+        }
+        else
         {
             if (_selectedMonitorDeviceNames.Count == 1)
             {
@@ -169,26 +201,68 @@ internal sealed partial class TrayContext
 
             _selectedMonitorDeviceNames.Remove(deviceName);
         }
-        else
-        {
-            _selectedMonitorDeviceNames.Add(deviceName);
-        }
 
         _monitorLayoutDirty = true;
         SaveSettings();
         UpdateTrayPopupState();
+        RefreshDisplaySettingsUi();
+        ApplyTransformCurrentPoint();
+    }
+
+    private DisplaySelectionMode GetDisplaySelectionMode()
+    {
+        return _displaySelectionMode;
+    }
+
+    private void SetDisplaySelectionMode(DisplaySelectionMode mode)
+    {
+        ResetExitConfirmation();
+
+        switch (mode)
+        {
+            case DisplaySelectionMode.MonitorUnderCursor:
+                _displaySelectionMode = DisplaySelectionMode.MonitorUnderCursor;
+                _useCursorMonitorSelection = true;
+                _lockedScreen = null;
+                break;
+
+            case DisplaySelectionMode.AllDisplays:
+                _displaySelectionMode = DisplaySelectionMode.AllDisplays;
+                _useCursorMonitorSelection = false;
+                foreach (Screen screen in GetOrderedScreens())
+                {
+                    _selectedMonitorDeviceNames.Add(screen.DeviceName);
+                }
+                break;
+
+            case DisplaySelectionMode.CustomSelection:
+                _displaySelectionMode = DisplaySelectionMode.CustomSelection;
+                _useCursorMonitorSelection = false;
+                EnsureSelectedMonitorsValid();
+                if (_selectedMonitorDeviceNames.Count == 0)
+                {
+                    Screen primary = Screen.PrimaryScreen ?? GetOrderedScreens().First();
+                    _selectedMonitorDeviceNames.Clear();
+                    _selectedMonitorDeviceNames.Add(primary.DeviceName);
+                }
+                break;
+        }
+
+        _monitorLayoutDirty = true;
+        SaveSettings();
+        RefreshMenuAndTrayUi(rebuildPopup: true);
+        RefreshDisplaySettingsUi();
         ApplyTransformCurrentPoint();
     }
 
     private string GetDisplaySelectionSummary()
     {
-        List<Screen> screens = GetOrderedScreens();
-        if (_useCursorMonitorSelection)
+        if (_displaySelectionMode == DisplaySelectionMode.MonitorUnderCursor)
         {
             return L("Tray.DisplaySummaryCursor");
         }
 
-        if (_selectedMonitorDeviceNames.Count >= screens.Count)
+        if (_displaySelectionMode == DisplaySelectionMode.AllDisplays)
         {
             return L("Tray.DisplaySummaryAll");
         }
@@ -237,7 +311,7 @@ internal sealed partial class TrayContext
     {
         EnsureSelectedMonitorsValid();
 
-        if (_useCursorMonitorSelection)
+        if (_displaySelectionMode == DisplaySelectionMode.MonitorUnderCursor)
         {
             if (!_autoSwitchMonitor && _lockedScreen != null)
             {
@@ -262,6 +336,11 @@ internal sealed partial class TrayContext
 
             Screen fallback = Screen.PrimaryScreen ?? Screen.AllScreens.First();
             return [fallback];
+        }
+
+        if (_displaySelectionMode == DisplaySelectionMode.AllDisplays)
+        {
+            return GetOrderedScreens();
         }
 
         var selectedNames = _selectedMonitorDeviceNames;

@@ -17,10 +17,13 @@ internal sealed partial class TrayContext
         public bool MagnificationEnabled { get; set; } = true;
         public bool InvertEnabled { get; set; }
         public bool FollowCursor { get; set; } = true;
+        public int DisplaySelectionMode { get; set; } = (int)TrayContext.DisplaySelectionMode.AllDisplays;
+        public int ShortcutInputMode { get; set; } = (int)TrayContext.ShortcutInputMode.Both;
         public int EnableKey { get; set; } = (int)Keys.Menu;
         public int Language { get; set; } = (int)UiText.GetStartupLanguage();
         public bool InvertColors { get; set; }
         public int InvertKey { get; set; } = (int)Keys.I;
+        public int FollowCursorKey { get; set; } = (int)Keys.F;
         public int InvertTrigger { get; set; } = (int)InvertTriggerKind.EnableKeyPlusMiddleClick;
         public bool SmoothZoom { get; set; } = true;
         public bool AutoDisableAt100 { get; set; } = true;
@@ -42,10 +45,13 @@ internal sealed partial class TrayContext
             MagnificationEnabled = true,
             InvertEnabled = false,
             FollowCursor = true,
+            DisplaySelectionMode = (int)DisplaySelectionMode.AllDisplays,
+            ShortcutInputMode = (int)ShortcutInputMode.Both,
             EnableKey = (int)Keys.Menu,
             Language = (int)UiText.GetDefaultLanguage(),
             InvertColors = false,
             InvertKey = (int)Keys.I,
+            FollowCursorKey = (int)Keys.F,
             InvertTrigger = (int)InvertTriggerKind.EnableKeyPlusMiddleClick,
             SmoothZoom = true,
             AutoDisableAt100 = true,
@@ -68,13 +74,20 @@ internal sealed partial class TrayContext
         _enabled = s.MagnificationEnabled;
         _invertEnabled = s.InvertEnabled;
         _followCursor = s.FollowCursor;
+        _displaySelectionMode = Enum.IsDefined(typeof(DisplaySelectionMode), s.DisplaySelectionMode)
+            ? (DisplaySelectionMode)s.DisplaySelectionMode
+            : DisplaySelectionMode.AllDisplays;
         _autoSwitchMonitor = s.AutoSwitchMonitor;
+        _shortcutInputMode = Enum.IsDefined(typeof(ShortcutInputMode), s.ShortcutInputMode)
+            ? (ShortcutInputMode)s.ShortcutInputMode
+            : ShortcutInputMode.Both;
         _enableKey = (Keys)s.EnableKey;
         _language = Enum.IsDefined(typeof(UiLanguage), s.Language)
             ? (UiLanguage)s.Language
             : UiText.GetDefaultLanguage();
         _invertColors = s.InvertColors;
         _invertKey = (Keys)s.InvertKey;
+        _followCursorKey = s.FollowCursorKey == 0 ? Keys.F : (Keys)s.FollowCursorKey;
         _invertTrigger = Enum.IsDefined(typeof(InvertTriggerKind), s.InvertTrigger)
             ? (InvertTriggerKind)s.InvertTrigger
             : InvertTriggerKind.EnableKeyPlusMiddleClick;
@@ -91,9 +104,11 @@ internal sealed partial class TrayContext
 
         _enableKeyPressed = false;
         _invertKeyPressed = false;
+        _followCursorKeyPressed = false;
         _wheelDeltaRemainder = 0;
         _pendingExitConfirmation = false;
         _lockedScreen = null;
+        _useCursorMonitorSelection = _displaySelectionMode == DisplaySelectionMode.MonitorUnderCursor;
 
         _selectedMonitorDeviceNames.Clear();
         foreach (string name in s.SelectedMonitorDeviceNames.Where(n => !string.IsNullOrWhiteSpace(n)))
@@ -164,11 +179,14 @@ internal sealed partial class TrayContext
                 MagnificationEnabled = _enabled,
                 InvertEnabled = _invertEnabled,
                 FollowCursor = _followCursor,
+                DisplaySelectionMode = (int)_displaySelectionMode,
                 AutoSwitchMonitor = _autoSwitchMonitor,
+                ShortcutInputMode = (int)_shortcutInputMode,
                 EnableKey = (int)_enableKey,
                 Language = (int)_language,
                 InvertColors = _invertColors,
                 InvertKey = (int)_invertKey,
+                FollowCursorKey = (int)_followCursorKey,
                 InvertTrigger = (int)_invertTrigger,
                 SmoothZoom = _smoothZoom,
                 AutoDisableAt100 = _autoDisableAt100,
@@ -194,6 +212,7 @@ internal sealed partial class TrayContext
     private void ResetSettingsToDefaults()
     {
         ApplySettingsModel(CreateDefaultSettings());
+        _animAnchorValid = false;
         _animTimer?.Stop();
         _zoomPercent = 100;
         _animTargetPercent = 100;
@@ -220,6 +239,113 @@ internal sealed partial class TrayContext
         Keys.LWin or Keys.RWin => L("Common.KeyWin"),
         _ => key.ToString()
     };
+
+    private string ShortcutInputModeLabel(ShortcutInputMode mode) => mode switch
+    {
+        ShortcutInputMode.KeyboardOnly => L("Settings.ShortcutModeKeyboardOnly"),
+        ShortcutInputMode.MouseOnly => L("Settings.ShortcutModeMouseOnly"),
+        _ => L("Settings.ShortcutModeBoth")
+    };
+
+    private ShortcutInputMode ParseShortcutInputMode(string value)
+    {
+        if (string.Equals(value, L("Settings.ShortcutModeKeyboardOnly"), StringComparison.Ordinal))
+        {
+            return ShortcutInputMode.KeyboardOnly;
+        }
+
+        if (string.Equals(value, L("Settings.ShortcutModeMouseOnly"), StringComparison.Ordinal))
+        {
+            return ShortcutInputMode.MouseOnly;
+        }
+
+        return ShortcutInputMode.Both;
+    }
+
+    private bool KeyboardShortcutsAllowed() => _shortcutInputMode != ShortcutInputMode.MouseOnly;
+
+    private bool MouseShortcutsAllowed() => _shortcutInputMode != ShortcutInputMode.KeyboardOnly;
+
+    private string[] BuildShortcutModeItems() =>
+    [
+        L("Settings.ShortcutModeBoth"),
+        L("Settings.ShortcutModeKeyboardOnly"),
+        L("Settings.ShortcutModeMouseOnly")
+    ];
+
+    private string[] BuildPrimaryKeyItems() => BuildKeyItemLabels(new[]
+    {
+        Keys.Menu,
+        Keys.ControlKey,
+        Keys.ShiftKey,
+        Keys.LWin,
+        Keys.A,
+        Keys.Q,
+        Keys.Z,
+        Keys.Space
+    }, _enableKey);
+
+    private string[] BuildSecondaryKeyItems(Keys current) => BuildKeyItemLabels(new[]
+    {
+        Keys.I,
+        Keys.F,
+        Keys.C,
+        Keys.X,
+        Keys.Z,
+        Keys.Q,
+        Keys.E,
+        Keys.R,
+        Keys.T,
+        Keys.G,
+        Keys.F1,
+        Keys.F2,
+        Keys.F3,
+        Keys.F4,
+        Keys.F5,
+        Keys.F6,
+        Keys.F7,
+        Keys.F8,
+        Keys.F9,
+        Keys.F10,
+        Keys.F11,
+        Keys.F12
+    }, current);
+
+    private string[] BuildKeyItemLabels(IEnumerable<Keys> defaults, Keys current)
+    {
+        var items = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        void AddKey(Keys key)
+        {
+            string label = KeyLabel(key);
+            if (seen.Add(label))
+            {
+                items.Add(label);
+            }
+        }
+
+        foreach (Keys key in defaults)
+        {
+            AddKey(key);
+        }
+
+        AddKey(current);
+        return items.ToArray();
+    }
+
+    private Keys ParseKeySelection(string value, Keys fallback, IEnumerable<Keys> candidates)
+    {
+        foreach (Keys key in candidates)
+        {
+            if (string.Equals(value, KeyLabel(key), StringComparison.Ordinal))
+            {
+                return key;
+            }
+        }
+
+        return fallback;
+    }
 
     private string InvertTriggerLabel() => _invertTrigger switch
     {

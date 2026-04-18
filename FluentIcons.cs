@@ -266,9 +266,16 @@ internal sealed class FluentIconControl : Control
 
     protected override void OnPaintBackground(PaintEventArgs pevent)
     {
-        Color backColor = Parent is ISurfaceBackgroundProvider provider
-            ? provider.SurfaceBackgroundColor
-            : ControlDrawing.EffectiveBackColor(this);
+        if (Parent is IChildSurfaceBackgroundRenderer renderer)
+        {
+            GraphicsState state = pevent.Graphics.Save();
+            pevent.Graphics.TranslateTransform(-Left, -Top);
+            renderer.PaintChildSurfaceBackground(pevent.Graphics, new Rectangle(Left, Top, Width, Height));
+            pevent.Graphics.Restore(state);
+            return;
+        }
+
+        Color backColor = ControlDrawing.EffectiveBackColor(this);
         using SolidBrush brush = new(backColor);
         pevent.Graphics.FillRectangle(brush, ClientRectangle);
     }

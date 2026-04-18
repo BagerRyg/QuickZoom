@@ -230,6 +230,7 @@ internal sealed partial class TrayContext
             _pendingResetDefaultsConfirmation = false;
             _settingsWindow = null;
             _selectSettingsPageAction = null;
+            _displaySelectionSettingsSection = null;
         };
 
         _selectSettingsPageAction = ShowPage;
@@ -297,9 +298,9 @@ internal sealed partial class TrayContext
     {
         ThemePalette palette = CurrentTheme;
         var page = new SettingsPageView(palette, L("Settings.DisplayTitle"), string.Empty);
-        var section = new SettingsSection(palette, L("Settings.DisplaySection"), string.Empty);
+        var behaviorSection = new SettingsSection(palette, L("Settings.DisplaySection"), string.Empty);
 
-        section.AddRow(CreateToggleRow(L("Settings.AutoSwitchMonitor"), L("Settings.AutoSwitchMonitorHelp"), _autoSwitchMonitor, value =>
+        behaviorSection.AddRow(CreateToggleRow(L("Settings.AutoSwitchMonitor"), L("Settings.AutoSwitchMonitorHelp"), _autoSwitchMonitor, value =>
         {
             _autoSwitchMonitor = value;
             if (_autoSwitchMonitor)
@@ -316,16 +317,87 @@ internal sealed partial class TrayContext
             RefreshMenuAndTrayUi();
         }, rightColumnWidth: 96));
 
-        var openTrayButton = new ModernButton
-        {
-            Text = L("Settings.OpenTrayButton")
-        };
-        openTrayButton.ApplyTheme(palette, emphasis: false);
-        openTrayButton.Click += (_, _) => ShowTrayPopup(Cursor.Position);
-        section.AddRow(new SettingsRow(palette, L("Settings.DisplayTrayRow"), L("Settings.DisplayHint"), openTrayButton, rightColumnWidth: 200));
+        _displaySelectionSettingsSection = new SettingsSection(palette, L("Settings.DisplaySelectionMode"), string.Empty);
+        PopulateDisplaySelectionSettingsSection();
 
-        page.AddSection(section);
+        page.AddSection(behaviorSection);
+        page.AddSection(_displaySelectionSettingsSection);
         return page;
+    }
+
+    private void PopulateDisplaySelectionSettingsSection()
+    {
+        if (_displaySelectionSettingsSection == null)
+        {
+            return;
+        }
+
+        _displaySelectionSettingsSection.ClearRows();
+        _displaySelectionSettingsSection.AddRow(CreateDropdownRow(
+            L("Settings.DisplaySelectionMode"),
+            L("Settings.DisplaySelectionModeHelp"),
+            BuildDisplaySelectionModeItems(),
+            DisplaySelectionModeLabel(GetDisplaySelectionMode()),
+            value =>
+            {
+                DisplaySelectionMode nextMode = ParseDisplaySelectionMode(value);
+                if (nextMode != GetDisplaySelectionMode())
+                {
+                    SetDisplaySelectionMode(nextMode);
+                }
+            },
+            rightColumnWidth: 320));
+
+        if (GetDisplaySelectionMode() != DisplaySelectionMode.CustomSelection)
+        {
+            return;
+        }
+
+        int fallbackIndex = 1;
+        foreach (Screen screen in GetOrderedScreens())
+        {
+            string deviceName = screen.DeviceName;
+            bool selected = _selectedMonitorDeviceNames.Contains(deviceName);
+            string label = GetFriendlyScreenLabel(screen, fallbackIndex++);
+            _displaySelectionSettingsSection.AddRow(CreateToggleRow(
+                label,
+                L("Settings.DisplayCustomMonitorHelp"),
+                selected,
+                value =>
+                {
+                    bool isCurrentlySelected = _selectedMonitorDeviceNames.Contains(deviceName);
+                    if (value != isCurrentlySelected)
+                    {
+                        SetScreenSelection(deviceName, value);
+                    }
+                },
+                rightColumnWidth: 96));
+        }
+    }
+
+    private void RefreshDisplaySettingsUi()
+    {
+        if (_displaySelectionSettingsSection == null || _settingsWindow == null || _settingsWindow.IsDisposed)
+        {
+            return;
+        }
+
+        if (_settingsWindow.InvokeRequired)
+        {
+            _settingsWindow.BeginInvoke((MethodInvoker)RefreshDisplaySettingsUi);
+            return;
+        }
+
+        _settingsWindow.BeginInvoke((MethodInvoker)(() =>
+        {
+            if (_displaySelectionSettingsSection == null || _settingsWindow == null || _settingsWindow.IsDisposed)
+            {
+                return;
+            }
+
+            PopulateDisplaySelectionSettingsSection();
+            _displaySelectionSettingsSection.PerformLayout();
+        }));
     }
 
     private SettingsPageView BuildZoomSettingsPage()
@@ -407,29 +479,27 @@ internal sealed partial class TrayContext
         var section = new SettingsSection(palette, L("Settings.InputSection"), string.Empty);
 
         section.AddRow(CreateDropdownRow(
-            L("Settings.EnableKey"),
-            L("Settings.EnableKeyHelp"),
-            BuildEnableKeyItems(),
-            KeyLabel(_enableKey),
+            L("Settings.ShortcutMode"),
+            L("Settings.ShortcutModeHelp"),
+            BuildShortcutModeItems(),
+            ShortcutInputModeLabel(_shortcutInputMode),
             value =>
             {
-                if (string.Equals(value, KeyLabel(Keys.ControlKey), StringComparison.Ordinal))
-                {
-                    _enableKey = Keys.ControlKey;
-                }
-                else if (string.Equals(value, KeyLabel(Keys.Menu), StringComparison.Ordinal))
-                {
-                    _enableKey = Keys.Menu;
-                }
-                else if (string.Equals(value, KeyLabel(Keys.ShiftKey), StringComparison.Ordinal))
-                {
-                    _enableKey = Keys.ShiftKey;
-                }
-                _enableKeyPressed = false;
+                _shortcutInputMode = ParseShortcutInputMode(value);
+                _invertKeyPressed = false;
+                _followCursorKeyPressed = false;
+                _wheelDeltaRemainder = 0;
                 SaveSettings();
                 RefreshMenuAndTrayUi(rebuildPopup: true);
+                RefreshSettingsWindow(SettingsPage.Input);
             },
-            CreateInlineActionButton(L("Settings.Customize"), () =>
+            rightColumnWidth: 360));
+
+        section.AddRow(CreateKeybindRow(
+            L("Settings.EnableKey"),
+            L("Settings.EnableKeyHelp"),
+            KeyLabel(_enableKey),
+            () =>
             {
                 Keys? key = PromptForKey(_enableKey, L("Settings.EnableKeyDialogTitle"), L("Settings.EnableKeyDialogBody"));
                 if (key != null)
@@ -438,38 +508,16 @@ internal sealed partial class TrayContext
                     _enableKeyPressed = false;
                     SaveSettings();
                     RefreshMenuAndTrayUi(rebuildPopup: true);
+                    RefreshSettingsWindow(SettingsPage.Input);
                 }
-            }),
+            },
             rightColumnWidth: 360));
 
-        section.AddRow(CreateDropdownRow(
-            L("Settings.InvertHotkey"),
-            L("Settings.InvertHotkeyHelp"),
-            BuildInvertHotkeyItems(),
-            InvertTriggerLabel(),
-            value =>
-            {
-                switch (value)
-                {
-                    case var _ when value == InvertTriggerTextForCurrentEnableKey(L("Settings.Trigger.EnableMiddle")):
-                        _invertTrigger = InvertTriggerKind.EnableKeyPlusMiddleClick;
-                        break;
-                    case var _ when value == InvertTriggerTextForCurrentEnableKey(L("Settings.Trigger.EnableX1")):
-                        _invertTrigger = InvertTriggerKind.EnableKeyPlusXButton1;
-                        break;
-                    case var _ when value == InvertTriggerTextForCurrentEnableKey(L("Settings.Trigger.EnableX2")):
-                        _invertTrigger = InvertTriggerKind.EnableKeyPlusXButton2;
-                        break;
-                    default:
-                        _invertTrigger = InvertTriggerKind.CustomKey;
-                        break;
-                }
-
-                _invertKeyPressed = false;
-                SaveSettings();
-                RefreshMenuAndTrayUi(rebuildPopup: true);
-            },
-            CreateInlineActionButton(L("Settings.Customize"), () =>
+        section.AddRow(CreateKeybindRow(
+            L("Settings.InvertActivationKey"),
+            L("Settings.InvertActivationKeyHelp"),
+            KeyLabel(_invertKey),
+            () =>
             {
                 Keys? key = PromptForKey(_invertKey, L("Settings.InvertKeyDialogTitle"), L("Settings.InvertKeyDialogBody"));
                 if (key != null)
@@ -479,8 +527,27 @@ internal sealed partial class TrayContext
                     _invertKeyPressed = false;
                     SaveSettings();
                     RefreshMenuAndTrayUi(rebuildPopup: true);
+                    RefreshSettingsWindow(SettingsPage.Input);
                 }
-            }),
+            },
+            rightColumnWidth: 360));
+
+        section.AddRow(CreateKeybindRow(
+            L("Settings.FollowCursorHotkey"),
+            L("Settings.FollowCursorHotkeyHelp"),
+            KeyLabel(_followCursorKey),
+            () =>
+            {
+                Keys? key = PromptForKey(_followCursorKey, L("Settings.FollowCursorHotkeyDialogTitle"), L("Settings.FollowCursorHotkeyDialogBody"));
+                if (key != null)
+                {
+                    _followCursorKey = key.Value;
+                    _followCursorKeyPressed = false;
+                    SaveSettings();
+                    RefreshMenuAndTrayUi(rebuildPopup: true);
+                    RefreshSettingsWindow(SettingsPage.Input);
+                }
+            },
             rightColumnWidth: 360));
 
         page.AddSection(section);
@@ -631,6 +698,45 @@ internal sealed partial class TrayContext
         return new SettingsRow(CurrentTheme, title, description, rightControl, rightColumnWidth);
     }
 
+    private SettingsRow CreateKeybindRow(string title, string description, string currentKeyLabel, Action onCustomize, int rightColumnWidth = 360)
+    {
+        var badge = new KeyBadgeControl(CurrentTheme, currentKeyLabel)
+        {
+            Width = 124,
+            Height = 34,
+            Dock = DockStyle.Fill
+        };
+        badge.ApplyTheme(CurrentTheme);
+
+        var button = new ModernButton
+        {
+            Text = L("Settings.Customize"),
+            Dock = DockStyle.Fill,
+            Margin = new Padding(10, 0, 0, 0)
+        };
+        button.ApplyTheme(CurrentTheme, emphasis: false);
+        button.Click += (_, _) => onCustomize();
+
+        var row = new TableLayoutPanel
+        {
+            AutoSize = false,
+            Width = rightColumnWidth,
+            Height = 38,
+            ColumnCount = 2,
+            RowCount = 1,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0),
+            Padding = new Padding(0)
+        };
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 124));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        row.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        row.Controls.Add(badge, 0, 0);
+        row.Controls.Add(button, 1, 0);
+
+        return new SettingsRow(CurrentTheme, title, description, row, rightColumnWidth);
+    }
+
     private SettingsRow CreateInfoRow(string title, string value, string description, Control? actionButton = null, int rightColumnWidth = 240)
     {
         string effectiveDescription = string.IsNullOrWhiteSpace(description)
@@ -686,16 +792,6 @@ internal sealed partial class TrayContext
         return button;
     }
 
-    private string[] BuildEnableKeyItems() => [KeyLabel(Keys.ControlKey), KeyLabel(Keys.Menu), KeyLabel(Keys.ShiftKey)];
-
-    private string[] BuildInvertHotkeyItems() =>
-    [
-        InvertTriggerTextForCurrentEnableKey(L("Settings.Trigger.EnableMiddle")),
-        InvertTriggerTextForCurrentEnableKey(L("Settings.Trigger.EnableX1")),
-        InvertTriggerTextForCurrentEnableKey(L("Settings.Trigger.EnableX2")),
-        L("Settings.Trigger.Custom")
-    ];
-
     private string[] BuildLanguageItems()
     {
         var items = new List<string>();
@@ -705,6 +801,35 @@ internal sealed partial class TrayContext
         }
 
         return items.ToArray();
+    }
+
+    private string[] BuildDisplaySelectionModeItems() =>
+    [
+        L("Settings.DisplayModeAll"),
+        L("Settings.DisplayModeCursor"),
+        L("Settings.DisplayModeCustom")
+    ];
+
+    private string DisplaySelectionModeLabel(DisplaySelectionMode mode) => mode switch
+    {
+        DisplaySelectionMode.MonitorUnderCursor => L("Settings.DisplayModeCursor"),
+        DisplaySelectionMode.CustomSelection => L("Settings.DisplayModeCustom"),
+        _ => L("Settings.DisplayModeAll")
+    };
+
+    private DisplaySelectionMode ParseDisplaySelectionMode(string value)
+    {
+        if (string.Equals(value, L("Settings.DisplayModeCursor"), StringComparison.Ordinal))
+        {
+            return DisplaySelectionMode.MonitorUnderCursor;
+        }
+
+        if (string.Equals(value, L("Settings.DisplayModeCustom"), StringComparison.Ordinal))
+        {
+            return DisplaySelectionMode.CustomSelection;
+        }
+
+        return DisplaySelectionMode.AllDisplays;
     }
 
     private string[] BuildThemeModeItems() => [L("Settings.ThemeAuto"), L("Settings.ThemeDark"), L("Settings.ThemeLight")];

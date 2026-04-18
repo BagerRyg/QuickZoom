@@ -102,6 +102,11 @@ internal interface ISurfaceBackgroundProvider
     Color SurfaceBackgroundColor { get; }
 }
 
+internal interface IChildSurfaceBackgroundRenderer
+{
+    void PaintChildSurfaceBackground(Graphics graphics, Rectangle childBounds);
+}
+
 internal class ModernSurfacePanel : Panel
 {
     private int _cornerRadius = 16;
@@ -506,7 +511,7 @@ internal sealed class TrayMenuDivider : Control
     }
 }
 
-internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider
+internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildSurfaceBackgroundRenderer
 {
     private readonly FluentIconControl? _iconControl;
     private readonly Label _titleLabel;
@@ -787,6 +792,25 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider
 
     }
 
+    public void PaintChildSurfaceBackground(Graphics graphics, Rectangle childBounds)
+    {
+        using Region clip = graphics.Clip?.Clone() ?? new Region(childBounds);
+        graphics.SetClip(childBounds);
+
+        using SolidBrush backgroundBrush = new(ControlDrawing.EffectiveBackColor(this));
+        graphics.FillRectangle(backgroundBrush, childBounds);
+
+        if (_hovered || _pressed || _active)
+        {
+            Rectangle fillRect = new(4, 1, Math.Max(8, Width - 8), Math.Max(8, Height - 2));
+            using GraphicsPath path = ControlDrawing.RoundedRect(fillRect, 9);
+            using SolidBrush fillBrush = new(SurfaceBackgroundColor);
+            graphics.FillPath(fillBrush, path);
+        }
+
+        graphics.Clip = clip;
+    }
+
     private void SetState(bool hovered, bool pressed)
     {
         _hovered = hovered;
@@ -803,6 +827,87 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider
             0,
             ControlDrawing.ScaleLogical(this, 12),
             0);
+    }
+}
+
+internal sealed class KeyBadgeControl : Control, ISurfaceBackgroundProvider
+{
+    private ThemePalette _palette;
+    private bool _hovered;
+
+    public KeyBadgeControl(ThemePalette palette, string text)
+    {
+        _palette = palette;
+        Text = text;
+        SetStyle(
+            ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.OptimizedDoubleBuffer |
+            ControlStyles.ResizeRedraw |
+            ControlStyles.SupportsTransparentBackColor |
+            ControlStyles.UserPaint,
+            true);
+        BackColor = Color.Transparent;
+        Size = new Size(94, 34);
+        Margin = new Padding(0);
+    }
+
+    public void ApplyTheme(ThemePalette palette)
+    {
+        _palette = palette;
+        Invalidate();
+    }
+
+    public Color SurfaceBackgroundColor => _hovered ? _palette.ButtonHover : _palette.ButtonBackground;
+
+    protected override void OnMouseEnter(EventArgs e)
+    {
+        _hovered = true;
+        Invalidate();
+        base.OnMouseEnter(e);
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        _hovered = false;
+        Invalidate();
+        base.OnMouseLeave(e);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+        Rectangle rect = new(0, 0, Width - 1, Height - 1);
+        using GraphicsPath path = ControlDrawing.RoundedRect(rect, 10);
+        using SolidBrush fill = new(SurfaceBackgroundColor);
+        using Pen border = new(Color.FromArgb(50, _palette.Border));
+        e.Graphics.FillPath(fill, path);
+        e.Graphics.DrawPath(border, path);
+
+        Rectangle iconRect = new(10, 9, 16, 16);
+        using Pen iconPen = new(_palette.SecondaryText, 1.25f);
+        e.Graphics.DrawRectangle(iconPen, iconRect);
+        e.Graphics.DrawLine(iconPen, iconRect.Left + 4, iconRect.Top + 5, iconRect.Right - 4, iconRect.Top + 5);
+        e.Graphics.DrawLine(iconPen, iconRect.Left + 4, iconRect.Top + 9, iconRect.Right - 4, iconRect.Top + 9);
+
+        Rectangle textRect = new(iconRect.Right + 8, 0, Width - iconRect.Right - 18, Height);
+        TextRenderer.DrawText(
+            e.Graphics,
+            Text,
+            new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
+            textRect,
+            _palette.Text,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs pevent)
+    {
+        Color backColor = Parent is ISurfaceBackgroundProvider provider
+            ? provider.SurfaceBackgroundColor
+            : ControlDrawing.EffectiveBackColor(this);
+        using SolidBrush brush = new(backColor);
+        pevent.Graphics.FillRectangle(brush, ClientRectangle);
     }
 }
 
@@ -1884,6 +1989,19 @@ internal sealed class SettingsSection : Panel
         _rows.RowCount++;
         _rows.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _rows.Controls.Add(row, 0, _nextRowIndex++);
+    }
+
+    public void ClearRows()
+    {
+        foreach (Control control in _rows.Controls)
+        {
+            control.Dispose();
+        }
+
+        _rows.Controls.Clear();
+        _rows.RowStyles.Clear();
+        _rows.RowCount = 0;
+        _nextRowIndex = 0;
     }
 }
 

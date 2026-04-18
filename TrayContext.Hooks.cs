@@ -92,6 +92,7 @@ internal sealed partial class TrayContext
         {
             _enableKeyPressed = false;
             _invertKeyPressed = false;
+            _followCursorKeyPressed = false;
             _wheelDeltaRemainder = 0;
             return CallNextHookEx(_hook, nCode, wParam, lParam);
         }
@@ -101,6 +102,7 @@ internal sealed partial class TrayContext
             int message = wParam.ToInt32();
 
             if (_invertEnabled &&
+                MouseShortcutsAllowed() &&
                 (message == WM_MBUTTONDOWN || message == WM_XBUTTONDOWN) &&
                 MatchesInvertMouseTrigger(Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam), message))
             {
@@ -110,7 +112,7 @@ internal sealed partial class TrayContext
 
             if (message == WM_MOUSEWHEEL)
             {
-                if (_enabled && _enableKeyPressed)
+                if (_enabled && _enableKeyPressed && MouseShortcutsAllowed())
                 {
                     var data = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
                     int wheelDelta = (short)((data.mouseData >> 16) & 0xFFFF);
@@ -132,10 +134,11 @@ internal sealed partial class TrayContext
 
     private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (!_enabled && !_invertEnabled)
+        if (!_enabled && !_invertEnabled && !KeyboardShortcutsAllowed())
         {
             _enableKeyPressed = false;
             _invertKeyPressed = false;
+            _followCursorKeyPressed = false;
             return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
         }
 
@@ -156,9 +159,10 @@ internal sealed partial class TrayContext
             }
 
             bool invertKeyPressed = _invertEnabled &&
+                                    KeyboardShortcutsAllowed() &&
                                     !IsEnableKeyMatch(_enableKey, vk) &&
                                     IsInvertKeyMatch(vk) &&
-                                    (_enableKeyPressed || _invertTrigger == InvertTriggerKind.CustomKey);
+                                    _enableKeyPressed;
 
             if (invertKeyPressed)
             {
@@ -171,7 +175,23 @@ internal sealed partial class TrayContext
                 return (IntPtr)1;
             }
 
-            if (_enabled && _enableKeyPressed)
+            bool followCursorTogglePressed = KeyboardShortcutsAllowed() &&
+                                             !IsEnableKeyMatch(_enableKey, vk) &&
+                                             IsFollowCursorKeyMatch(vk) &&
+                                             _enableKeyPressed;
+
+            if (followCursorTogglePressed)
+            {
+                if (!_followCursorKeyPressed)
+                {
+                    _followCursorKeyPressed = true;
+                    SetFollowCursor(!_followCursor);
+                }
+
+                return (IntPtr)1;
+            }
+
+            if (_enabled && _enableKeyPressed && KeyboardShortcutsAllowed())
             {
                 const int VK_OEM_PLUS = 0xBB;
                 const int VK_OEM_MINUS = 0xBD;
@@ -200,13 +220,25 @@ internal sealed partial class TrayContext
             }
 
             bool invertKeyReleased = _invertEnabled &&
+                                     KeyboardShortcutsAllowed() &&
                                      !IsEnableKeyMatch(_enableKey, vk) &&
                                      IsInvertKeyMatch(vk) &&
-                                     (_enableKeyPressed || _invertTrigger == InvertTriggerKind.CustomKey);
+                                     _enableKeyPressed;
 
             if (invertKeyReleased)
             {
                 _invertKeyPressed = false;
+                return (IntPtr)1;
+            }
+
+            bool followCursorKeyReleased = KeyboardShortcutsAllowed() &&
+                                           !IsEnableKeyMatch(_enableKey, vk) &&
+                                           IsFollowCursorKeyMatch(vk) &&
+                                           _enableKeyPressed;
+
+            if (followCursorKeyReleased)
+            {
+                _followCursorKeyPressed = false;
                 return (IntPtr)1;
             }
         }
@@ -232,6 +264,11 @@ internal sealed partial class TrayContext
         return vk == (int)_invertKey;
     }
 
+    private bool IsFollowCursorKeyMatch(int vk)
+    {
+        return vk == (int)_followCursorKey;
+    }
+
     private bool MatchesInvertMouseTrigger(MSLLHOOKSTRUCT data, int message)
     {
         if (!_enableKeyPressed)
@@ -239,13 +276,7 @@ internal sealed partial class TrayContext
             return false;
         }
 
-        return _invertTrigger switch
-        {
-            InvertTriggerKind.EnableKeyPlusMiddleClick => message == WM_MBUTTONDOWN,
-            InvertTriggerKind.EnableKeyPlusXButton1 => message == WM_XBUTTONDOWN && ((data.mouseData >> 16) & 0xFFFF) == 1,
-            InvertTriggerKind.EnableKeyPlusXButton2 => message == WM_XBUTTONDOWN && ((data.mouseData >> 16) & 0xFFFF) == 2,
-            _ => false
-        };
+        return message == WM_MBUTTONDOWN;
     }
 
     private void ToggleInvertColors()
@@ -296,6 +327,12 @@ internal sealed partial class TrayContext
                 ApplyTransformCurrentPoint();
             }
 
+            if (GetCursorPos(out var animPt))
+            {
+                _animAnchorPoint = animPt;
+                _animAnchorValid = true;
+            }
+
             _animStartPercent = _zoomPercent;
             _animTargetPercent = newTarget;
             _animElapsedMs = 0;
@@ -307,6 +344,7 @@ internal sealed partial class TrayContext
         }
         else
         {
+            _animAnchorValid = false;
             _zoomPercent = newTarget;
             _animTargetPercent = _zoomPercent;
             ApplyTransformCurrentPoint();

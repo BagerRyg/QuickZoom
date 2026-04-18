@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -69,6 +70,9 @@ internal sealed partial class TrayContext
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
+
     private const uint SPI_SETCURSORS = 0x0057;
     private const uint LWA_ALPHA = 0x00000002;
     private const int WS_CHILD = 0x40000000;
@@ -78,6 +82,44 @@ internal sealed partial class TrayContext
     private const int WS_EX_TRANSPARENT = 0x00000020;
     private const int WS_EX_LAYERED = 0x00080000;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
+    private const int ENUM_CURRENT_SETTINGS = -1;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct DEVMODE
+    {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string dmDeviceName;
+        public ushort dmSpecVersion;
+        public ushort dmDriverVersion;
+        public ushort dmSize;
+        public ushort dmDriverExtra;
+        public uint dmFields;
+        public int dmPositionX;
+        public int dmPositionY;
+        public uint dmDisplayOrientation;
+        public uint dmDisplayFixedOutput;
+        public short dmColor;
+        public short dmDuplex;
+        public short dmYResolution;
+        public short dmTTOption;
+        public short dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string dmFormName;
+        public ushort dmLogPixels;
+        public uint dmBitsPerPel;
+        public uint dmPelsWidth;
+        public uint dmPelsHeight;
+        public uint dmDisplayFlags;
+        public uint dmDisplayFrequency;
+        public uint dmICMMethod;
+        public uint dmICMIntent;
+        public uint dmMediaType;
+        public uint dmDitherType;
+        public uint dmReserved1;
+        public uint dmReserved2;
+        public uint dmPanningWidth;
+        public uint dmPanningHeight;
+    }
     private const int WS_EX_NOACTIVATE = 0x08000000;
     private const int WS_EX_TOPMOST = 0x00000008;
     private const int WS_CLIPCHILDREN = 0x02000000;
@@ -253,17 +295,28 @@ internal sealed partial class TrayContext
                 return;
             }
 
-            var transform = new MAGTRANSFORM
+            if (!_hasLastFrame || _lastInvertColors != invertColors)
             {
-                v00 = magnification,
-                v11 = magnification,
-                v22 = 1f
-            };
+                MAGCOLOREFFECT colorEffect = invertColors ? InvertColorEffect : IdentityColorEffect;
+                _ = MagSetColorEffect(_magnifierHandle, ref colorEffect);
+            }
 
-            MAGCOLOREFFECT colorEffect = invertColors ? InvertColorEffect : IdentityColorEffect;
-            _ = MagSetColorEffect(_magnifierHandle, ref colorEffect);
-            _ = MagSetWindowTransform(_magnifierHandle, ref transform);
-            _ = MagSetWindowSource(_magnifierHandle, sourceRect);
+            if (!_hasLastFrame || Math.Abs(_lastMagnification - magnification) >= 0.0001f)
+            {
+                var transform = new MAGTRANSFORM
+                {
+                    v00 = magnification,
+                    v11 = magnification,
+                    v22 = 1f
+                };
+                _ = MagSetWindowTransform(_magnifierHandle, ref transform);
+            }
+
+            if (!_hasLastFrame || !RectEquals(_lastSourceRect, sourceRect))
+            {
+                _ = MagSetWindowSource(_magnifierHandle, sourceRect);
+            }
+
             _lastMagnification = magnification;
             _lastSourceRect = sourceRect;
             _lastInvertColors = invertColors;
@@ -564,6 +617,7 @@ internal sealed partial class TrayContext
     {
         _zoomPercent = 100;
         _animTargetPercent = 100;
+        _animAnchorValid = false;
         EnsureMag(false);
     }
 
@@ -597,7 +651,7 @@ internal sealed partial class TrayContext
             return;
         }
 
-        POINT point = GetReferencePoint();
+        POINT point = GetReferencePointForTransform();
         ApplyTransformAtPoint(point, PercentToMag(_zoomPercent));
     }
 
@@ -616,12 +670,24 @@ internal sealed partial class TrayContext
         return GetCursorPos(out pt) ? pt : default;
     }
 
+    private POINT GetReferencePointForTransform()
+    {
+        if (_animAnchorValid && _animTimer != null && _animTimer.Enabled && !_useFullscreenBackend)
+        {
+            return _animAnchorPoint;
+        }
+
+        return GetReferencePoint();
+    }
+
     private void ApplyTransformAtPoint(POINT pt, float mag)
     {
         if (!_magActive)
         {
             return;
         }
+
+        long frameStartTicks = Stopwatch.GetTimestamp();
 
         var selectedScreens = GetSelectedScreens();
         if (selectedScreens.Count == 0)
@@ -718,6 +784,27 @@ internal sealed partial class TrayContext
             RECT sourceRect = BuildSourceRect(screen.Bounds, anchorPoint, mag);
             window.Apply(mag, sourceRect, _invertColors);
         }
+
+        if (selectedScreens.Count == 1)
+        {
+            LogSlowSingleMonitorFrame(frameStartTicks, selectedScreens[0]);
+        }
+    }
+
+    private void LogSlowSingleMonitorFrame(long frameStartTicks, Screen selectedScreen)
+    {
+        double elapsedMs = (Stopwatch.GetTimestamp() - frameStartTicks) * 1000.0 / Stopwatch.Frequency;
+        long now = Environment.TickCount64;
+        if (elapsedMs < 9.0 || now - _lastSlowPerMonitorFrameLogTick < 3000)
+        {
+            return;
+        }
+
+        _lastSlowPerMonitorFrameLogTick = now;
+        int refreshRate = GetScreenRefreshRate(selectedScreen);
+        ErrorLog.Write(
+            "PerMonitorPerf",
+            $"Single-monitor frame took {elapsedMs:F2} ms on {GetFriendlyScreenLabel(selectedScreen, TryGetDisplayNumber(selectedScreen.DeviceName) ?? 1)} ({selectedScreen.DeviceName}), refresh={refreshRate}Hz, targetFps={GetEffectiveRenderingFps()}.");
     }
 
     private void ApplyFullscreenTransform(POINT pt, float mag, List<Screen> selectedScreens)
@@ -805,5 +892,32 @@ internal sealed partial class TrayContext
             right = offsetX + viewW,
             bottom = offsetY + viewH
         };
+    }
+
+    private int GetEffectiveRenderingFps()
+    {
+        return Math.Clamp(_fps, 30, 360);
+    }
+
+    private int GetScreenRefreshRate(Screen screen)
+    {
+        try
+        {
+            var mode = new DEVMODE
+            {
+                dmSize = (ushort)Marshal.SizeOf<DEVMODE>()
+            };
+
+            if (EnumDisplaySettings(screen.DeviceName, ENUM_CURRENT_SETTINGS, ref mode) && mode.dmDisplayFrequency > 0)
+            {
+                return (int)Math.Clamp(mode.dmDisplayFrequency, 30u, 360u);
+            }
+        }
+        catch
+        {
+            // Ignore and fall back.
+        }
+
+        return 60;
     }
 }

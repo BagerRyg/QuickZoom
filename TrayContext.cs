@@ -72,6 +72,13 @@ internal sealed partial class TrayContext : ApplicationContext
         CustomKey = 3
     }
 
+    private enum ShortcutInputMode
+    {
+        Both = 0,
+        KeyboardOnly = 1,
+        MouseOnly = 2
+    }
+
     private NotifyIcon _tray = null!;
     private Icon? _iconRef;
     private Control _uiInvoker = null!;
@@ -112,15 +119,20 @@ internal sealed partial class TrayContext : ApplicationContext
     private int _animElapsedMs;
     private int _animStartPercent = 100;
     private int _animTargetPercent = 100;
+    private POINT _animAnchorPoint;
+    private bool _animAnchorValid;
     private int _wheelDeltaRemainder;
     private bool _enableKeyPressed;
     private bool _invertKeyPressed;
+    private bool _followCursorKeyPressed;
     private bool _pendingExitConfirmation;
 
     private POINT _staticCenter;
     private Keys _enableKey = Keys.Menu;
     private Keys _invertKey = Keys.I;
+    private Keys _followCursorKey = Keys.F;
     private InvertTriggerKind _invertTrigger = InvertTriggerKind.EnableKeyPlusMiddleClick;
+    private ShortcutInputMode _shortcutInputMode = ShortcutInputMode.Both;
 
     // Tray popup refs
     private TrayMenuRow? _magnifyRow;
@@ -137,6 +149,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private Form? _settingsWindow;
     private Action<SettingsPage>? _selectSettingsPageAction;
     private SettingsPage _currentSettingsPage = SettingsPage.General;
+    private SettingsSection? _displaySelectionSettingsSection;
     private ModernButton? _resetDefaultsButton;
     private System.Windows.Forms.Timer? _resetDefaultsConfirmTimer;
     private bool _pendingResetDefaultsConfirmation;
@@ -148,6 +161,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private readonly Dictionary<string, MonitorMagnifierWindow> _monitorWindows = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Point> _lastAnchorByMonitor = new(StringComparer.OrdinalIgnoreCase);
     private bool _useCursorMonitorSelection;
+    private DisplaySelectionMode _displaySelectionMode = DisplaySelectionMode.AllDisplays;
     private bool _suspendPerMonitorTrackingForMenu;
     private bool _suspendPerMonitorTrackingForShellUi;
     private bool _monitorLayoutDirty = true;
@@ -163,6 +177,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private long _cursorSpotlightVisibleUntilTick;
     private bool _cursorSpotlightHidesSystemCursor;
     private bool _cursorSpotlightOverridesSystemCursors;
+    private long _lastSlowPerMonitorFrameLogTick;
 
     // Settings
     private readonly string _settingsPath = AppPaths.SettingsPath;

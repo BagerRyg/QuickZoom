@@ -460,12 +460,13 @@ internal sealed partial class TrayContext
 
     private void ApplyFps()
     {
-        int interval = Math.Max(5, 1000 / Math.Max(10, _fps));
+        int effectiveFps = GetEffectiveRenderingFps();
+        int interval = Math.Max(5, 1000 / Math.Max(10, effectiveFps));
         _followTimer.Interval = interval;
 
         if (_animTimer != null)
         {
-            _animTimer.Interval = Math.Max(8, 1000 / Math.Max(60, _fps));
+            _animTimer.Interval = Math.Max(8, 1000 / Math.Max(60, effectiveFps));
         }
     }
 
@@ -565,6 +566,7 @@ internal sealed partial class TrayContext
         {
             if (_zoomPercent == _animTargetPercent)
             {
+                _animAnchorValid = false;
                 _animTimer.Stop();
                 return;
             }
@@ -577,6 +579,7 @@ internal sealed partial class TrayContext
 
             if (t >= 1.0)
             {
+                _animAnchorValid = false;
                 _animTimer.Stop();
             }
         };
@@ -872,6 +875,7 @@ internal sealed partial class TrayContext
 
         _suspendPerMonitorTrackingForMenu = true;
         SetPerMonitorWindowsVisible(false);
+        _animAnchorValid = false;
         _animTimer?.Stop();
     }
 
@@ -899,6 +903,7 @@ internal sealed partial class TrayContext
         {
             _zoomPercent = 100;
             _animTargetPercent = 100;
+            _animAnchorValid = false;
             _animTimer?.Stop();
             if (_invertColors)
             {
