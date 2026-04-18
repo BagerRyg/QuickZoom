@@ -124,7 +124,7 @@ internal sealed partial class TrayContext
         {
             Icon = _iconRef,
             Visible = true,
-            Text = "QuickZoom"
+            Text = L("Common.AppName")
         };
         _tray.MouseUp += OnTrayMouseUp;
     }
@@ -346,7 +346,7 @@ internal sealed partial class TrayContext
 
         var title = new Label
         {
-            Text = "QuickZoom",
+            Text = L("Common.AppName"),
             AutoSize = true,
             Font = new Font("Segoe UI Semibold", 12.75f, FontStyle.Bold),
             ForeColor = palette.Text,
@@ -745,8 +745,19 @@ internal sealed partial class TrayContext
             return;
         }
 
-        Cursor.Hide();
+        _cursorHideAdjustments = 0;
+        while (ShowCursor(false) >= 0)
+        {
+            _cursorHideAdjustments++;
+            if (_cursorHideAdjustments > 32)
+            {
+                break;
+            }
+        }
+
+        _cursorHideAdjustments++;
         _cursorSpotlightHidesSystemCursor = true;
+        TryApplyTransparentSystemCursors();
     }
 
     private void RestoreSystemCursorVisibility()
@@ -756,8 +767,98 @@ internal sealed partial class TrayContext
             return;
         }
 
-        Cursor.Show();
+        RestoreSystemCursorScheme();
+
+        for (int i = 0; i < Math.Max(1, _cursorHideAdjustments); i++)
+        {
+            _ = ShowCursor(true);
+        }
+
+        _cursorHideAdjustments = 0;
         _cursorSpotlightHidesSystemCursor = false;
+    }
+
+    private void TryApplyTransparentSystemCursors()
+    {
+        if (_cursorSpotlightOverridesSystemCursors)
+        {
+            return;
+        }
+
+        try
+        {
+            foreach (uint cursorId in CursorSystemIds)
+            {
+                IntPtr blankCursor = CreateTransparentCursor(32, 32);
+                if (blankCursor == IntPtr.Zero)
+                {
+                    throw new InvalidOperationException("Could not create a transparent cursor for system override.");
+                }
+
+                if (!SetSystemCursor(blankCursor, cursorId))
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    throw new InvalidOperationException($"SetSystemCursor failed for OCR value {cursorId} with Win32 error {error}.");
+                }
+            }
+
+            _cursorSpotlightOverridesSystemCursors = true;
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("CursorSpotlightOverride", ex);
+            RestoreSystemCursorScheme();
+        }
+    }
+
+    private void RestoreSystemCursorScheme()
+    {
+        _ = SystemParametersInfo(SPI_SETCURSORS, 0, IntPtr.Zero, 0);
+        _cursorSpotlightOverridesSystemCursors = false;
+    }
+
+    private static IntPtr CreateTransparentCursor(int width, int height)
+    {
+        using var colorBitmap = new Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        using Graphics graphics = Graphics.FromImage(colorBitmap);
+        graphics.Clear(Color.Transparent);
+
+        IntPtr hbmColor = colorBitmap.GetHbitmap(Color.FromArgb(0));
+        IntPtr hbmMask = CreateBitmap(width, height, 1, 1, IntPtr.Zero);
+
+        if (hbmColor == IntPtr.Zero || hbmMask == IntPtr.Zero)
+        {
+            if (hbmColor != IntPtr.Zero)
+            {
+                _ = DeleteObject(hbmColor);
+            }
+
+            if (hbmMask != IntPtr.Zero)
+            {
+                _ = DeleteObject(hbmMask);
+            }
+
+            return IntPtr.Zero;
+        }
+
+        try
+        {
+            var iconInfo = new ICONINFO
+            {
+                fIcon = false,
+                xHotspot = 0,
+                yHotspot = 0,
+                hbmMask = hbmMask,
+                hbmColor = hbmColor
+            };
+
+            return CreateIconIndirect(ref iconInfo);
+        }
+        finally
+        {
+            _ = DeleteObject(hbmColor);
+            _ = DeleteObject(hbmMask);
+        }
     }
 
     private void SuspendPerMonitorTracking()

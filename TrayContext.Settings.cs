@@ -18,7 +18,7 @@ internal sealed partial class TrayContext
         public bool InvertEnabled { get; set; }
         public bool FollowCursor { get; set; } = true;
         public int EnableKey { get; set; } = (int)Keys.Menu;
-        public int Language { get; set; } = (int)UiText.GetDefaultLanguage();
+        public int Language { get; set; } = (int)UiText.GetStartupLanguage();
         public bool InvertColors { get; set; }
         public int InvertKey { get; set; } = (int)Keys.I;
         public int InvertTrigger { get; set; } = (int)InvertTriggerKind.EnableKeyPlusMiddleClick;
@@ -149,12 +149,12 @@ internal sealed partial class TrayContext
         // Reserved for future live-menu label updates. The current tray UI is rebuilt instead.
     }
 
-    private static string KeyLabel(Keys key) => key switch
+    private string KeyLabel(Keys key) => key switch
     {
-        Keys.ControlKey => "Ctrl",
-        Keys.Menu => "Alt",
-        Keys.ShiftKey => "Shift",
-        Keys.LWin or Keys.RWin => "Win",
+        Keys.ControlKey => L("Common.KeyCtrl"),
+        Keys.Menu => L("Common.KeyAlt"),
+        Keys.ShiftKey => L("Common.KeyShift"),
+        Keys.LWin or Keys.RWin => L("Common.KeyWin"),
         _ => key.ToString()
     };
 
@@ -164,14 +164,12 @@ internal sealed partial class TrayContext
         InvertTriggerKind.EnableKeyPlusXButton1 => InvertTriggerTextForCurrentEnableKey(L("Settings.Trigger.EnableX1")),
         InvertTriggerKind.EnableKeyPlusXButton2 => InvertTriggerTextForCurrentEnableKey(L("Settings.Trigger.EnableX2")),
         InvertTriggerKind.CustomKey => KeyLabel(_invertKey),
-        _ => "Unknown"
+        _ => L("Common.Unknown")
     };
 
-    private string InvertTriggerTextForCurrentEnableKey(string template)
+    private string InvertTriggerTextForCurrentEnableKey(string templateKey)
     {
-        return template
-            .Replace("Enable Key", KeyLabel(_enableKey), StringComparison.Ordinal)
-            .Replace("Aktiveringstast", KeyLabel(_enableKey), StringComparison.Ordinal);
+        return string.Format(L(templateKey), KeyLabel(_enableKey));
     }
 
     private void TryQuarantineCorruptSettingsFile()

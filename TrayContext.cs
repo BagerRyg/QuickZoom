@@ -11,6 +11,52 @@ namespace QuickZoom;
 
 internal sealed partial class TrayContext : ApplicationContext
 {
+    [DllImport("user32.dll")]
+    private static extern int ShowCursor(bool bShow);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetSystemCursor(IntPtr hcur, uint id);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr CreateIconIndirect(ref ICONINFO piconinfo);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern IntPtr CreateBitmap(int nWidth, int nHeight, uint cPlanes, uint cBitsPerPel, IntPtr lpvBits);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern bool DeleteObject(IntPtr hObject);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ICONINFO
+    {
+        [MarshalAs(UnmanagedType.Bool)]
+        public bool fIcon;
+        public int xHotspot;
+        public int yHotspot;
+        public IntPtr hbmMask;
+        public IntPtr hbmColor;
+    }
+
+    private static readonly uint[] CursorSystemIds =
+    [
+        32512, // OCR_NORMAL
+        32513, // OCR_IBEAM
+        32514, // OCR_WAIT
+        32515, // OCR_CROSS
+        32516, // OCR_UP
+        32640, // OCR_SIZE
+        32641, // OCR_ICON
+        32642, // OCR_SIZENWSE
+        32643, // OCR_SIZENESW
+        32644, // OCR_SIZEWE
+        32645, // OCR_SIZENS
+        32646, // OCR_SIZEALL
+        32648, // OCR_NO
+        32649, // OCR_HAND
+        32650, // OCR_APPSTARTING
+        32651  // OCR_HELP
+    ];
+
     private enum ThemeMode
     {
         AutoSystem = 0,
@@ -32,7 +78,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private TrayPopupWindow? _trayPopup;
     private bool _useDarkTheme;
     private ThemeMode _themeMode = ThemeMode.AutoSystem;
-    private UiLanguage _language = UiText.GetDefaultLanguage();
+    private UiLanguage _language = UiText.GetStartupLanguage();
 
     // Hook + timers
     private IntPtr _hook = IntPtr.Zero;
@@ -113,6 +159,8 @@ internal sealed partial class TrayContext : ApplicationContext
     private long _lastCursorSpotlightTriggerTick;
     private long _cursorSpotlightVisibleUntilTick;
     private bool _cursorSpotlightHidesSystemCursor;
+    private int _cursorHideAdjustments;
+    private bool _cursorSpotlightOverridesSystemCursors;
 
     // Settings
     private readonly string _settingsPath = AppPaths.SettingsPath;
@@ -121,6 +169,7 @@ internal sealed partial class TrayContext : ApplicationContext
     public TrayContext()
     {
         LoadSettings();
+        RestoreSystemCursorScheme();
         _uiInvoker = new Control();
         _uiInvoker.CreateControl();
         InitializeCoreRuntime();
@@ -209,7 +258,7 @@ internal sealed partial class TrayContext : ApplicationContext
         }
     }
 
-    private string L(string key) => UiText.Get(_language, key);
+    private string L(string key, params object[] args) => UiText.Get(_language, key, args);
 
     private void ExecuteTrayAction(Action action)
     {

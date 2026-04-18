@@ -8,6 +8,7 @@ using System.Text;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace QuickZoom;
 
@@ -19,12 +20,32 @@ internal static class Program
     private static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new(-4);
     private const string StartupTaskInstallFlag = "--install-startup-task";
     private const int StartupTaskPriority = 3;
+    private static readonly string[] LegacyStartupTaskNames =
+    [
+        "QuickZoom Startup",
+        "QuickZoom Startup (Legacy)",
+        "QuickZoom Elevated Startup",
+        "QuickZoom 2 Startup",
+        "QuickZoom2 Startup"
+    ];
+    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
     [DllImport("user32.dll")]
     private static extern bool SetProcessDpiAwarenessContext(IntPtr dpiFlag);
 
     [DllImport("user32.dll")]
     private static extern bool SetProcessDPIAware();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint desiredAccess, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, int processId);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryFullProcessImageName(IntPtr hProcess, int flags, StringBuilder text, ref int size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr handle);
 
     private static void EnablePerMonitorDpiAwareness()
     {
@@ -43,6 +64,10 @@ internal static class Program
 
     private const int ERROR_CANCELLED = 1223;
     private const string ElevatedFlag = "--quickzoom-elevated";
+
+    private static UiLanguage StartupLanguage => UiText.GetStartupLanguage();
+
+    private static string T(string key, params object[] args) => UiText.Get(StartupLanguage, key, args);
 
     [STAThread]
     private static void Main(string[] args)
@@ -76,41 +101,45 @@ internal static class Program
         bool isManagedInstall = InstalledAppService.IsManagedInstallPath(exePath);
         bool needsSecureInstallMigration = InstalledAppService.NeedsSecureInstallMigration(exePath);
 
+        TryCleanupLegacyUserStartupEntries(exePath);
+        if (isAdmin)
+        {
+            TryCleanupLegacyScheduledTasks(exePath);
+        }
+
         if (shouldInstallStartupTask)
         {
             if (!isAdmin)
             {
                 StartupDialogs.ShowInfo(
-                    "QuickZoom",
-                    "Administrator permission is needed once",
-                    "QuickZoom needs one Administrator approval to create the elevated startup task.");
+                    T("Common.AppName"),
+                    T("Startup.AdminRequiredHeading"),
+                    T("Startup.AdminRequiredBody"));
                 return;
             }
 
             if (!TryInstallElevatedScheduledTask(out string installedExePath, out string? installError))
             {
                 StartupDialogs.ShowWarning(
-                    "QuickZoom",
-                    "Automatic setup did not complete",
-                    "QuickZoom could not copy itself into its permanent startup location.\n\n" +
-                    (string.IsNullOrWhiteSpace(installError) ? "Please try again." : installError));
+                    T("Common.AppName"),
+                    T("Startup.SetupIncompleteHeading"),
+                    T("Startup.SetupCopyFailedBody"));
             }
             else
             {
                 if (!StartupTaskService.WaitUntilReady())
                 {
                     StartupDialogs.ShowWarning(
-                        "QuickZoom",
-                        "Automatic setup did not complete",
-                        "QuickZoom copied the app to its permanent startup location, but could not confirm that the elevated startup task is ready yet.\n\n" +
-                        "Installed path:\n" + installedExePath);
+                        T("Common.AppName"),
+                        T("Startup.SetupIncompleteHeading"),
+                        T("Startup.SetupTaskNotReadyBody", installedExePath));
                 }
                 else
                 {
                     StartupDialogs.ShowTimedSuccess(
-                        "QuickZoom",
-                        "Startup service created successfully",
-                        "QuickZoom was installed to a permanent startup location and will now be able to launch elevated automatically at sign-in without prompting each boot.",
+                        T("Common.AppName"),
+                        T("Startup.SetupSuccessHeading"),
+                        T("Startup.SetupSuccessBody"),
                         15);
                 }
             }
@@ -163,10 +192,9 @@ internal static class Program
                 }
 
                 StartupDialogs.ShowWarning(
-                    "QuickZoom",
-                    "QuickZoom is running from a temporary location",
-                    "QuickZoom will continue in normal user mode from this EXE.\n\n" +
-                    "If you want startup support that keeps working after the file is moved or deleted, set up the permanent startup copy.");
+                    T("Common.AppName"),
+                    T("Startup.TempLocationHeading"),
+                    T("Startup.TempLocationBody"));
             }
             else
             {
@@ -183,13 +211,11 @@ internal static class Program
                 }
 
                 StartupDialogs.ShowWarning(
-                    "QuickZoom",
-                    "QuickZoom is not elevated",
+                    T("Common.AppName"),
+                    T("Startup.NotElevatedHeading"),
                     wantsStartupTaskSetup
-                        ? "QuickZoom could not complete elevated startup setup.\n\n" +
-                          "It will continue in normal user mode, but zoom hotkeys may not work while an Administrator app is focused."
-                        : "QuickZoom will continue in normal user mode.\n\n" +
-                          "Zoom hotkeys may not work while an Administrator app is focused until you set up elevated startup.");
+                        ? T("Startup.NotElevatedAfterFailedSetupBody")
+                        : T("Startup.NotElevatedBody"));
             }
         }
         try
@@ -254,15 +280,13 @@ internal static class Program
     private static bool PromptToInstallPermanentStartupCopy(bool isUpdate)
     {
         return StartupDialogs.ShowYesNo(
-            "QuickZoom",
+            T("Common.AppName"),
             isUpdate
-                ? "Update the installed QuickZoom startup copy?"
-                : "Install QuickZoom to a permanent startup location?",
+                ? T("Startup.InstallPromptUpdateHeading")
+                : T("Startup.InstallPromptInstallHeading"),
             isUpdate
-                ? "QuickZoom will copy this build into its permanent folder and update the startup service to use it.\n\n" +
-                  "That keeps startup working even if this downloaded EXE is moved or deleted."
-                : "QuickZoom will copy itself into a permanent folder in your user profile and create the elevated startup service there.\n\n" +
-                  "That keeps startup working even if this EXE is moved or deleted.");
+                ? T("Startup.InstallPromptUpdateBody")
+                : T("Startup.InstallPromptInstallBody"));
     }
 
     private static bool TryRelaunchAsAdministrator(string[] args, params string[] extraFlags)
@@ -304,7 +328,7 @@ internal static class Program
         if (string.IsNullOrWhiteSpace(exePath))
         {
             installedExePath = string.Empty;
-            errorMessage = "QuickZoom could not determine its current executable path.";
+            errorMessage = T("Startup.ErrorMissingExePath");
             return false;
         }
 
@@ -320,7 +344,7 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            errorMessage = "QuickZoom could not determine the current Windows user.";
+            errorMessage = T("Startup.ErrorMissingUser");
             ErrorLog.Write("StartupTaskInstall", ex);
             return false;
         }
@@ -353,7 +377,7 @@ internal static class Program
             using var process = Process.Start(startInfo);
             if (process == null)
             {
-                errorMessage = "QuickZoom could not start PowerShell to register the startup task.";
+                errorMessage = T("Startup.ErrorPowerShellLaunch");
                 return false;
             }
 
@@ -368,7 +392,7 @@ internal static class Program
                     // Best effort.
                 }
 
-                errorMessage = "PowerShell timed out while registering the elevated startup task.";
+                errorMessage = T("Startup.ErrorPowerShellTimeout");
                 ErrorLog.Write("StartupTaskInstall", errorMessage);
                 return false;
             }
@@ -379,18 +403,19 @@ internal static class Program
             if (!success)
             {
                 errorMessage = string.IsNullOrWhiteSpace(error)
-                    ? "PowerShell failed while registering the elevated startup task."
+                    ? T("Startup.ErrorPowerShellFailed")
                     : error;
                 ErrorLog.Write("StartupTaskInstall", "Task registration failed. StdOut: " + output + " StdErr: " + error);
                 return false;
             }
 
             StartupTaskService.InvalidateCache();
+            TryCleanupLegacyScheduledTasks(installedExePath);
             return success;
         }
         catch (Exception ex)
         {
-            errorMessage = "QuickZoom encountered an unexpected error while registering the startup task.";
+            errorMessage = T("Startup.ErrorUnexpected");
             ErrorLog.Write("StartupTaskInstall", ex);
             return false;
         }
@@ -687,14 +712,46 @@ internal static class Program
     {
         try
         {
-            return process.MainModule?.FileName is string path && !string.IsNullOrWhiteSpace(path)
-                ? Path.GetFullPath(path)
-                : null;
+            IntPtr handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, inheritHandle: false, process.Id);
+            if (handle != IntPtr.Zero)
+            {
+                try
+                {
+                    int size = 1024;
+                    var buffer = new StringBuilder(size);
+                    if (QueryFullProcessImageName(handle, 0, buffer, ref size) && size > 0)
+                    {
+                        string path = buffer.ToString(0, size);
+                        if (!string.IsNullOrWhiteSpace(path))
+                        {
+                            return Path.GetFullPath(path);
+                        }
+                    }
+                }
+                finally
+                {
+                    CloseHandle(handle);
+                }
+            }
         }
         catch
         {
-            return null;
+            // Fall through to the slower MainModule path.
         }
+
+        try
+        {
+            if (process.MainModule?.FileName is string path && !string.IsNullOrWhiteSpace(path))
+            {
+                return Path.GetFullPath(path);
+            }
+        }
+        catch
+        {
+            // Ignore access failures.
+        }
+
+        return null;
     }
 
     private static DateTime TryGetExecutableWriteTimeUtc(string exePath)
@@ -725,5 +782,217 @@ internal static class Program
     private static void LogFatalException(string source, Exception? exception)
     {
         ErrorLog.Write(source, exception);
+    }
+
+    private static void TryCleanupLegacyUserStartupEntries(string? currentExePath)
+    {
+        try
+        {
+            RemoveLegacyRunEntries(currentExePath);
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("StartupCleanup.Run", ex);
+        }
+
+        try
+        {
+            RemoveLegacyStartupFolderEntries(currentExePath);
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("StartupCleanup.StartupFolder", ex);
+        }
+    }
+
+    private static void RemoveLegacyRunEntries(string? currentExePath)
+    {
+        using RegistryKey? runKey = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", writable: true);
+        if (runKey == null)
+        {
+            return;
+        }
+
+        foreach (string valueName in runKey.GetValueNames())
+        {
+            string? valueData = runKey.GetValue(valueName)?.ToString();
+            if (!LooksLikeQuickZoomStartupReference(valueName, valueData))
+            {
+                continue;
+            }
+
+            if (ReferencePointsToCurrentExecutable(valueData, currentExePath))
+            {
+                continue;
+            }
+
+            runKey.DeleteValue(valueName, throwOnMissingValue: false);
+            ErrorLog.Write("StartupCleanup.Run", "Removed legacy HKCU Run entry: " + valueName);
+        }
+    }
+
+    private static void RemoveLegacyStartupFolderEntries(string? currentExePath)
+    {
+        string startupFolder = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+        if (string.IsNullOrWhiteSpace(startupFolder) || !Directory.Exists(startupFolder))
+        {
+            return;
+        }
+
+        foreach (string candidatePath in Directory.GetFiles(startupFolder))
+        {
+            string fileName = Path.GetFileName(candidatePath);
+            if (fileName.IndexOf("QuickZoom", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                continue;
+            }
+
+            if (ReferencePointsToCurrentExecutable(candidatePath, currentExePath))
+            {
+                continue;
+            }
+
+            File.Delete(candidatePath);
+            ErrorLog.Write("StartupCleanup.StartupFolder", "Removed legacy Startup-folder entry: " + candidatePath);
+        }
+    }
+
+    private static void TryCleanupLegacyScheduledTasks(string? currentExePath)
+    {
+        foreach (string taskName in GetQuickZoomTaskNames())
+        {
+            try
+            {
+                if (string.Equals(taskName, StartupTaskService.ElevatedStartupTaskName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                DeleteScheduledTask(taskName);
+                ErrorLog.Write("StartupCleanup.Task", "Removed legacy scheduled task: " + taskName);
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Write("StartupCleanup.Task", "Could not remove legacy scheduled task '" + taskName + "'. " + ex.Message);
+            }
+        }
+    }
+
+    private static IEnumerable<string> GetQuickZoomTaskNames()
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string knownName in LegacyStartupTaskNames)
+        {
+            names.Add(knownName);
+        }
+
+        const string queryArguments = "/Query /FO CSV /NH";
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "schtasks.exe",
+            Arguments = queryArguments,
+            CreateNoWindow = true,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        using Process? process = Process.Start(startInfo);
+        if (process == null)
+        {
+            return names;
+        }
+
+        if (!process.WaitForExit(4000))
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch
+            {
+                // Best effort.
+            }
+
+            return names;
+        }
+
+        string output = process.StandardOutput.ReadToEnd();
+        foreach (string rawLine in output.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            string line = rawLine.Trim();
+            if (line.Length < 2 || line[0] != '"')
+            {
+                continue;
+            }
+
+            int closingQuote = line.IndexOf("\",", StringComparison.Ordinal);
+            if (closingQuote <= 1)
+            {
+                continue;
+            }
+
+            string taskName = line.Substring(1, closingQuote - 1);
+            if (taskName.IndexOf("QuickZoom", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                names.Add(taskName);
+            }
+        }
+
+        return names;
+    }
+
+    private static void DeleteScheduledTask(string taskName)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "schtasks.exe",
+            Arguments = "/Delete /TN " + QuoteArgument(taskName) + " /F",
+            CreateNoWindow = true,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        using Process? process = Process.Start(startInfo);
+        if (process == null)
+        {
+            return;
+        }
+
+        if (!process.WaitForExit(4000))
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch
+            {
+                // Best effort.
+            }
+        }
+    }
+
+    private static bool LooksLikeQuickZoomStartupReference(string name, string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(name) && name.IndexOf("QuickZoom", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return true;
+        }
+
+        return !string.IsNullOrWhiteSpace(value) &&
+               value.IndexOf("QuickZoom", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static bool ReferencePointsToCurrentExecutable(string? reference, string? currentExePath)
+    {
+        if (string.IsNullOrWhiteSpace(reference) || string.IsNullOrWhiteSpace(currentExePath))
+        {
+            return false;
+        }
+
+        string currentFullPath = Path.GetFullPath(currentExePath);
+        return reference.IndexOf(currentFullPath, StringComparison.OrdinalIgnoreCase) >= 0;
     }
 }

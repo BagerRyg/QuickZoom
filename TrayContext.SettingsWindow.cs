@@ -118,9 +118,9 @@ internal sealed partial class TrayContext
         {
             Dock = DockStyle.Fill,
             Margin = new Padding(0),
-            Padding = new Padding(0),
+            Padding = new Padding(0, 0, 8, 8),
             BackColor = palette.MenuBackground,
-            AutoScroll = false
+            AutoScroll = true
         };
 
         var footer = new FlowLayoutPanel
@@ -155,7 +155,7 @@ internal sealed partial class TrayContext
         foreach (SettingsPageView page in pages.Values)
         {
             page.Visible = false;
-            page.Dock = DockStyle.Fill;
+            page.Dock = DockStyle.Top;
             pageHost.Controls.Add(page);
         }
 
@@ -166,8 +166,13 @@ internal sealed partial class TrayContext
             foreach ((SettingsPage key, SettingsPageView view) in pages)
             {
                 view.Visible = key == page;
+                if (key == page)
+                {
+                    view.BringToFront();
+                }
             }
 
+            pageHost.AutoScrollPosition = new Point(0, 0);
             pageHost.PerformLayout();
             pageHost.ResumeLayout(performLayout: true);
             tabBar.SelectTab(page.ToString(), notify: false);
@@ -350,9 +355,9 @@ internal sealed partial class TrayContext
             rightColumnWidth: 220));
 
         var languageSection = new SettingsSection(palette, L("Settings.LanguageSection"), L("Settings.LanguageSectionHint"));
-        languageSection.AddRow(CreateDropdownRow(L("Settings.Language"), L("Settings.LanguageHelp"), BuildLanguageItems(), _language == UiLanguage.Danish ? L("Settings.Danish") : L("Settings.English"), value =>
+        languageSection.AddRow(CreateDropdownRow(L("Settings.Language"), L("Settings.LanguageHelp"), BuildLanguageItems(), UiText.GetLanguageDisplayName(_language, _language), value =>
         {
-            _language = value == L("Settings.Danish") ? UiLanguage.Danish : UiLanguage.English;
+            _language = UiText.ParseLanguageDisplayName(_language, value);
             SaveSettings();
             RefreshMenuAndTrayUi(rebuildPopup: true);
             if (_settingsWindow != null && !_settingsWindow.IsDisposed)
@@ -383,13 +388,18 @@ internal sealed partial class TrayContext
             KeyLabel(_enableKey),
             value =>
             {
-                _enableKey = value switch
+                if (string.Equals(value, KeyLabel(Keys.ControlKey), StringComparison.Ordinal))
                 {
-                    "Ctrl" => Keys.ControlKey,
-                    "Alt" => Keys.Menu,
-                    "Shift" => Keys.ShiftKey,
-                    _ => _enableKey
-                };
+                    _enableKey = Keys.ControlKey;
+                }
+                else if (string.Equals(value, KeyLabel(Keys.Menu), StringComparison.Ordinal))
+                {
+                    _enableKey = Keys.Menu;
+                }
+                else if (string.Equals(value, KeyLabel(Keys.ShiftKey), StringComparison.Ordinal))
+                {
+                    _enableKey = Keys.ShiftKey;
+                }
                 _enableKeyPressed = false;
                 SaveSettings();
                 RefreshMenuAndTrayUi(rebuildPopup: true);
@@ -463,7 +473,7 @@ internal sealed partial class TrayContext
         var overviewSection = new SettingsSection(palette, L("Settings.AboutSection"), string.Empty);
         overviewSection.AddRow(CreateInfoRow(
             L("Settings.AboutBuildStartup"),
-            AppInfo.DisplayVersion,
+            L("About.VersionBuild", AppInfo.MajorVersion, AppInfo.BuildNumber),
             StartupTaskService.GetStatusLabel(_language)));
         overviewSection.AddRow(new SettingsRow(
             palette,
@@ -663,7 +673,7 @@ internal sealed partial class TrayContext
         return button;
     }
 
-    private string[] BuildEnableKeyItems() => ["Ctrl", "Alt", "Shift"];
+    private string[] BuildEnableKeyItems() => [KeyLabel(Keys.ControlKey), KeyLabel(Keys.Menu), KeyLabel(Keys.ShiftKey)];
 
     private string[] BuildInvertHotkeyItems() =>
     [
@@ -673,7 +683,16 @@ internal sealed partial class TrayContext
         L("Settings.Trigger.Custom")
     ];
 
-    private string[] BuildLanguageItems() => [L("Settings.English"), L("Settings.Danish")];
+    private string[] BuildLanguageItems()
+    {
+        var items = new List<string>();
+        foreach (UiLanguage language in Enum.GetValues<UiLanguage>())
+        {
+            items.Add(UiText.GetLanguageDisplayName(language, _language));
+        }
+
+        return items.ToArray();
+    }
 
     private string[] BuildThemeModeItems() => [L("Settings.ThemeAuto"), L("Settings.ThemeDark"), L("Settings.ThemeLight")];
 

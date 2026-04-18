@@ -66,7 +66,7 @@ internal sealed partial class TrayContext
         if (_hook == IntPtr.Zero)
         {
             ErrorLog.Write("InstallHook", new Win32Exception(Marshal.GetLastWin32Error(), "Failed to set the low-level mouse hook."));
-            MessageBox.Show("Failed to set low-level mouse hook.", "QuickZoom", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(L("Error.MouseHookFailed"), L("Common.AppName"), MessageBoxButtons.OK, MessageBoxIcon.Error);
             ExitThread();
         }
     }
@@ -81,7 +81,7 @@ internal sealed partial class TrayContext
         if (_kbdHook == IntPtr.Zero)
         {
             ErrorLog.Write("InstallKeyboardHook", new Win32Exception(Marshal.GetLastWin32Error(), "Failed to set the low-level keyboard hook."));
-            MessageBox.Show("Failed to set low-level keyboard hook.", "QuickZoom", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(L("Error.KeyboardHookFailed"), L("Common.AppName"), MessageBoxButtons.OK, MessageBoxIcon.Error);
             ExitThread();
         }
     }

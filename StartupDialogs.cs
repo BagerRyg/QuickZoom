@@ -12,22 +12,31 @@ internal static class StartupDialogs
 
     public static bool ShowYesNo(string title, string heading, string body)
     {
-        return ShowDialogCore(title, heading, body, "Set Up", "Not Now") == DialogResult.OK;
+        UiLanguage language = UiText.GetStartupLanguage();
+        return ShowDialogCore(
+            title,
+            heading,
+            body,
+            UiText.Get(language, "Common.SetUp"),
+            UiText.Get(language, "Common.NotNow")) == DialogResult.OK;
     }
 
     public static void ShowInfo(string title, string heading, string body)
     {
-        _ = ShowDialogCore(title, heading, body, "OK", null);
+        UiLanguage language = UiText.GetStartupLanguage();
+        _ = ShowDialogCore(title, heading, body, UiText.Get(language, "Common.Ok"), null);
     }
 
     public static void ShowWarning(string title, string heading, string body)
     {
-        _ = ShowDialogCore(title, heading, body, "OK", null);
+        UiLanguage language = UiText.GetStartupLanguage();
+        _ = ShowDialogCore(title, heading, body, UiText.Get(language, "Common.Ok"), null);
     }
 
     public static void ShowTimedSuccess(string title, string heading, string body, int secondsUntilClose)
     {
-        _ = ShowDialogCore(title, heading, body, "Continue", null, secondsUntilClose);
+        UiLanguage language = UiText.GetStartupLanguage();
+        _ = ShowDialogCore(title, heading, body, UiText.Get(language, "Common.Continue"), null, secondsUntilClose);
     }
 
     private static DialogResult ShowDialogCore(

@@ -20,7 +20,7 @@ internal sealed partial class TrayContext
 
         using var dlg = new Form
         {
-            Text = "QuickZoom",
+            Text = L("Common.AppName"),
             FormBorderStyle = FormBorderStyle.FixedDialog,
             MaximizeBox = false,
             MinimizeBox = false,
@@ -44,7 +44,7 @@ internal sealed partial class TrayContext
         {
             AutoSize = true,
             Text = L("About.Help") + "\n\n" +
-                   AppInfo.DisplayVersion + "\n" +
+                   L("About.VersionBuild", AppInfo.MajorVersion, AppInfo.BuildNumber) + "\n" +
                    L("About.Description") + "\n\n" +
                    StartupTaskService.GetStatusLabel(_language) + "\n\n" +
                    L("About.InstallPath") + ": " + installPath + "\n\n" +
@@ -97,7 +97,7 @@ internal sealed partial class TrayContext
 
         var ok = new Button
         {
-            Text = "OK",
+            Text = L("Common.Ok"),
             DialogResult = DialogResult.OK,
             AutoSize = true,
             MinimumSize = new Size(90, 32)
@@ -116,7 +116,7 @@ internal sealed partial class TrayContext
 
     private static void OpenFileLocation(string path)
     {
-        if (string.IsNullOrWhiteSpace(path) || string.Equals(path, "Not installed", StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(path))
         {
             return;
         }
@@ -291,8 +291,8 @@ internal sealed partial class TrayContext
             Anchor = AnchorStyles.Left | AnchorStyles.Right
         };
 
-        var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, AutoSize = true };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true };
+        var ok = new Button { Text = L("Common.Ok"), DialogResult = DialogResult.OK, AutoSize = true };
+        var cancel = new Button { Text = L("Common.Cancel"), DialogResult = DialogResult.Cancel, AutoSize = true };
 
         var buttons = new FlowLayoutPanel
         {
@@ -332,8 +332,9 @@ internal sealed partial class TrayContext
         return form.ShowDialog() == DialogResult.OK ? (int?)num.Value : null;
     }
 
-    private Keys? PromptForKey(Keys current, string title = "Press the key you want to hold while scrolling", string? description = null)
+    private Keys? PromptForKey(Keys current, string? title = null, string? description = null)
     {
+        title ??= L("Dialog.PromptKeyDefaultTitle");
         using var form = new Form
         {
             Text = title,
@@ -353,18 +354,18 @@ internal sealed partial class TrayContext
         {
             AutoSize = true,
             MaximumSize = new Size(560, 0),
-            Text = description ?? "Press a single key (letters, F-keys, Ctrl/Alt/Shift). Win key may be reserved by Windows."
+            Text = description ?? L("Dialog.PromptKeyDefaultDescription")
         };
 
         var cur = new Label
         {
             AutoSize = true,
-            Text = $"Current: {KeyLabel(current)}"
+            Text = L("Dialog.CurrentValue", KeyLabel(current))
         };
 
         var cancel = new Button
         {
-            Text = "Cancel",
+            Text = L("Common.Cancel"),
             DialogResult = DialogResult.Cancel,
             AutoSize = true,
             MinimumSize = new Size(100, 30)

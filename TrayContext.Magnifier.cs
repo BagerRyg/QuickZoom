@@ -494,9 +494,8 @@ internal sealed partial class TrayContext
                     ErrorLog.Write("SyncMonitorWindows", ex);
                     DisableMagAndReset();
                     MessageBox.Show(
-                        "QuickZoom could not initialize monitor magnification windows on this system. " +
-                        "Magnification was turned off to avoid black overlays.",
-                        "QuickZoom",
+                        L("Error.MagnifierInit"),
+                        L("Common.AppName"),
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Error);
                     return;

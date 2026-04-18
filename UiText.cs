@@ -1,6 +1,7 @@
 using System;
-using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
+using System.Text.Json;
 
 namespace QuickZoom;
 
@@ -12,291 +13,7 @@ internal enum UiLanguage
 
 internal static class UiText
 {
-    private static readonly Dictionary<string, string> English = new(StringComparer.Ordinal)
-    {
-        ["Common.On"] = "On",
-        ["Common.Off"] = "Off",
-        ["Tray.ToggleMagnify"] = "Enabled",
-        ["Tray.ToggleInvert"] = "Inverted Colors",
-        ["Tray.ToggleFollow"] = "Follow Cursor",
-        ["Tray.MagnifiedDisplays"] = "Magnified Displays",
-        ["Tray.MonitorUnderCursor"] = "Monitor Under Cursor",
-        ["Tray.AllDisplays"] = "All Displays",
-        ["Tray.PrimaryDisplay"] = "Primary ({0})",
-        ["Tray.DisplayN"] = "Display {0} ({1})",
-        ["Tray.Settings"] = "Settings",
-        ["Tray.KeyBinds"] = "Key Binds",
-        ["Tray.ResetCursor"] = "Reset Cursor",
-        ["Tray.About"] = "About",
-        ["Tray.Exit"] = "Exit",
-        ["Tray.ExitConfirm"] = "Are you sure?",
-        ["Tray.StartupConfigured"] = "Startup Service: Configured",
-        ["Tray.StartupMissing"] = "Startup Service: Not configured",
-        ["Tray.StartupBroken"] = "Startup Service: Needs repair",
-        ["Tray.StartupUnknown"] = "Startup Service: Status unavailable",
-        ["Tray.OpenSettingsHint"] = "Open the full settings window.",
-        ["Tray.SectionQuick"] = "QUICK CONTROLS",
-        ["Tray.SectionMenu"] = "MENU",
-        ["Tray.KeyBindsHint"] = "Jump straight to shortcut configuration.",
-        ["Tray.ResetCursorHint"] = "Refresh the Windows cursor feel if it seems off.",
-        ["Tray.ExitHint"] = "Close QuickZoom completely.",
-        ["Tray.DisplayManage"] = "Manage",
-        ["Tray.DisplayHide"] = "Hide",
-        ["Tray.OpenAction"] = "Open",
-        ["Tray.RunAction"] = "Run",
-        ["Tray.DisplayCursorHint"] = "Magnify whichever monitor the cursor is currently on.",
-        ["Tray.DisplayAllHint"] = "Keep all connected monitors in the same zoomed view.",
-        ["Tray.DisplaySelected"] = "Selected",
-        ["Tray.DisplayIncluded"] = "Included",
-        ["Tray.DisplayAvailable"] = "Available",
-        ["Tray.DisplaySummaryCursor"] = "QuickZoom follows the monitor under your cursor.",
-        ["Tray.DisplaySummaryAll"] = "All connected monitors are included.",
-        ["Tray.DisplaySummaryCount"] = "{0} monitor(s) selected.",
-        ["Settings.Title"] = "QuickZoom Settings",
-        ["Settings.Subtitle"] = "A calmer, cleaner place for the options you change less often.",
-        ["Settings.General"] = "General",
-        ["Settings.Display"] = "Display",
-        ["Settings.Appearance"] = "Appearance",
-        ["Settings.Zoom"] = "Zoom",
-        ["Settings.Input"] = "Key Binds",
-        ["Settings.Language"] = "Language",
-        ["Settings.About"] = "About",
-        ["Settings.Close"] = "Close",
-        ["Settings.CloseEsc"] = "Close (ESC)",
-        ["Settings.GeneralTitle"] = "General behavior",
-        ["Settings.DisplayTitle"] = "Display behavior",
-        ["Settings.AppearanceTitle"] = "Appearance and theme",
-        ["Settings.ZoomTitle"] = "Zoom tuning",
-        ["Settings.InputTitle"] = "Key binds",
-        ["Settings.LanguageTitle"] = "Language",
-        ["Settings.AboutTitle"] = "About QuickZoom",
-        ["Settings.SectionHintInput"] = "Keep shortcut customization here so the tray stays focused on quick actions.",
-        ["Settings.SectionHintZoom"] = "Tune how responsive and aggressive zoom feels while reading or navigating.",
-        ["Settings.SectionHintGeneral"] = "These are the core behaviors you are most likely to leave set once and trust every day.",
-        ["Settings.SectionHintLanguage"] = "Choose the interface language now and keep room for more languages later.",
-        ["Settings.SectionHintDisplay"] = "Display selection still lives in the tray for speed, while monitor behavior and defaults live here.",
-        ["Settings.SectionHintAppearance"] = "Choose whether QuickZoom follows Windows automatically or stays in a fixed light or dark look, and pick the interface language.",
-        ["Settings.GeneralSection"] = "Core options",
-        ["Settings.GeneralSectionHint"] = "Smooth movement and predictable zoom behavior should feel effortless.",
-        ["Settings.DisplaySection"] = "Monitor behavior",
-        ["Settings.DisplaySectionHint"] = "Decide how QuickZoom chooses and tracks the active monitor while zooming.",
-        ["Settings.AppearanceSection"] = "Theme",
-        ["Settings.AppearanceSectionHint"] = "Auto follows the Windows app theme, while Light and Dark keep QuickZoom fixed.",
-        ["Settings.ZoomSection"] = "Zoom controls",
-        ["Settings.ZoomSectionHint"] = "Set comfortable defaults for step size, maximum zoom, and refresh cadence.",
-        ["Settings.InputSection"] = "Keys and shortcuts",
-        ["Settings.InputSectionHint"] = "Choose the shortcut combinations that feel most natural for your workflow.",
-        ["Settings.LanguageSection"] = "Interface language",
-        ["Settings.LanguageSectionHint"] = "QuickZoom ships with English and Danish today, with room to grow later.",
-        ["Settings.AboutSection"] = "App details",
-        ["Settings.Version"] = "Version",
-        ["Settings.StartupService"] = "Startup service",
-        ["Settings.AboutBuildStartup"] = "Build and startup",
-        ["Settings.AboutLocations"] = "Locations",
-        ["Settings.AboutLocationsHelp"] = "Open the installed app folder or the local settings file location without showing long paths here.",
-        ["Settings.UsageHelp"] = "How to use",
-        ["Settings.Credits"] = "Credits",
-        ["Settings.CreditsHint"] = "A small note about who made QuickZoom and the support behind it.",
-        ["Settings.SmoothZoom"] = "Smooth Zoom",
-        ["Settings.SmoothZoomHelp"] = "Blend between zoom levels so transitions feel fluid instead of abrupt.",
-        ["Settings.AutoDisableAt100"] = "Disable Magnifier at 100%",
-        ["Settings.AutoDisableAt100Help"] = "Turn the magnifier off automatically when you zoom all the way back out.",
-        ["Settings.CenterCursor"] = "Center Cursor",
-        ["Settings.CenterCursorHelp"] = "Keep the focus point more centered while zooming in for reading and inspection.",
-        ["Settings.WiggleSpotlight"] = "Locate Cursor on Wiggle",
-        ["Settings.WiggleSpotlightHelp"] = "Quickly wiggle the mouse back and forth to flash a larger spotlight around the cursor.",
-        ["Settings.AutoSwitchMonitor"] = "Auto-switch monitor",
-        ["Settings.AutoSwitchMonitorHelp"] = "When active, QuickZoom follows the monitor your cursor moves onto. Disable it to stay locked.",
-        ["Settings.DisplayHint"] = "Use the tray quick panel whenever you want to change which displays are magnified right now.",
-        ["Settings.DisplayTrayRow"] = "Magnified display picker",
-        ["Settings.OpenTrayButton"] = "Open Tray Panel",
-        ["Settings.ThemeMode"] = "Theme mode",
-        ["Settings.ThemeModeHelp"] = "Pick whether QuickZoom follows Windows or always stays in a fixed theme.",
-        ["Settings.ThemeAuto"] = "Auto - System",
-        ["Settings.ThemeDark"] = "Dark",
-        ["Settings.ThemeLight"] = "Light",
-        ["Settings.ZoomStep"] = "Zoom step (%)",
-        ["Settings.ZoomStepHelp"] = "Choose how much each scroll notch changes the zoom level.",
-        ["Settings.MaxZoom"] = "Max zoom (%)",
-        ["Settings.MaxZoomHelp"] = "Set the highest zoom level QuickZoom can reach.",
-        ["Settings.RefreshRate"] = "Refresh rate",
-        ["Settings.RefreshRateHelp"] = "Higher refresh rates feel smoother, but can use more system resources.",
-        ["Settings.EnableKey"] = "Enable key",
-        ["Settings.EnableKeyHelp"] = "Hold this key while scrolling to start magnifying.",
-        ["Settings.InvertHotkey"] = "Invert hotkey",
-        ["Settings.InvertHotkeyHelp"] = "Choose how you toggle color inversion, even while magnification is active.",
-        ["Settings.Customize"] = "Customize",
-        ["Settings.English"] = "English",
-        ["Settings.Danish"] = "Danish",
-        ["Settings.LanguageHelp"] = "Pick the language used by the tray, settings window, and dialogs.",
-        ["Settings.MoreLanguages"] = "More languages can be added later without changing the layout.",
-        ["Settings.EnableKeyDialogTitle"] = "Choose the enable key",
-        ["Settings.EnableKeyDialogBody"] = "Press the key you want to hold while scrolling to magnify.",
-        ["Settings.InvertKeyDialogTitle"] = "Choose the invert toggle key",
-        ["Settings.InvertKeyDialogBody"] = "Press the key you want to use to toggle invert colors.",
-        ["Settings.Trigger.EnableMiddle"] = "Enable Key + Middle Click",
-        ["Settings.Trigger.EnableX1"] = "Enable Key + Mouse Button 4",
-        ["Settings.Trigger.EnableX2"] = "Enable Key + Mouse Button 5",
-        ["Settings.Trigger.Custom"] = "Custom Key",
-        ["About.Description"] = "Better and simpler magnification tool for Windows.",
-        ["About.InstallPath"] = "Install Path",
-        ["About.SettingsPath"] = "Settings Path",
-        ["About.OpenInstall"] = "Open Install Location",
-        ["About.OpenSettings"] = "Open Settings Location",
-        ["About.OpenInstallFolder"] = "Open Install Folder",
-        ["About.OpenConfigFolder"] = "Open Config Folder",
-        ["About.NotInstalled"] = "Not installed",
-        ["About.Help"] = "To activate hold the 'Enable' key and either scroll the mouse wheel or use +/- on your keyboard.",
-        ["About.HowToUseDetailed"] =
-            "Quick magnification: Hold the Enable key and scroll the mouse wheel (or use +/-) to zoom in and out quickly.\n" +
-            "Invert colors: Use the configured invert hotkey to toggle high-contrast inverted colors for bright pages and documents.\n" +
-            "Purpose: QuickZoom was built as a simple, lightweight alternative to Windows Magnifier and bulkier paid tools like ZoomText and SuperNova.\n" +
-            "Project info: Built with the help of AI, open source under the GNU license, and supported on Windows 10/11 64-bit editions.",
-        ["About.Credits"] = "Made by Bager - With the help of AI."
-    };
-
-    private static readonly Dictionary<string, string> Danish = new(StringComparer.Ordinal)
-    {
-        ["Common.On"] = "Til",
-        ["Common.Off"] = "Fra",
-        ["Tray.ToggleMagnify"] = "Aktiveret",
-        ["Tray.ToggleInvert"] = "Inverterede farver",
-        ["Tray.ToggleFollow"] = "Folg markor",
-        ["Tray.MagnifiedDisplays"] = "Forstorrede skaerme",
-        ["Tray.MonitorUnderCursor"] = "Skaerm under markor",
-        ["Tray.AllDisplays"] = "Alle skaerme",
-        ["Tray.PrimaryDisplay"] = "Primaer ({0})",
-        ["Tray.DisplayN"] = "Skaerm {0} ({1})",
-        ["Tray.Settings"] = "Indstillinger",
-        ["Tray.KeyBinds"] = "Genveje",
-        ["Tray.ResetCursor"] = "Nulstil markor",
-        ["Tray.About"] = "Om",
-        ["Tray.Exit"] = "Afslut",
-        ["Tray.ExitConfirm"] = "Er du sikker?",
-        ["Tray.StartupConfigured"] = "Startservice: Konfigureret",
-        ["Tray.StartupMissing"] = "Startservice: Ikke konfigureret",
-        ["Tray.StartupBroken"] = "Startservice: Kraever reparation",
-        ["Tray.StartupUnknown"] = "Startservice: Status utilgaengelig",
-        ["Tray.OpenSettingsHint"] = "Aabn det fulde indstillingsvindue.",
-        ["Tray.SectionQuick"] = "HURTIGE KONTROLLER",
-        ["Tray.SectionMenu"] = "MENU",
-        ["Tray.KeyBindsHint"] = "Ga direkte til genvejsindstillingerne.",
-        ["Tray.ResetCursorHint"] = "Opdater Windows-markoren hvis den foeles forkert.",
-        ["Tray.ExitHint"] = "Luk QuickZoom helt.",
-        ["Tray.DisplayManage"] = "Vaelg",
-        ["Tray.DisplayHide"] = "Skjul",
-        ["Tray.OpenAction"] = "Aabn",
-        ["Tray.RunAction"] = "Koer",
-        ["Tray.DisplayCursorHint"] = "Forstoer den skaerm markoren er paa lige nu.",
-        ["Tray.DisplayAllHint"] = "Hold alle tilsluttede skaerme i samme zoomede visning.",
-        ["Tray.DisplaySelected"] = "Valgt",
-        ["Tray.DisplayIncluded"] = "Inkluderet",
-        ["Tray.DisplayAvailable"] = "Tilgaengelig",
-        ["Tray.DisplaySummaryCursor"] = "QuickZoom folger skaermen under markoren.",
-        ["Tray.DisplaySummaryAll"] = "Alle tilsluttede skaerme er inkluderet.",
-        ["Tray.DisplaySummaryCount"] = "{0} skaerm(e) valgt.",
-        ["Settings.Title"] = "QuickZoom Indstillinger",
-        ["Settings.Subtitle"] = "Et roligere og renere sted til de indstillinger du ikke aendrer saa tit.",
-        ["Settings.General"] = "Generelt",
-        ["Settings.Display"] = "Skaerm",
-        ["Settings.Appearance"] = "Udseende",
-        ["Settings.Zoom"] = "Zoom",
-        ["Settings.Input"] = "Genveje",
-        ["Settings.Language"] = "Sprog",
-        ["Settings.About"] = "Om",
-        ["Settings.Close"] = "Luk",
-        ["Settings.CloseEsc"] = "Luk (ESC)",
-        ["Settings.GeneralTitle"] = "Generel adfaerd",
-        ["Settings.DisplayTitle"] = "Skaermadfaerd",
-        ["Settings.AppearanceTitle"] = "Udseende og tema",
-        ["Settings.ZoomTitle"] = "Zoom-justering",
-        ["Settings.InputTitle"] = "Genveje",
-        ["Settings.LanguageTitle"] = "Sprog",
-        ["Settings.AboutTitle"] = "Om QuickZoom",
-        ["Settings.SectionHintInput"] = "Hold genvejsvalg her, saa tray-panelet kan fokusere paa hurtige handlinger.",
-        ["Settings.SectionHintZoom"] = "Juster hvor responsiv og kraftig zoom skal foeles under laesning og navigation.",
-        ["Settings.SectionHintGeneral"] = "Det her er de vigtigste standardvalg som du typisk saetter en gang og stoler paa hver dag.",
-        ["Settings.SectionHintLanguage"] = "Vaelg sproget nu, og behold plads til flere sprog senere.",
-        ["Settings.SectionHintDisplay"] = "Skaermvalg ligger stadig i tray-panelet for hurtighed, mens skaermadfaerd og standarder ligger her.",
-        ["Settings.SectionHintAppearance"] = "Vaelg om QuickZoom skal folge Windows automatisk eller blive i lyst eller moerkt tema, og vaelg sproget til brugerfladen.",
-        ["Settings.GeneralSection"] = "Kernevalg",
-        ["Settings.GeneralSectionHint"] = "Glidende bevagelse og forudsigelig zoom skal foeles ubesvaeret.",
-        ["Settings.DisplaySection"] = "Skaermadfaerd",
-        ["Settings.DisplaySectionHint"] = "Bestem hvordan QuickZoom vaelger og folger den aktive skaerm under zoom.",
-        ["Settings.AppearanceSection"] = "Tema",
-        ["Settings.AppearanceSectionHint"] = "Auto folger Windows-app-temaet, mens Lys og Moerk holder QuickZoom fast i et bestemt udseende.",
-        ["Settings.ZoomSection"] = "Zoom-kontroller",
-        ["Settings.ZoomSectionHint"] = "Saet gode standarder for zoomtrin, maksimal zoom og opdateringsrytme.",
-        ["Settings.InputSection"] = "Taster og genveje",
-        ["Settings.InputSectionHint"] = "Vaelg de genveje som foeles mest naturlige i dit workflow.",
-        ["Settings.LanguageSection"] = "Brugerfladesprog",
-        ["Settings.LanguageSectionHint"] = "QuickZoom leveres med Engelsk og Dansk i dag, og der er plads til mere senere.",
-        ["Settings.AboutSection"] = "App-detaljer",
-        ["Settings.Version"] = "Version",
-        ["Settings.StartupService"] = "Startservice",
-        ["Settings.AboutBuildStartup"] = "Build og opstart",
-        ["Settings.AboutLocations"] = "Placeringer",
-        ["Settings.AboutLocationsHelp"] = "Aabn den installerede appmappe eller placeringen for den lokale indstillingsfil uden at vise lange stier her.",
-        ["Settings.UsageHelp"] = "Saadan bruges den",
-        ["Settings.Credits"] = "Credits",
-        ["Settings.CreditsHint"] = "En lille note om hvem der lavede QuickZoom og hjaelpen bag.",
-        ["Settings.SmoothZoom"] = "Glat zoom",
-        ["Settings.SmoothZoomHelp"] = "Bland mellem zoomniveauer saa overgange foeles flydende i stedet for abrupte.",
-        ["Settings.AutoDisableAt100"] = "Sluk forstorrelsen ved 100%",
-        ["Settings.AutoDisableAt100Help"] = "Sluk automatisk for forstorrelsen naar du zoomer helt tilbage ud.",
-        ["Settings.CenterCursor"] = "Centrer markor",
-        ["Settings.CenterCursorHelp"] = "Hold fokuspunktet mere centreret ved indzoomning til laesning og inspektion.",
-        ["Settings.WiggleSpotlight"] = "Find markor ved ryst",
-        ["Settings.WiggleSpotlightHelp"] = "Ryst musen hurtigt frem og tilbage for kort at vise en stoerre markor-spotlight.",
-        ["Settings.AutoSwitchMonitor"] = "Skift skaerm automatisk",
-        ["Settings.AutoSwitchMonitorHelp"] = "Naar den er aktiv, folger QuickZoom skaermen som markoren flytter over paa. Sluk for at laase den.",
-        ["Settings.DisplayHint"] = "Brug tray-panelet naar du hurtigt vil aendre hvilke skaerme der forstoerres lige nu.",
-        ["Settings.DisplayTrayRow"] = "Valg af forstorret skaerm",
-        ["Settings.OpenTrayButton"] = "Aabn tray-panel",
-        ["Settings.ThemeMode"] = "Tematilstand",
-        ["Settings.ThemeModeHelp"] = "Vaelg om QuickZoom skal folge Windows eller altid bruge et fast tema.",
-        ["Settings.ThemeAuto"] = "Auto - System",
-        ["Settings.ThemeDark"] = "Moerk",
-        ["Settings.ThemeLight"] = "Lys",
-        ["Settings.ZoomStep"] = "Zoomtrin (%)",
-        ["Settings.ZoomStepHelp"] = "Vaelg hvor meget hvert scrolltrin skal aendre zoomniveauet.",
-        ["Settings.MaxZoom"] = "Maks zoom (%)",
-        ["Settings.MaxZoomHelp"] = "Saet det hoejeste zoomniveau QuickZoom maa naa.",
-        ["Settings.RefreshRate"] = "Opdateringshastighed",
-        ["Settings.RefreshRateHelp"] = "Hoejere opdateringshastigheder foeles glattere, men kan bruge flere systemressourcer.",
-        ["Settings.EnableKey"] = "Aktiveringstast",
-        ["Settings.EnableKeyHelp"] = "Hold denne tast nede mens du scroller for at starte zoom.",
-        ["Settings.InvertHotkey"] = "Invert-genvej",
-        ["Settings.InvertHotkeyHelp"] = "Vaelg hvordan du skifter farveinvertering, ogsaa mens zoom er aktiv.",
-        ["Settings.Customize"] = "Tilpas",
-        ["Settings.English"] = "Engelsk",
-        ["Settings.Danish"] = "Dansk",
-        ["Settings.LanguageHelp"] = "Vaelg sproget til tray, indstillingsvindue og dialoger.",
-        ["Settings.MoreLanguages"] = "Flere sprog kan tilfoejes senere uden at aendre layoutet.",
-        ["Settings.EnableKeyDialogTitle"] = "Vaelg aktiveringstast",
-        ["Settings.EnableKeyDialogBody"] = "Tryk paa den tast du vil holde nede mens du scroller for at zoome.",
-        ["Settings.InvertKeyDialogTitle"] = "Vaelg invert-genvej",
-        ["Settings.InvertKeyDialogBody"] = "Tryk paa den tast du vil bruge til at skifte farveinvertering.",
-        ["Settings.Trigger.EnableMiddle"] = "Aktiveringstast + Midterklik",
-        ["Settings.Trigger.EnableX1"] = "Aktiveringstast + Museknap 4",
-        ["Settings.Trigger.EnableX2"] = "Aktiveringstast + Museknap 5",
-        ["Settings.Trigger.Custom"] = "Brugerdefineret tast",
-        ["About.Description"] = "Et bedre og enklere forstorrelsesvaerktoj til Windows.",
-        ["About.InstallPath"] = "Installationssti",
-        ["About.SettingsPath"] = "Indstillingssti",
-        ["About.OpenInstall"] = "Aabn installationsplacering",
-        ["About.OpenSettings"] = "Aabn indstillingsplacering",
-        ["About.OpenInstallFolder"] = "Aabn installationsmappe",
-        ["About.OpenConfigFolder"] = "Aabn konfigurationsmappe",
-        ["About.NotInstalled"] = "Ikke installeret",
-        ["About.Help"] = "Hold 'Aktiveringstast' nede og scroll med musehjulet eller brug +/- paa tastaturet for at aktivere zoom.",
-        ["About.HowToUseDetailed"] =
-            "Hurtig forstoerrelse: Hold Aktiveringstast nede og scroll med musehjulet (eller brug +/-) for hurtigt at zoome ind og ud.\n" +
-            "Inverter farver: Brug den valgte invert-genvej for at skifte til hoejkontrast inverterede farver paa lyse sider og dokumenter.\n" +
-            "Formaal: QuickZoom er lavet som et simpelt og letvaegts alternativ til Windows Forstoerrelsesglas og tungere betalte loesninger som ZoomText og SuperNova.\n" +
-            "Projektinfo: Kodet med hjaelp fra AI, open source under GNU-licensen, og understoettet paa Windows 10/11 64-bit versioner.",
-        ["About.Credits"] = "Lavet af Bager - med hjaelp fra AI."
-    };
+    private static readonly LocalizationManager Manager = new();
 
     internal static UiLanguage GetDefaultLanguage()
     {
@@ -306,19 +23,67 @@ internal static class UiText
             name = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
         }
 
-        return string.Equals(name, "da", StringComparison.OrdinalIgnoreCase)
-            ? UiLanguage.Danish
-            : UiLanguage.English;
+        return name.ToLowerInvariant() switch
+        {
+            "da" => UiLanguage.Danish,
+            _ => UiLanguage.English
+        };
     }
 
-    internal static string Get(UiLanguage language, string key)
+    internal static UiLanguage GetStartupLanguage()
     {
-        Dictionary<string, string> table = language == UiLanguage.Danish ? Danish : English;
-        if (table.TryGetValue(key, out string? value))
+        try
         {
-            return value;
+            foreach (string candidatePath in new[] { AppPaths.SettingsPath, AppPaths.LegacySettingsPath })
+            {
+                if (!File.Exists(candidatePath))
+                {
+                    continue;
+                }
+
+                using FileStream stream = File.OpenRead(candidatePath);
+                using JsonDocument document = JsonDocument.Parse(stream);
+                if (document.RootElement.TryGetProperty("Language", out JsonElement languageElement) &&
+                    languageElement.ValueKind == JsonValueKind.Number &&
+                    languageElement.TryGetInt32(out int languageValue) &&
+                    Enum.IsDefined(typeof(UiLanguage), languageValue))
+                {
+                    return (UiLanguage)languageValue;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("UiText", $"Could not determine the startup language. {ex.Message}");
         }
 
-        return English.TryGetValue(key, out string? fallback) ? fallback : key;
+        return GetDefaultLanguage();
+    }
+
+    internal static string Get(UiLanguage language, string key, params object[] args)
+    {
+        return Manager.Get(language, key, args);
+    }
+
+    internal static string GetLanguageDisplayName(UiLanguage displayLanguage, UiLanguage currentUiLanguage)
+    {
+        return Get(currentUiLanguage, displayLanguage switch
+        {
+            UiLanguage.Danish => "Settings.Danish",
+            _ => "Settings.English"
+        });
+    }
+
+    internal static UiLanguage ParseLanguageDisplayName(UiLanguage currentUiLanguage, string value)
+    {
+        foreach (UiLanguage language in Enum.GetValues<UiLanguage>())
+        {
+            if (string.Equals(GetLanguageDisplayName(language, currentUiLanguage), value, StringComparison.Ordinal))
+            {
+                return language;
+            }
+        }
+
+        return UiLanguage.English;
     }
 }
