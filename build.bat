@@ -84,7 +84,7 @@ if "%DO_SIGN%"=="1" (
 
   if not exist "%SIGN_PFX%" (
     echo ERROR: SIGN_PFX file not found: "%SIGN_PFX%"
-    echo Tip: Run create_signing_cert.ps1 to create a self-signed code-signing cert.
+    echo Tip: Run scripts\create_signing_cert.ps1 to create a self-signed code-signing cert.
     pause
     exit /b 1
   )
@@ -103,7 +103,7 @@ if "%DO_SIGN%"=="1" (
 
   if not "%EXE_TO_SIGN%"=="" (
     echo Signing build output: "%EXE_TO_SIGN%"
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0sign_exe.ps1" -ExePath "%EXE_TO_SIGN%" -PfxPath "%SIGN_PFX%" -PfxPassword "%SIGN_PWD%"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\sign_exe.ps1" -ExePath "%EXE_TO_SIGN%" -PfxPath "%SIGN_PFX%" -PfxPassword "%SIGN_PWD%"
     if errorlevel 1 (
       echo ERROR: Signing build output failed.
       pause
@@ -119,7 +119,7 @@ if "%DO_SIGN%"=="1" (
   set "PUBLISHED_EXE=%PUBLISH_DIR%\QuickZoom.exe"
   if exist "%PUBLISHED_EXE%" (
     echo Signing self-contained publish: "%PUBLISHED_EXE%"
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0sign_exe.ps1" -ExePath "%PUBLISHED_EXE%" -PfxPath "%SIGN_PFX%" -PfxPassword "%SIGN_PWD%"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\sign_exe.ps1" -ExePath "%PUBLISHED_EXE%" -PfxPath "%SIGN_PFX%" -PfxPassword "%SIGN_PWD%"
     if errorlevel 1 (
       echo ERROR: Signing self-contained publish failed.
       pause

@@ -310,11 +310,6 @@ internal sealed partial class TrayContext
 
         ResetExitConfirmation();
 
-        if (_trayPopup != null && !_trayPopup.IsDisposed)
-        {
-            CloseTrayPopup();
-        }
-
         int basePercent = _smoothZoom ? _animTargetPercent : _zoomPercent;
         int newTarget = Math.Max(MinPercent, Math.Min(_maxPercent, basePercent + (detents * _stepPercent)));
 

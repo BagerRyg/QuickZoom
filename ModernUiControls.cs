@@ -834,6 +834,7 @@ internal sealed class KeyBadgeControl : Control, ISurfaceBackgroundProvider
 {
     private ThemePalette _palette;
     private bool _hovered;
+    private bool _pressed;
 
     public KeyBadgeControl(ThemePalette palette, string text)
     {
@@ -844,11 +845,14 @@ internal sealed class KeyBadgeControl : Control, ISurfaceBackgroundProvider
             ControlStyles.OptimizedDoubleBuffer |
             ControlStyles.ResizeRedraw |
             ControlStyles.SupportsTransparentBackColor |
-            ControlStyles.UserPaint,
+            ControlStyles.UserPaint |
+            ControlStyles.Selectable,
             true);
         BackColor = Color.Transparent;
         Size = new Size(94, 34);
         Margin = new Padding(0);
+        Cursor = Cursors.Hand;
+        TabStop = true;
     }
 
     public void ApplyTheme(ThemePalette palette)
@@ -857,7 +861,9 @@ internal sealed class KeyBadgeControl : Control, ISurfaceBackgroundProvider
         Invalidate();
     }
 
-    public Color SurfaceBackgroundColor => _hovered ? _palette.ButtonHover : _palette.ButtonBackground;
+    public Color SurfaceBackgroundColor => _pressed
+        ? _palette.ButtonPressed
+        : (_hovered ? _palette.ButtonHover : _palette.ButtonBackground);
 
     protected override void OnMouseEnter(EventArgs e)
     {
@@ -869,8 +875,38 @@ internal sealed class KeyBadgeControl : Control, ISurfaceBackgroundProvider
     protected override void OnMouseLeave(EventArgs e)
     {
         _hovered = false;
+        _pressed = false;
         Invalidate();
         base.OnMouseLeave(e);
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        _pressed = true;
+        Focus();
+        Invalidate();
+        base.OnMouseDown(e);
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        _pressed = false;
+        Invalidate();
+        base.OnMouseUp(e);
+    }
+
+    protected override bool IsInputKey(Keys keyData) => keyData is Keys.Space or Keys.Enter || base.IsInputKey(keyData);
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.KeyCode is Keys.Space or Keys.Enter)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            OnClick(EventArgs.Empty);
+        }
+
+        base.OnKeyDown(e);
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -899,6 +935,12 @@ internal sealed class KeyBadgeControl : Control, ISurfaceBackgroundProvider
             textRect,
             _palette.Text,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+        if (Focused)
+        {
+            using Pen focusPen = new(Color.FromArgb(120, _palette.Accent), 1.5f);
+            e.Graphics.DrawPath(focusPen, path);
+        }
     }
 
     protected override void OnPaintBackground(PaintEventArgs pevent)

@@ -702,39 +702,14 @@ internal sealed partial class TrayContext
     {
         var badge = new KeyBadgeControl(CurrentTheme, currentKeyLabel)
         {
-            Width = 124,
+            Width = 198,
             Height = 34,
             Dock = DockStyle.Fill
         };
         badge.ApplyTheme(CurrentTheme);
+        badge.Click += (_, _) => onCustomize();
 
-        var button = new ModernButton
-        {
-            Text = L("Settings.Customize"),
-            Dock = DockStyle.Fill,
-            Margin = new Padding(10, 0, 0, 0)
-        };
-        button.ApplyTheme(CurrentTheme, emphasis: false);
-        button.Click += (_, _) => onCustomize();
-
-        var row = new TableLayoutPanel
-        {
-            AutoSize = false,
-            Width = rightColumnWidth,
-            Height = 38,
-            ColumnCount = 2,
-            RowCount = 1,
-            BackColor = Color.Transparent,
-            Margin = new Padding(0),
-            Padding = new Padding(0)
-        };
-        row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 124));
-        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        row.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        row.Controls.Add(badge, 0, 0);
-        row.Controls.Add(button, 1, 0);
-
-        return new SettingsRow(CurrentTheme, title, description, row, rightColumnWidth);
+        return new SettingsRow(CurrentTheme, title, description, badge, Math.Max(198, rightColumnWidth));
     }
 
     private SettingsRow CreateInfoRow(string title, string value, string description, Control? actionButton = null, int rightColumnWidth = 240)

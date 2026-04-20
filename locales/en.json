@@ -178,7 +178,7 @@
   "Tray.Exit": "Quit",
   "Tray.ExitConfirm": "Are you sure?",
   "Tray.ExitHint": "Close QuickZoom completely.",
-  "Tray.KeyBinds": "Key Binds",
+  "Tray.KeyBinds": "Keyboard Shortcuts",
   "Tray.KeyBindsHint": "Jump straight to shortcut configuration.",
   "Tray.MagnifiedDisplays": "Magnified Displays",
   "Tray.MonitorUnderCursor": "Where Cursor Is Present",
