@@ -96,6 +96,16 @@ This setup can:
   or
 - a self-contained published build
 
+## Screenshots
+
+### Tray Menu
+
+![QuickZoom tray menu](assets/images/tray_menu.png)
+
+### Settings Window
+
+![QuickZoom settings window](assets/images/settings.png)
+
 ## Build from source
 
 ```powershell
@@ -116,14 +126,6 @@ QuickZoom is meant to be a practical accessibility tool for people who want:
 - a simpler alternative to Windows Magnifier
 - a lightweight tray-first workflow
 - something less bulky than commercial accessibility suites
-
-## Screenshot
-
-Add a screenshot here once you have one in the repository:
-
-```md
-![QuickZoom tray menu](docs/images/tray-menu.png)
-```
 
 ## Notes
 

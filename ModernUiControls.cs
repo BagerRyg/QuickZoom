@@ -1124,6 +1124,8 @@ internal sealed class ModernButton : Button
         MinimumSize = new Size(120, 38);
         Padding = new Padding(14, 0, 14, 0);
         TextAlign = ContentAlignment.MiddleCenter;
+        FlatAppearance.BorderSize = 1;
+        Resize += (_, _) => ControlDrawing.ApplyRoundedRegion(this, 12);
     }
 
     public void ApplyTheme(ThemePalette palette, bool emphasis = false, bool destructive = false, bool destructiveHoverEnabled = false)
@@ -1137,7 +1139,7 @@ internal sealed class ModernButton : Button
         BackColor = destructive
             ? destructiveBack
             : emphasis ? palette.Accent : palette.ButtonBackground;
-        ForeColor = emphasis && !destructive ? Color.FromArgb(16, 22, 18) : palette.Text;
+        ForeColor = emphasis && !destructive ? Color.White : palette.Text;
         FlatAppearance.BorderColor = useDestructiveBorder
             ? destructiveBorder
             : emphasis ? palette.Accent : palette.Border;
@@ -1147,6 +1149,226 @@ internal sealed class ModernButton : Button
         FlatAppearance.MouseDownBackColor = destructive || destructiveHoverEnabled
             ? destructivePressed
             : emphasis ? palette.AccentPressed : palette.ButtonPressed;
+    }
+}
+
+internal sealed class SettingsSidebarItem : Control, ISurfaceBackgroundProvider, IChildSurfaceBackgroundRenderer
+{
+    private static readonly Color SidebarBackgroundDark = Color.FromArgb(17, 20, 26);
+    private static readonly Color SidebarHoverDark = Color.FromArgb(29, 34, 43);
+    private static readonly Color SidebarSelectedDark = Color.FromArgb(35, 42, 53);
+    private static readonly Color SidebarAccentDark = Color.FromArgb(124, 92, 255);
+
+    private readonly FluentIconControl _iconControl;
+    private readonly Label _titleLabel;
+    private ThemePalette _palette;
+    private bool _hovered;
+    private bool _pressed;
+    private bool _selected;
+
+    public SettingsSidebarItem(ThemePalette palette, string title, TrayFluentIcon icon)
+    {
+        _palette = palette;
+        SetStyle(
+            ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.OptimizedDoubleBuffer |
+            ControlStyles.ResizeRedraw |
+            ControlStyles.SupportsTransparentBackColor |
+            ControlStyles.UserPaint,
+            true);
+
+        BackColor = Color.Transparent;
+        Cursor = Cursors.Hand;
+        TabStop = false;
+        Margin = new Padding(0, 0, 0, 6);
+        Padding = new Padding(12, 0, 10, 0);
+
+        _iconControl = new FluentIconControl(palette, icon)
+        {
+            BackColor = Color.Transparent
+        };
+        _titleLabel = new Label
+        {
+            Text = title,
+            AutoSize = false,
+            BackColor = Color.Transparent,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Font = new Font("Segoe UI Semibold", 9.4f, FontStyle.Bold),
+            AutoEllipsis = true
+        };
+
+        Controls.Add(_iconControl);
+        Controls.Add(_titleLabel);
+
+        foreach (Control control in Controls)
+        {
+            control.Click += (_, _) => OnClick(EventArgs.Empty);
+            control.MouseEnter += (_, _) => SetState(true, _pressed);
+            control.MouseLeave += (_, _) => SetState(false, false);
+            control.MouseDown += (_, _) => SetState(true, true);
+            control.MouseUp += (_, _) => SetState(true, false);
+        }
+
+        ApplyTheme(palette);
+        Height = 44;
+    }
+
+    public bool Selected
+    {
+        get => _selected;
+        set
+        {
+            _selected = value;
+            ApplyTheme(_palette);
+        }
+    }
+
+    public string Title
+    {
+        get => _titleLabel.Text;
+        set => _titleLabel.Text = value;
+    }
+
+    public Color SurfaceBackgroundColor
+    {
+        get
+        {
+            if (_selected)
+            {
+                return _useDarkPalette ? SidebarSelectedDark : _palette.ButtonHover;
+            }
+
+            if (_pressed)
+            {
+                return _palette.ButtonPressed;
+            }
+
+            if (_hovered)
+            {
+                return _useDarkPalette ? SidebarHoverDark : _palette.ButtonHover;
+            }
+
+            return _useDarkPalette ? SidebarBackgroundDark : _palette.ButtonBackground;
+        }
+    }
+
+    private bool _useDarkPalette => _palette.MenuBackground.GetBrightness() < 0.45f;
+
+    public void ApplyTheme(ThemePalette palette)
+    {
+        _palette = palette;
+        _iconControl.ApplyTheme(palette);
+        _titleLabel.ForeColor = _selected ? palette.Text : palette.SecondaryText;
+        Invalidate(true);
+    }
+
+    protected override void OnCreateControl()
+    {
+        base.OnCreateControl();
+        Height = ControlDrawing.ScaleLogical(this, 44);
+        Padding = new Padding(
+            ControlDrawing.ScaleLogical(this, 12),
+            0,
+            ControlDrawing.ScaleLogical(this, 10),
+            0);
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        if (_iconControl is null || _titleLabel is null)
+        {
+            return;
+        }
+
+        int iconSize = ControlDrawing.ScaleLogical(this, 18);
+        _iconControl.Bounds = new Rectangle(Padding.Left + 6, (Height - iconSize) / 2, iconSize, iconSize);
+        _titleLabel.Bounds = new Rectangle(_iconControl.Right + 9, 0, Math.Max(40, Width - _iconControl.Right - Padding.Right - 9), Height);
+        ControlDrawing.ApplyRoundedRegion(this, ControlDrawing.ScaleLogical(this, 14));
+    }
+
+    protected override void OnMouseEnter(EventArgs e)
+    {
+        base.OnMouseEnter(e);
+        SetState(true, _pressed);
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        base.OnMouseLeave(e);
+        SetState(false, false);
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        base.OnMouseDown(e);
+        SetState(_hovered, true);
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        base.OnMouseUp(e);
+        SetState(_hovered, false);
+    }
+
+    protected override bool IsInputKey(Keys keyData) => keyData is Keys.Enter or Keys.Space || base.IsInputKey(keyData);
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.KeyCode is Keys.Enter or Keys.Space)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            OnClick(EventArgs.Empty);
+        }
+
+        base.OnKeyDown(e);
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs pevent)
+    {
+        Color backColor = Parent is ISurfaceBackgroundProvider provider
+            ? provider.SurfaceBackgroundColor
+            : ControlDrawing.EffectiveBackColor(this);
+        using SolidBrush brush = new(backColor);
+        pevent.Graphics.FillRectangle(brush, ClientRectangle);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+        Rectangle fillRect = new(1, 1, Math.Max(1, Width - 2), Math.Max(1, Height - 2));
+        using GraphicsPath fillPath = ControlDrawing.RoundedRect(fillRect, ControlDrawing.ScaleLogical(this, 14));
+        using SolidBrush fillBrush = new(SurfaceBackgroundColor);
+        e.Graphics.FillPath(fillBrush, fillPath);
+
+        if (_selected)
+        {
+            int accentWidth = Math.Max(3, ControlDrawing.ScaleLogical(this, 3));
+            Rectangle accentRect = new(1, 7, accentWidth, Math.Max(1, Height - 14));
+            using GraphicsPath accentPath = ControlDrawing.RoundedRect(accentRect, accentWidth);
+            using SolidBrush accentBrush = new(_useDarkPalette ? SidebarAccentDark : _palette.Accent);
+            e.Graphics.FillPath(accentBrush, accentPath);
+        }
+
+    }
+
+    public void PaintChildSurfaceBackground(Graphics graphics, Rectangle childBounds)
+    {
+        using Region clip = graphics.Clip?.Clone() ?? new Region(childBounds);
+        graphics.SetClip(childBounds);
+        using SolidBrush backgroundBrush = new(SurfaceBackgroundColor);
+        graphics.FillRectangle(backgroundBrush, childBounds);
+        graphics.Clip = clip;
+    }
+
+    private void SetState(bool hovered, bool pressed)
+    {
+        _hovered = hovered;
+        _pressed = pressed;
+        Invalidate();
     }
 }
 
@@ -1830,12 +2052,12 @@ internal sealed class SettingsRow : ModernSurfacePanel
         _accessoryControl = control;
         _rightColumnWidth = Math.Max(96, rightColumnWidth);
         _valueText = valueText;
-        CornerRadius = 14;
+        CornerRadius = 16;
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        Margin = new Padding(0, 0, 0, 12);
-        Padding = hasDescription ? new Padding(18, 16, 18, 16) : new Padding(18, 14, 18, 14);
-        MinimumSize = new Size(0, hasDescription ? 72 : 56);
+        Margin = new Padding(0, 0, 0, 8);
+        Padding = hasDescription ? new Padding(14, 12, 14, 12) : new Padding(14, 11, 14, 11);
+        MinimumSize = new Size(0, hasDescription ? 66 : 50);
         BackColor = palette.ControlBackground;
 
         _grid = new TableLayoutPanel
@@ -1862,7 +2084,7 @@ internal sealed class SettingsRow : ModernSurfacePanel
             RowCount = 2,
             BackColor = Color.Transparent,
             Margin = new Padding(0),
-            Padding = new Padding(0, 2, 18, 2)
+            Padding = new Padding(0, 2, 12, 2)
         };
         _left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -1872,7 +2094,7 @@ internal sealed class SettingsRow : ModernSurfacePanel
         {
             Text = title,
             AutoSize = true,
-            Font = new Font("Segoe UI Semibold", 10.8f, FontStyle.Bold),
+            Font = new Font("Segoe UI Semibold", 10f, FontStyle.Bold),
             Margin = new Padding(0),
             BackColor = Color.Transparent
         };
@@ -1880,7 +2102,7 @@ internal sealed class SettingsRow : ModernSurfacePanel
         {
             Text = description,
             AutoSize = true,
-            Font = new Font("Segoe UI", 9.1f, FontStyle.Regular),
+            Font = new Font("Segoe UI", 8.8f, FontStyle.Regular),
             Margin = new Padding(0, 4, 0, 0),
             BackColor = Color.Transparent
         };
@@ -1920,7 +2142,7 @@ internal sealed class SettingsRow : ModernSurfacePanel
     public void ApplyTheme(ThemePalette palette)
     {
         BackColor = palette.ControlBackground;
-        BorderAlpha = 22;
+        BorderAlpha = 20;
         _titleLabel.ForeColor = palette.Text;
         _descriptionLabel.ForeColor = palette.SecondaryText;
         Invalidate(true);
@@ -1928,8 +2150,8 @@ internal sealed class SettingsRow : ModernSurfacePanel
 
     private void UpdateLayoutMetrics()
     {
-        int availableWidth = Math.Max(520, Width - Padding.Horizontal);
-        int leftWidth = Math.Max(280, availableWidth - _rightColumnWidth - 18);
+        int availableWidth = Math.Max(320, Width - Padding.Horizontal);
+        int leftWidth = Math.Max(210, availableWidth - _rightColumnWidth - 14);
         _grid.ColumnStyles[1].Width = _rightColumnWidth;
         _titleLabel.MaximumSize = new Size(leftWidth, 0);
         _descriptionLabel.MaximumSize = new Size(leftWidth, 0);
@@ -1955,7 +2177,7 @@ internal sealed class SettingsSection : Panel
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
         Dock = DockStyle.Top;
-        Margin = new Padding(0, 0, 0, 22);
+        Margin = new Padding(0, 0, 0, 16);
         Padding = new Padding(0);
         BackColor = Color.Transparent;
 
@@ -1975,18 +2197,18 @@ internal sealed class SettingsSection : Panel
         {
             Text = title,
             AutoSize = true,
-            Font = new Font("Segoe UI Semibold", 12.2f, FontStyle.Bold),
+            Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
             Margin = new Padding(0),
             BackColor = Color.Transparent,
-            ForeColor = palette.Text
+            ForeColor = palette.SecondaryText
         };
         _descriptionLabel = new Label
         {
             Text = description,
             AutoSize = true,
             MaximumSize = new Size(760, 0),
-            Font = new Font("Segoe UI", 9.2f, FontStyle.Regular),
-            Margin = new Padding(0, 6, 0, 14),
+            Font = new Font("Segoe UI", 8.6f, FontStyle.Regular),
+            Margin = new Padding(0, 4, 0, 12),
             BackColor = Color.Transparent,
             ForeColor = palette.SecondaryText
         };
@@ -2020,17 +2242,19 @@ internal sealed class SettingsSection : Panel
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.Controls.Add(_rows, 0, rowIndex);
         Controls.Add(layout);
+        Resize += (_, _) => UpdateRowWidths();
     }
 
     public void AddRow(Control row)
     {
         row.Dock = DockStyle.Top;
-        row.Margin = new Padding(0, 0, 0, 10);
-        row.MinimumSize = new Size(1120, row.MinimumSize.Height);
-        row.Width = 1120;
+        row.Margin = new Padding(0, 0, 0, 8);
+        row.MinimumSize = new Size(0, row.MinimumSize.Height);
+        row.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top;
         _rows.RowCount++;
         _rows.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _rows.Controls.Add(row, 0, _nextRowIndex++);
+        UpdateRowWidths();
     }
 
     public void ClearRows()
@@ -2044,6 +2268,15 @@ internal sealed class SettingsSection : Panel
         _rows.RowStyles.Clear();
         _rows.RowCount = 0;
         _nextRowIndex = 0;
+    }
+
+    private void UpdateRowWidths()
+    {
+        int targetWidth = Math.Max(360, ClientSize.Width);
+        foreach (Control row in _rows.Controls)
+        {
+            row.Width = targetWidth;
+        }
     }
 }
 
@@ -2081,7 +2314,7 @@ internal sealed class SettingsPageView : Panel
         {
             Text = title,
             AutoSize = true,
-            Font = new Font("Segoe UI Semibold", 17f, FontStyle.Bold),
+            Font = new Font("Segoe UI Semibold", 18f, FontStyle.Bold),
             Margin = new Padding(0),
             BackColor = Color.Transparent,
             ForeColor = palette.Text
@@ -2090,9 +2323,9 @@ internal sealed class SettingsPageView : Panel
         {
             Text = description,
             AutoSize = true,
-            MaximumSize = new Size(760, 0),
-            Font = new Font("Segoe UI", 10f, FontStyle.Regular),
-            Margin = new Padding(0, 8, 0, 24),
+            MaximumSize = new Size(520, 0),
+            Font = new Font("Segoe UI", 9f, FontStyle.Regular),
+            Margin = new Padding(0, 4, 0, 12),
             BackColor = Color.Transparent,
             ForeColor = palette.SecondaryText
         };
@@ -2125,15 +2358,26 @@ internal sealed class SettingsPageView : Panel
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.Controls.Add(_sectionHost, 0, rowIndex);
         Controls.Add(layout);
+        Resize += (_, _) => UpdateSectionWidths();
     }
 
     public void AddSection(SettingsSection section)
     {
         section.Dock = DockStyle.Top;
-        section.Width = 1120;
+        section.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top;
         _sectionHost.RowCount++;
         _sectionHost.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _sectionHost.Controls.Add(section, 0, _nextSectionIndex++);
+        UpdateSectionWidths();
+    }
+
+    private void UpdateSectionWidths()
+    {
+        int targetWidth = Math.Max(400, ClientSize.Width);
+        foreach (Control section in _sectionHost.Controls)
+        {
+            section.Width = targetWidth;
+        }
     }
 }
 

@@ -17,7 +17,7 @@ internal sealed partial class TrayContext
         About
     }
 
-    private void ShowSettingsWindow(SettingsPage initialPage = SettingsPage.General)
+    private void ShowSettingsWindow(SettingsPage initialPage = SettingsPage.General, Point? restoreLocation = null)
     {
         if (_settingsWindow != null && !_settingsWindow.IsDisposed)
         {
@@ -61,62 +61,92 @@ internal sealed partial class TrayContext
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 4,
-            Padding = new Padding(24),
+            ColumnCount = 2,
+            RowCount = 1,
+            Padding = new Padding(20),
             Margin = new Padding(0),
             BackColor = palette.MenuBackground
         };
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 270));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var header = new TableLayoutPanel
+        var sidebarSurface = new ModernSurfacePanel
+        {
+            Dock = DockStyle.Fill,
+            CornerRadius = 18,
+            BorderAlpha = 14,
+            Margin = new Padding(0, 0, 16, 0),
+            Padding = new Padding(12, 14, 12, 14),
+            BackColor = _useDarkTheme ? Color.FromArgb(17, 20, 26) : palette.ControlBackground
+        };
+
+        var sidebarLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
+            RowCount = 2,
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+            BackColor = Color.Transparent
+        };
+        sidebarLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        sidebarLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var sidebarHeader = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            ColumnCount = 1,
             RowCount = 1,
-            Margin = new Padding(0, 0, 0, 14),
+            Margin = new Padding(0, 0, 0, 16),
             Padding = new Padding(0),
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             BackColor = Color.Transparent
         };
-        var title = new Label
+        sidebarHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        var appNameLabel = new Label
         {
-            Text = L("Settings.Title"),
+            Text = L("Common.AppName"),
             AutoSize = true,
-            Font = new Font("Segoe UI Semibold", 20f, FontStyle.Bold),
+            Font = new Font("Segoe UI Semibold", 15f, FontStyle.Bold),
             Margin = new Padding(0),
             ForeColor = palette.Text,
             BackColor = Color.Transparent
         };
-        header.Controls.Add(title, 0, 0);
+        sidebarHeader.Controls.Add(appNameLabel, 0, 0);
 
-        var tabBar = new ModernTabBar(palette)
+        var navHost = new FlowLayoutPanel
         {
-            Dock = DockStyle.Top,
-            Margin = new Padding(0, 0, 0, 20)
+            Dock = DockStyle.Fill,
+            AutoSize = false,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+            BackColor = Color.Transparent
         };
-        tabBar.SetTabs(new[]
-        {
-            (SettingsPage.General.ToString(), L("Settings.General")),
-            (SettingsPage.Display.ToString(), L("Settings.Display")),
-            (SettingsPage.Appearance.ToString(), L("Settings.Appearance")),
-            (SettingsPage.Zoom.ToString(), L("Settings.Zoom")),
-            (SettingsPage.Input.ToString(), L("Settings.Input")),
-            (SettingsPage.About.ToString(), L("Settings.About"))
-        });
 
         var pageHost = new Panel
         {
             Dock = DockStyle.Fill,
             Margin = new Padding(0),
-            Padding = new Padding(0, 0, 0, 0),
+            Padding = new Padding(0),
             BackColor = palette.MenuBackground,
-            AutoScroll = true
+            AutoScroll = false
         };
+
+        var rightLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+            BackColor = palette.MenuBackground
+        };
+        rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        rightLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var footer = new FlowLayoutPanel
         {
@@ -125,19 +155,19 @@ internal sealed partial class TrayContext
             WrapContents = false,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Margin = new Padding(0, 16, 0, 0),
+            Margin = new Padding(0, 8, 0, 0),
             Padding = new Padding(0),
             BackColor = Color.Transparent
         };
         var closeButton = new ModernButton
         {
-            Text = L("Settings.CloseEsc"),
+            Text = L("Settings.Done"),
             DialogResult = DialogResult.OK
         };
         closeButton.ApplyTheme(palette, emphasis: false);
         _resetDefaultsButton = new ModernButton
         {
-            Text = L("Settings.ResetDefaults"),
+            Text = L("Settings.Reset"),
             MinimumSize = new Size(170, 38)
         };
         ApplyResetDefaultsButtonTheme();
@@ -155,11 +185,69 @@ internal sealed partial class TrayContext
             [SettingsPage.About] = BuildAboutSettingsPage()
         };
 
+        var navItems = new Dictionary<SettingsPage, SettingsSidebarItem>
+        {
+            [SettingsPage.General] = new SettingsSidebarItem(palette, L("Settings.General"), TrayFluentIcon.Settings),
+            [SettingsPage.Display] = new SettingsSidebarItem(palette, L("Settings.Display"), TrayFluentIcon.MagnifiedDisplays),
+            [SettingsPage.Appearance] = new SettingsSidebarItem(palette, L("Settings.Appearance"), TrayFluentIcon.Appearance),
+            [SettingsPage.Zoom] = new SettingsSidebarItem(palette, L("Settings.Zoom"), TrayFluentIcon.Zoom),
+            [SettingsPage.Input] = new SettingsSidebarItem(palette, L("Settings.Input"), TrayFluentIcon.KeyBinds),
+            [SettingsPage.About] = new SettingsSidebarItem(palette, L("Settings.About"), TrayFluentIcon.About)
+        };
+
         foreach (SettingsPageView page in pages.Values)
         {
             page.Visible = false;
             page.Dock = DockStyle.Top;
             pageHost.Controls.Add(page);
+        }
+
+        foreach ((SettingsPage pageKey, SettingsSidebarItem item) in navItems)
+        {
+            item.Click += (_, _) => ShowPage(pageKey);
+            navHost.Controls.Add(item);
+        }
+
+        void UpdateSidebarItemWidths()
+        {
+            int itemWidth = Math.Max(ControlDrawing.ScaleLogical(form, 216), navHost.ClientSize.Width - 8);
+            foreach (SettingsSidebarItem item in navItems.Values)
+            {
+                item.Width = itemWidth;
+            }
+        }
+
+        void FitSettingsWindowToContent()
+        {
+            Rectangle area = Screen.FromControl(form).WorkingArea;
+            int clientWidth = Math.Min(ControlDrawing.ScaleLogical(form, 750), area.Width - ControlDrawing.ScaleLogical(form, 96));
+            clientWidth = Math.Max(ControlDrawing.ScaleLogical(form, 700), clientWidth);
+            clientWidth = Math.Min(clientWidth, area.Width - ControlDrawing.ScaleLogical(form, 32));
+            form.ClientSize = new Size(clientWidth, form.ClientSize.Height);
+            root.PerformLayout();
+            sidebarLayout.PerformLayout();
+            rightLayout.PerformLayout();
+            UpdateSidebarItemWidths();
+
+            int rightWidth = Math.Min(Math.Max(ControlDrawing.ScaleLogical(form, 430), rightLayout.ClientSize.Width), ControlDrawing.ScaleLogical(form, 460));
+            int maxPageHeight = 0;
+            foreach (SettingsPageView page in pages.Values)
+            {
+                page.Width = rightWidth;
+                page.PerformLayout();
+                maxPageHeight = Math.Max(maxPageHeight, page.GetPreferredSize(new Size(rightWidth, 0)).Height);
+            }
+
+            int sidebarHeight = sidebarLayout.GetPreferredSize(new Size(root.GetColumnWidths()[0], 0)).Height;
+            int footerHeight = footer.GetPreferredSize(Size.Empty).Height;
+            int desiredHeight = root.Padding.Vertical + Math.Max(sidebarHeight, maxPageHeight + footerHeight + ControlDrawing.ScaleLogical(form, 8));
+            int maxHeight = area.Height - ControlDrawing.ScaleLogical(form, 72);
+            int clientHeight = Math.Min(Math.Max(ControlDrawing.ScaleLogical(form, 520), desiredHeight), maxHeight);
+            form.ClientSize = new Size(clientWidth, clientHeight);
+            root.PerformLayout();
+            sidebarLayout.PerformLayout();
+            rightLayout.PerformLayout();
+            UpdateSidebarItemWidths();
         }
 
         void ShowPage(SettingsPage page)
@@ -174,38 +262,22 @@ internal sealed partial class TrayContext
                     view.BringToFront();
                 }
             }
-
-            pageHost.AutoScroll = false;
-            pageHost.AutoScrollPosition = new Point(0, 0);
-            pageHost.PerformLayout();
-            if (pages.TryGetValue(page, out SettingsPageView? activePage))
-            {
-                Size preferredSize = activePage.GetPreferredSize(new Size(pageHost.ClientSize.Width, 0));
-                int viewportHeight = Math.Max(1, pageHost.ClientSize.Height);
-                bool needsVerticalScroll = preferredSize.Height > viewportHeight;
-                pageHost.AutoScroll = needsVerticalScroll;
-                pageHost.VerticalScroll.Visible = needsVerticalScroll;
-                pageHost.HorizontalScroll.Visible = false;
-                pageHost.HorizontalScroll.Enabled = false;
-                pageHost.AutoScrollMinSize = needsVerticalScroll ? new Size(0, preferredSize.Height) : Size.Empty;
-            }
-
             pageHost.ResumeLayout(performLayout: true);
-            tabBar.SelectTab(page.ToString(), notify: false);
+            foreach ((SettingsPage key, SettingsSidebarItem item) in navItems)
+            {
+                item.Selected = key == page;
+            }
         }
 
-        tabBar.SelectionChanged += key =>
-        {
-            if (Enum.TryParse(key, out SettingsPage page))
-            {
-                ShowPage(page);
-            }
-        };
+        sidebarLayout.Controls.Add(sidebarHeader, 0, 0);
+        sidebarLayout.Controls.Add(navHost, 0, 1);
+        sidebarSurface.Controls.Add(sidebarLayout);
 
-        root.Controls.Add(header, 0, 0);
-        root.Controls.Add(tabBar, 0, 1);
-        root.Controls.Add(pageHost, 0, 2);
-        root.Controls.Add(footer, 0, 3);
+        rightLayout.Controls.Add(pageHost, 0, 0);
+        rightLayout.Controls.Add(footer, 0, 1);
+
+        root.Controls.Add(sidebarSurface, 0, 0);
+        root.Controls.Add(rightLayout, 1, 0);
         form.Controls.Add(root);
         form.AcceptButton = closeButton;
         form.CancelButton = closeButton;
@@ -233,8 +305,22 @@ internal sealed partial class TrayContext
             _displaySelectionSettingsSection = null;
         };
 
-        _selectSettingsPageAction = ShowPage;
+        _selectSettingsPageAction = page =>
+        {
+            ShowPage(page);
+            FitSettingsWindowToContent();
+        };
         ShowPage(initialPage);
+        FitSettingsWindowToContent();
+        if (restoreLocation.HasValue)
+        {
+            Rectangle area = Screen.FromPoint(restoreLocation.Value).WorkingArea;
+            int x = Math.Clamp(restoreLocation.Value.X, area.Left, Math.Max(area.Left, area.Right - form.Width));
+            int y = Math.Clamp(restoreLocation.Value.Y, area.Top, Math.Max(area.Top, area.Bottom - form.Height));
+            form.StartPosition = FormStartPosition.Manual;
+            form.Location = new Point(x, y);
+        }
+
         form.Show();
         form.BringToFront();
         form.Activate();
@@ -243,15 +329,15 @@ internal sealed partial class TrayContext
     private static Size GetSettingsClientSize()
     {
         Rectangle area = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1400, 960);
-        int width = Math.Min(1280, Math.Max(1100, area.Width - 120));
-        int height = Math.Min(1020, Math.Max(920, area.Height - 80));
+        int width = Math.Min(760, Math.Max(700, area.Width - 128));
+        int height = Math.Min(600, Math.Max(520, area.Height - 128));
         return new Size(width, height);
     }
 
     private SettingsPageView BuildGeneralSettingsPage()
     {
         ThemePalette palette = CurrentTheme;
-        var page = new SettingsPageView(palette, L("Settings.GeneralTitle"), string.Empty);
+        var page = new SettingsPageView(palette, L("Settings.GeneralTitle"), L("Settings.GeneralDescription"));
         var section = new SettingsSection(palette, L("Settings.GeneralSection"), string.Empty);
 
         section.AddRow(CreateToggleRow(L("Settings.SmoothZoom"), L("Settings.SmoothZoomHelp"), _smoothZoom, value =>
@@ -297,7 +383,7 @@ internal sealed partial class TrayContext
     private SettingsPageView BuildDisplaySettingsPage()
     {
         ThemePalette palette = CurrentTheme;
-        var page = new SettingsPageView(palette, L("Settings.DisplayTitle"), string.Empty);
+        var page = new SettingsPageView(palette, L("Settings.DisplayTitle"), L("Settings.DisplayDescription"));
         var behaviorSection = new SettingsSection(palette, L("Settings.DisplaySection"), string.Empty);
 
         behaviorSection.AddRow(CreateToggleRow(L("Settings.AutoSwitchMonitor"), L("Settings.AutoSwitchMonitorHelp"), _autoSwitchMonitor, value =>
@@ -317,7 +403,7 @@ internal sealed partial class TrayContext
             RefreshMenuAndTrayUi();
         }, rightColumnWidth: 96));
 
-        _displaySelectionSettingsSection = new SettingsSection(palette, L("Settings.DisplaySelectionMode"), string.Empty);
+        _displaySelectionSettingsSection = new SettingsSection(palette, L("Settings.DisplaySelectionSection"), string.Empty);
         PopulateDisplaySelectionSettingsSection();
 
         page.AddSection(behaviorSection);
@@ -403,7 +489,7 @@ internal sealed partial class TrayContext
     private SettingsPageView BuildZoomSettingsPage()
     {
         ThemePalette palette = CurrentTheme;
-        var page = new SettingsPageView(palette, L("Settings.ZoomTitle"), string.Empty);
+        var page = new SettingsPageView(palette, L("Settings.ZoomTitle"), L("Settings.ZoomDescription"));
         var section = new SettingsSection(palette, L("Settings.ZoomSection"), string.Empty);
 
         section.AddRow(CreateSliderRow(L("Settings.ZoomStep"), L("Settings.ZoomStepHelp"), _stepPercent, 5, 100, 5, value => value + "%", value =>
@@ -433,7 +519,7 @@ internal sealed partial class TrayContext
     private SettingsPageView BuildAppearanceSettingsPage()
     {
         ThemePalette palette = CurrentTheme;
-        var page = new SettingsPageView(palette, L("Settings.AppearanceTitle"), string.Empty);
+        var page = new SettingsPageView(palette, L("Settings.AppearanceTitle"), L("Settings.AppearanceDescription"));
         var themeSection = new SettingsSection(palette, L("Settings.AppearanceSection"), string.Empty);
 
         themeSection.AddRow(CreateDropdownRow(
@@ -451,8 +537,7 @@ internal sealed partial class TrayContext
             },
             rightColumnWidth: 260));
 
-        var languageSection = new SettingsSection(palette, L("Settings.LanguageSection"), string.Empty);
-        languageSection.AddRow(CreateDropdownRow(L("Settings.Language"), L("Settings.LanguageHelp"), BuildLanguageItems(), UiText.GetLanguageDisplayName(_language, _language), value =>
+        themeSection.AddRow(CreateDropdownRow(L("Settings.Language"), L("Settings.LanguageHelp"), BuildLanguageItems(), UiText.GetLanguageDisplayName(_language, _language), value =>
         {
             _language = UiText.ParseLanguageDisplayName(_language, value);
             SaveSettings();
@@ -468,14 +553,13 @@ internal sealed partial class TrayContext
         }, rightColumnWidth: 260));
 
         page.AddSection(themeSection);
-        page.AddSection(languageSection);
         return page;
     }
 
     private SettingsPageView BuildInputSettingsPage()
     {
         ThemePalette palette = CurrentTheme;
-        var page = new SettingsPageView(palette, L("Settings.InputTitle"), string.Empty);
+        var page = new SettingsPageView(palette, L("Settings.InputTitle"), L("Settings.InputDescription"));
         var section = new SettingsSection(palette, L("Settings.InputSection"), string.Empty);
 
         section.AddRow(CreateDropdownRow(
@@ -557,7 +641,7 @@ internal sealed partial class TrayContext
     private SettingsPageView BuildAboutSettingsPage()
     {
         ThemePalette palette = CurrentTheme;
-        var page = new SettingsPageView(palette, L("Settings.AboutTitle"), string.Empty);
+        var page = new SettingsPageView(palette, L("Settings.AboutTitle"), L("Settings.AboutDescription"));
 
         string installPath = InstalledAppService.GetCurrentInstalledExecutablePath() ?? L("About.NotInstalled");
         string settingsPath = AppPaths.SettingsPath;
@@ -883,8 +967,9 @@ internal sealed partial class TrayContext
             return;
         }
 
+        Point previousLocation = _settingsWindow.Location;
         _settingsWindow.Close();
-        ShowSettingsWindow(page);
+        ShowSettingsWindow(page, previousLocation);
     }
 
     private void HandleResetDefaultsRequested()

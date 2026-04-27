@@ -25,20 +25,20 @@ internal static class ThemePalettes
 {
     public static ThemePalette Dark => new()
     {
-        MenuBackground = Color.FromArgb(17, 19, 21),
-        HoverBackground = Color.FromArgb(34, 39, 44),
-        Text = Color.FromArgb(245, 247, 250),
-        SecondaryText = Color.FromArgb(167, 176, 186),
-        DisabledText = Color.FromArgb(128, 136, 145),
-        Separator = Color.FromArgb(42, 46, 52),
-        ControlBackground = Color.FromArgb(23, 26, 29),
-        ButtonBackground = Color.FromArgb(28, 32, 36),
-        Border = Color.FromArgb(46, 52, 58),
-        ButtonHover = Color.FromArgb(39, 44, 50),
-        ButtonPressed = Color.FromArgb(50, 56, 63),
-        Accent = Color.FromArgb(86, 194, 113),
-        AccentHover = Color.FromArgb(97, 207, 124),
-        AccentPressed = Color.FromArgb(72, 170, 98)
+        MenuBackground = Color.FromArgb(14, 16, 20),
+        HoverBackground = Color.FromArgb(35, 42, 53),
+        Text = Color.FromArgb(244, 247, 251),
+        SecondaryText = Color.FromArgb(170, 180, 195),
+        DisabledText = Color.FromArgb(125, 135, 150),
+        Separator = Color.FromArgb(42, 48, 58),
+        ControlBackground = Color.FromArgb(24, 28, 35),
+        ButtonBackground = Color.FromArgb(27, 32, 40),
+        Border = Color.FromArgb(42, 48, 58),
+        ButtonHover = Color.FromArgb(35, 42, 53),
+        ButtonPressed = Color.FromArgb(46, 54, 66),
+        Accent = Color.FromArgb(34, 197, 94),
+        AccentHover = Color.FromArgb(45, 212, 106),
+        AccentPressed = Color.FromArgb(28, 176, 84)
     };
 
     public static ThemePalette Light => new()
