@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
 using System.Text.Json;
 
 namespace QuickZoom;
@@ -69,25 +70,43 @@ internal sealed class LocalizationManager
     private IReadOnlyDictionary<string, string> LoadTable(UiLanguage language)
     {
         string filePath = Path.Combine(LocalesDirectory, GetLanguageCode(language) + ".json");
-        if (!File.Exists(filePath))
+        if (File.Exists(filePath))
         {
-            LogMissingLocale(language, filePath);
-            return new Dictionary<string, string>(StringComparer.Ordinal);
+            try
+            {
+                using FileStream stream = File.OpenRead(filePath);
+                return DeserializeTable(stream);
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Write("LocalizationManager", $"Could not load locale file '{filePath}'. {ex}");
+            }
         }
 
+        string resourceName = "QuickZoom.locales." + GetLanguageCode(language) + ".json";
         try
         {
-            using FileStream stream = File.OpenRead(filePath);
-            var values = JsonSerializer.Deserialize<Dictionary<string, string>>(stream);
-            return values != null
-                ? new Dictionary<string, string>(values, StringComparer.Ordinal)
-                : new Dictionary<string, string>(StringComparer.Ordinal);
+            using Stream? stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName);
+            if (stream != null)
+            {
+                return DeserializeTable(stream);
+            }
         }
         catch (Exception ex)
         {
-            ErrorLog.Write("LocalizationManager", $"Could not load locale file '{filePath}'. {ex}");
-            return new Dictionary<string, string>(StringComparer.Ordinal);
+            ErrorLog.Write("LocalizationManager", $"Could not load embedded locale resource '{resourceName}'. {ex}");
         }
+
+        LogMissingLocale(language, filePath);
+        return new Dictionary<string, string>(StringComparer.Ordinal);
+    }
+
+    private static IReadOnlyDictionary<string, string> DeserializeTable(Stream stream)
+    {
+        var values = JsonSerializer.Deserialize<Dictionary<string, string>>(stream);
+        return values != null
+            ? new Dictionary<string, string>(values, StringComparer.Ordinal)
+            : new Dictionary<string, string>(StringComparer.Ordinal);
     }
 
     private void LogMissingKey(UiLanguage language, string key)
@@ -121,6 +140,9 @@ internal sealed class LocalizationManager
     internal static string GetLanguageCode(UiLanguage language) => language switch
     {
         UiLanguage.Danish => "da",
+        UiLanguage.Swedish => "sv",
+        UiLanguage.Norwegian => "no",
+        UiLanguage.German => "de",
         _ => "en"
     };
 }

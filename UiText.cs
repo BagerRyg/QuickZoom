@@ -8,7 +8,10 @@ namespace QuickZoom;
 internal enum UiLanguage
 {
     English = 0,
-    Danish = 1
+    Danish = 1,
+    Swedish = 2,
+    Norwegian = 3,
+    German = 4
 }
 
 internal static class UiText
@@ -26,6 +29,9 @@ internal static class UiText
         return name.ToLowerInvariant() switch
         {
             "da" => UiLanguage.Danish,
+            "sv" => UiLanguage.Swedish,
+            "no" or "nb" or "nn" => UiLanguage.Norwegian,
+            "de" => UiLanguage.German,
             _ => UiLanguage.English
         };
     }
@@ -70,6 +76,9 @@ internal static class UiText
         return Get(currentUiLanguage, displayLanguage switch
         {
             UiLanguage.Danish => "Settings.Danish",
+            UiLanguage.Swedish => "Settings.Swedish",
+            UiLanguage.Norwegian => "Settings.Norwegian",
+            UiLanguage.German => "Settings.German",
             _ => "Settings.English"
         });
     }

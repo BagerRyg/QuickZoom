@@ -16,6 +16,9 @@
     <EmbeddedResource Include="assets\icons\magnifier_dark.ico">
       <LogicalName>QuickZoom.magnifier_dark.ico</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="locales\*.json">
+      <LogicalName>QuickZoom.locales.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>
     <Content Include="locales\*.json">
