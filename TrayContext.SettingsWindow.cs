@@ -109,7 +109,7 @@ internal sealed partial class TrayContext
         {
             Text = L("Common.AppName"),
             AutoSize = true,
-            Font = new Font("Segoe UI Semibold", 15f, FontStyle.Bold),
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 15f, FontStyle.Bold),
             Margin = new Padding(0),
             ForeColor = palette.Text,
             BackColor = Color.Transparent
@@ -165,6 +165,7 @@ internal sealed partial class TrayContext
             DialogResult = DialogResult.OK
         };
         closeButton.ApplyTheme(palette, emphasis: false);
+        closeButton.SetOutlineColor(_useDarkTheme ? Color.FromArgb(96, 165, 250) : Color.FromArgb(65, 105, 170));
         _resetDefaultsButton = new ModernButton
         {
             Text = L("Settings.Reset"),
@@ -329,8 +330,13 @@ internal sealed partial class TrayContext
     private static Size GetSettingsClientSize()
     {
         Rectangle area = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1400, 960);
-        int width = Math.Min(760, Math.Max(700, area.Width - 128));
-        int height = Math.Min(600, Math.Max(520, area.Height - 128));
+        float scale = ControlDrawing.UiFontScale;
+        int minWidth = (int)Math.Round(700 * Math.Min(1.16f, scale));
+        int maxWidth = (int)Math.Round(760 * Math.Min(1.22f, scale));
+        int minHeight = (int)Math.Round(520 * Math.Min(1.12f, scale));
+        int maxHeight = (int)Math.Round(600 * Math.Min(1.20f, scale));
+        int width = Math.Min(maxWidth, Math.Max(minWidth, area.Width - 128));
+        int height = Math.Min(maxHeight, Math.Max(minHeight, area.Height - 128));
         return new Size(width, height);
     }
 
@@ -552,6 +558,21 @@ internal sealed partial class TrayContext
             }
         }, rightColumnWidth: 260));
 
+        themeSection.AddRow(CreateDropdownRow(L("Settings.FontSize"), L("Settings.FontSizeHelp"), BuildUiFontSizeItems(), UiFontSizeLabel(_uiFontSize), value =>
+        {
+            UiFontSize nextSize = ParseUiFontSize(value);
+            if (nextSize == _uiFontSize)
+            {
+                return;
+            }
+
+            _uiFontSize = nextSize;
+            ApplyUiFontScale();
+            SaveSettings();
+            RefreshMenuAndTrayUi(rebuildPopup: true);
+            RefreshSettingsWindow(SettingsPage.Appearance);
+        }, rightColumnWidth: 260));
+
         page.AddSection(themeSection);
         return page;
     }
@@ -700,7 +721,7 @@ internal sealed partial class TrayContext
             Height = 28,
             Text = valueFormatter(value),
             TextAlign = ContentAlignment.MiddleRight,
-            Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 9.5f, FontStyle.Bold),
             ForeColor = CurrentTheme.Text,
             BackColor = Color.Transparent,
             Dock = DockStyle.Fill,
@@ -812,7 +833,7 @@ internal sealed partial class TrayContext
                 Height = 40,
                 Text = value,
                 TextAlign = ContentAlignment.MiddleRight,
-                Font = new Font("Segoe UI", 9.5f, FontStyle.Regular),
+                Font = ControlDrawing.UiFont("Segoe UI", 9.5f, FontStyle.Regular),
                 ForeColor = CurrentTheme.SecondaryText,
                 BackColor = Color.Transparent
             };

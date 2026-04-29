@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace QuickZoom;
@@ -76,6 +77,7 @@ internal sealed partial class TrayContext
 
         BuildMenuAndTray();
         _startupInitialized = true;
+        SignalStartupReady();
     }
 
     private void OnTaskbarCreated()
@@ -129,6 +131,25 @@ internal sealed partial class TrayContext
         _tray.MouseUp += OnTrayMouseUp;
     }
 
+    private void SignalStartupReady()
+    {
+        if (string.IsNullOrWhiteSpace(_startupReadyEventName))
+        {
+            return;
+        }
+
+        try
+        {
+            using EventWaitHandle readyEvent = EventWaitHandle.OpenExisting(_startupReadyEventName);
+            readyEvent.Set();
+            ErrorLog.Write("Startup", "Signaled startup readiness.");
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("Startup", "Could not signal startup readiness. " + ex.Message);
+        }
+    }
+
     private void RestoreTrayIcon()
     {
         if (!IsShellReady())
@@ -171,7 +192,9 @@ internal sealed partial class TrayContext
 
         ThemePalette palette = CurrentTheme;
         var popup = new TrayPopupWindow(palette);
-        int trayContentWidth = ControlDrawing.ScaleLogical(popup, TrayContentLogicalWidth);
+        float fontScale = ControlDrawing.UiFontScale;
+        int trayLogicalWidth = TrayContentLogicalWidth + (int)Math.Round((fontScale - 1f) * 220f);
+        int trayContentWidth = ControlDrawing.ScaleLogical(popup, trayLogicalWidth);
         popup.FormClosed += (_, _) =>
         {
             _magnifyRow = null;
@@ -277,6 +300,7 @@ internal sealed partial class TrayContext
         {
             ResetExitConfirmation();
             SystemParametersInfo(SPI_SETCURSORS, 0, IntPtr.Zero, 0);
+            ShowTrayRowDone(resetCursorRow, L("Tray.ResetCursor"));
         });
         actions.Controls.Add(resetCursorRow);
 
@@ -311,7 +335,7 @@ internal sealed partial class TrayContext
         {
             AutoSize = true,
             Dock = DockStyle.Left,
-            Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
+            Font = ControlDrawing.UiFont("Segoe UI", 8.5f, FontStyle.Regular),
             ForeColor = palette.SecondaryText,
             BackColor = Color.Transparent,
             Text = StartupTaskService.GetStatusLabel(_language)
@@ -348,7 +372,7 @@ internal sealed partial class TrayContext
         {
             Text = L("Common.AppName"),
             AutoSize = true,
-            Font = new Font("Segoe UI Semibold", 12.75f, FontStyle.Bold),
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 12.75f, FontStyle.Bold),
             ForeColor = palette.Text,
             BackColor = Color.Transparent,
             Margin = new Padding(0)
@@ -399,6 +423,26 @@ internal sealed partial class TrayContext
     }
 
     private string GetOnOffText(bool value) => value ? L("Common.On") : L("Common.Off");
+
+    private void ShowTrayRowDone(TrayMenuRow row, string defaultTitle)
+    {
+        row.Title = "Done.";
+        row.IsSuccess = true;
+        var timer = new System.Windows.Forms.Timer { Interval = 2500 };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            timer.Dispose();
+            if (row.IsDisposed)
+            {
+                return;
+            }
+
+            row.Title = defaultTitle;
+            row.IsSuccess = false;
+        };
+        timer.Start();
+    }
 
     private void RebuildTrayPopupIfOpen()
     {
@@ -519,6 +563,33 @@ internal sealed partial class TrayContext
         UpdateStartupServiceStatusLabel();
         PopulateDisplayOptionsHost();
         _trayPopup.RefreshAnchoredLayout(_lastTrayPopupAnchor == Point.Empty ? Cursor.Position : _lastTrayPopupAnchor);
+    }
+
+    private void UpdateTrayQuickToggleState()
+    {
+        if (_trayPopup == null || _trayPopup.IsDisposed)
+        {
+            return;
+        }
+
+        ThemePalette palette = CurrentTheme;
+        if (_magnifyRow != null && _magnifyToggle != null)
+        {
+            _magnifyToggle.IsOn = _enabled;
+            _magnifyRow.ApplyTheme(palette);
+        }
+
+        if (_invertRow != null && _invertToggle != null)
+        {
+            _invertToggle.IsOn = _invertEnabled;
+            _invertRow.ApplyTheme(palette);
+        }
+
+        if (_followRow != null && _followToggle != null)
+        {
+            _followToggle.IsOn = _followCursor;
+            _followRow.ApplyTheme(palette);
+        }
     }
 
     private void InitTimers()
@@ -920,7 +991,7 @@ internal sealed partial class TrayContext
         }
 
         SaveSettings();
-        RefreshMenuAndTrayUi();
+        UpdateTrayQuickToggleState();
     }
 
     private void SetInvertEnabledState(bool enabled)
@@ -941,7 +1012,7 @@ internal sealed partial class TrayContext
         }
 
         SaveSettings();
-        RefreshMenuAndTrayUi();
+        UpdateTrayQuickToggleState();
     }
 
     private void SetFollowCursor(bool followCursor)
@@ -958,7 +1029,7 @@ internal sealed partial class TrayContext
         }
 
         SaveSettings();
-        RefreshMenuAndTrayUi();
+        UpdateTrayQuickToggleState();
     }
 
     private void RefreshMenuAndTrayUi(bool rebuildPopup = false)

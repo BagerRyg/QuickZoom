@@ -51,6 +51,13 @@ internal static class ControlDrawing
         return Math.Max(1, (int)Math.Round(logicalPixels * (dpi / 96f)));
     }
 
+    internal static float UiFontScale { get; set; } = 1.14f;
+
+    internal static Font UiFont(string familyName, float emSize, FontStyle style)
+    {
+        return new Font(familyName, Math.Max(7f, emSize * UiFontScale), style);
+    }
+
     internal static Color EffectiveBackColor(Control control)
     {
         Control? current = control.Parent;
@@ -150,7 +157,10 @@ internal class ModernSurfacePanel : Panel
         base.OnPaint(e);
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
         using GraphicsPath path = ControlDrawing.RoundedRect(new Rectangle(0, 0, Width - 1, Height - 1), _cornerRadius);
-        using Pen borderPen = new(Color.FromArgb(_borderAlpha, 255, 255, 255));
+        Color borderBase = BackColor.GetBrightness() > 0.72f
+            ? Color.FromArgb(112, 124, 139)
+            : Color.White;
+        using Pen borderPen = new(Color.FromArgb(_borderAlpha, borderBase));
         e.Graphics.DrawPath(borderPen, path);
     }
 }
@@ -370,7 +380,7 @@ internal sealed class QuickActionTile : ModernSurfacePanel
         {
             Text = title,
             AutoSize = true,
-            Font = new Font("Segoe UI Semibold", 10.5f, FontStyle.Bold),
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 10.5f, FontStyle.Bold),
             Margin = new Padding(0, 6, 8, 0),
             BackColor = Color.Transparent
         };
@@ -379,7 +389,7 @@ internal sealed class QuickActionTile : ModernSurfacePanel
         {
             Text = stateText,
             AutoSize = true,
-            Font = new Font("Segoe UI", 9f, FontStyle.Regular),
+            Font = ControlDrawing.UiFont("Segoe UI", 9f, FontStyle.Regular),
             Margin = new Padding(0, 8, 0, 0),
             BackColor = Color.Transparent
         };
@@ -462,7 +472,7 @@ internal sealed class TrayMenuSectionLabel : Label
     {
         AutoSize = true;
         Margin = new Padding(8, 6, 8, 3);
-        Font = new Font("Segoe UI Semibold", 8.25f, FontStyle.Bold);
+        Font = ControlDrawing.UiFont("Segoe UI Semibold", 8.25f, FontStyle.Bold);
         BackColor = Color.Transparent;
     }
 
@@ -522,6 +532,7 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
     private bool _pressed;
     private bool _active;
     private bool _isDestructive;
+    private bool _isSuccess;
 
     public TrayMenuRow(ThemePalette palette, string title, string? rightText = null, ToggleSwitchControl? toggle = null, TrayFluentIcon? icon = null)
     {
@@ -553,7 +564,7 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
             Text = title,
             AutoSize = false,
             TextAlign = ContentAlignment.MiddleLeft,
-            Font = new Font("Segoe UI Semibold", 9.75f, FontStyle.Bold),
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 9.75f, FontStyle.Bold),
             BackColor = Color.Transparent
         };
         Controls.Add(_titleLabel);
@@ -571,7 +582,7 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
                 Text = rightText,
                 AutoSize = false,
                 TextAlign = ContentAlignment.MiddleRight,
-                Font = new Font("Segoe UI", 8.75f, FontStyle.Regular),
+                Font = ControlDrawing.UiFont("Segoe UI", 8.75f, FontStyle.Regular),
                 BackColor = Color.Transparent
             };
             Controls.Add(_rightLabel);
@@ -596,9 +607,14 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
             _toggle.Click += (_, _) => ActionRequested?.Invoke(this, EventArgs.Empty);
         }
 
-        Height = 32;
+        Height = ControlDrawing.ScaleLogical(this, fontScaleAwareLogicalHeight());
         ApplyTheme(palette);
         ResumeLayout(performLayout: true);
+
+        int fontScaleAwareLogicalHeight()
+        {
+            return 32 + (int)Math.Round((ControlDrawing.UiFontScale - 1f) * 18f);
+        }
     }
 
     public event EventHandler? ActionRequested;
@@ -641,14 +657,38 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
         }
     }
 
+    public bool IsSuccess
+    {
+        get => _isSuccess;
+        set
+        {
+            _isSuccess = value;
+            Invalidate(true);
+        }
+    }
+
     public Color SurfaceBackgroundColor
     {
         get
         {
+            if (_isSuccess)
+            {
+                return _palette.MenuBackground.GetBrightness() > 0.65f
+                    ? Color.FromArgb(217, 247, 225)
+                    : Color.FromArgb(24, 94, 54);
+            }
+
             if (_hovered || _pressed || _active)
             {
                 if (_isDestructive)
                 {
+                    if (_palette.MenuBackground.GetBrightness() > 0.65f)
+                    {
+                        return _pressed
+                            ? Color.FromArgb(255, 207, 207)
+                            : Color.FromArgb(255, 224, 224);
+                    }
+
                     return _pressed
                         ? Color.FromArgb(108, 28, 36)
                         : Color.FromArgb(84, 24, 31);
@@ -697,17 +737,17 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
 
         if (_iconControl != null)
         {
-            int iconWidth = 20;
+            int iconWidth = ControlDrawing.ScaleLogical(this, 20);
             int iconHeight = Math.Min(innerHeight, ControlDrawing.ScaleLogical(this, 18));
             _iconControl.Bounds = new Rectangle(left, y + Math.Max(0, (innerHeight - iconHeight) / 2), iconWidth, iconHeight);
-            left = _iconControl.Right + 10;
+            left = _iconControl.Right + ControlDrawing.ScaleLogical(this, 10);
         }
 
         if (_toggle != null)
         {
             Size toggleSize = _toggle.Size;
             _toggle.Location = new Point(right - toggleSize.Width, y + Math.Max(0, (innerHeight - toggleSize.Height) / 2));
-            _titleLabel.Bounds = new Rectangle(left, y, Math.Max(40, _toggle.Left - left - 10), innerHeight);
+            _titleLabel.Bounds = new Rectangle(left, y, Math.Max(ControlDrawing.ScaleLogical(this, 48), _toggle.Left - left - ControlDrawing.ScaleLogical(this, 14)), innerHeight);
         }
         else if (_rightLabel != null)
         {
@@ -775,7 +815,7 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
         base.OnPaint(e);
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
-        if (_hovered || _pressed || _active)
+        if (_hovered || _pressed || _active || _isSuccess)
         {
             Rectangle fillRect = new(4, 1, Math.Max(8, Width - 8), Math.Max(8, Height - 2));
             using GraphicsPath path = ControlDrawing.RoundedRect(fillRect, 9);
@@ -783,8 +823,8 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
             using SolidBrush fillBrush = new(fill);
             Color borderColor = _isDestructive
                 ? Color.FromArgb(186, 82, 92)
-                : (_active ? _palette.Accent : _palette.Border);
-            int borderAlpha = _isDestructive ? 76 : (_active ? 72 : 28);
+                : (_isSuccess ? _palette.Accent : (_active ? _palette.Accent : _palette.Border));
+            int borderAlpha = _isDestructive ? 76 : (_isSuccess ? 96 : (_active ? 72 : 28));
             using Pen borderPen = new(Color.FromArgb(borderAlpha, borderColor));
             e.Graphics.FillPath(fillBrush, path);
             e.Graphics.DrawPath(borderPen, path);
@@ -800,7 +840,7 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
         using SolidBrush backgroundBrush = new(ControlDrawing.EffectiveBackColor(this));
         graphics.FillRectangle(backgroundBrush, childBounds);
 
-        if (_hovered || _pressed || _active)
+        if (_hovered || _pressed || _active || _isSuccess)
         {
             Rectangle fillRect = new(4, 1, Math.Max(8, Width - 8), Math.Max(8, Height - 2));
             using GraphicsPath path = ControlDrawing.RoundedRect(fillRect, 9);
@@ -931,7 +971,7 @@ internal sealed class KeyBadgeControl : Control, ISurfaceBackgroundProvider
         TextRenderer.DrawText(
             e.Graphics,
             Text,
-            new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
+            ControlDrawing.UiFont("Segoe UI Semibold", 9f, FontStyle.Bold),
             textRect,
             _palette.Text,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
@@ -1005,7 +1045,7 @@ internal sealed class ModernActionRow : ModernSurfacePanel
         {
             Text = title,
             AutoSize = true,
-            Font = new Font("Segoe UI Semibold", 10.2f, FontStyle.Bold),
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 10.2f, FontStyle.Bold),
             Margin = new Padding(0),
             BackColor = Color.Transparent
         };
@@ -1013,7 +1053,7 @@ internal sealed class ModernActionRow : ModernSurfacePanel
         {
             Text = subtitle,
             AutoSize = true,
-            Font = new Font("Segoe UI", 9f, FontStyle.Regular),
+            Font = ControlDrawing.UiFont("Segoe UI", 9f, FontStyle.Regular),
             Margin = new Padding(0, 4, 0, 0),
             MaximumSize = new Size(420, 0),
             BackColor = Color.Transparent
@@ -1028,7 +1068,7 @@ internal sealed class ModernActionRow : ModernSurfacePanel
         {
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleRight,
-            Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 9f, FontStyle.Bold),
             BackColor = Color.Transparent,
             AutoEllipsis = true
         };
@@ -1116,6 +1156,8 @@ internal sealed class ModernActionRow : ModernSurfacePanel
 
 internal sealed class ModernButton : Button
 {
+    private Color _outlineColor = Color.Transparent;
+
     public ModernButton()
     {
         FlatStyle = FlatStyle.Flat;
@@ -1124,31 +1166,56 @@ internal sealed class ModernButton : Button
         MinimumSize = new Size(120, 38);
         Padding = new Padding(14, 0, 14, 0);
         TextAlign = ContentAlignment.MiddleCenter;
-        FlatAppearance.BorderSize = 1;
+        FlatAppearance.BorderSize = 0;
         Resize += (_, _) => ControlDrawing.ApplyRoundedRegion(this, 12);
+    }
+
+    public void SetOutlineColor(Color color)
+    {
+        _outlineColor = color;
+        Invalidate();
     }
 
     public void ApplyTheme(ThemePalette palette, bool emphasis = false, bool destructive = false, bool destructiveHoverEnabled = false)
     {
-        Color destructiveBack = Color.FromArgb(74, 24, 31);
-        Color destructiveHoverColor = Color.FromArgb(96, 28, 36);
-        Color destructivePressed = Color.FromArgb(118, 32, 42);
-        Color destructiveBorder = Color.FromArgb(132, 58, 66);
+        bool lightPalette = palette.MenuBackground.GetBrightness() > 0.65f;
+        Color destructiveBack = lightPalette ? Color.FromArgb(255, 247, 247) : Color.FromArgb(74, 24, 31);
+        Color destructiveHoverColor = lightPalette ? Color.FromArgb(255, 224, 224) : Color.FromArgb(96, 28, 36);
+        Color destructivePressed = lightPalette ? Color.FromArgb(255, 207, 207) : Color.FromArgb(118, 32, 42);
+        Color destructiveBorder = lightPalette ? Color.FromArgb(198, 48, 55) : Color.FromArgb(132, 58, 66);
+        Color destructiveText = lightPalette ? Color.FromArgb(142, 28, 36) : palette.Text;
         bool useDestructiveBorder = destructive || destructiveHoverEnabled;
 
         BackColor = destructive
             ? destructiveBack
             : emphasis ? palette.Accent : palette.ButtonBackground;
-        ForeColor = emphasis && !destructive ? Color.White : palette.Text;
+        ForeColor = useDestructiveBorder ? destructiveText : emphasis && !destructive ? Color.White : palette.Text;
         FlatAppearance.BorderColor = useDestructiveBorder
             ? destructiveBorder
             : emphasis ? palette.Accent : palette.Border;
+        _outlineColor = FlatAppearance.BorderColor;
         FlatAppearance.MouseOverBackColor = destructive || destructiveHoverEnabled
             ? destructiveHoverColor
             : emphasis ? palette.AccentHover : palette.ButtonHover;
         FlatAppearance.MouseDownBackColor = destructive || destructiveHoverEnabled
             ? destructivePressed
             : emphasis ? palette.AccentPressed : palette.ButtonPressed;
+        Invalidate();
+    }
+
+    protected override void OnPaint(PaintEventArgs pevent)
+    {
+        base.OnPaint(pevent);
+        if (_outlineColor == Color.Transparent || Width <= 4 || Height <= 4)
+        {
+            return;
+        }
+
+        pevent.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        Rectangle borderBounds = new(1, 1, Width - 3, Height - 3);
+        using GraphicsPath borderPath = ControlDrawing.RoundedRect(borderBounds, 11);
+        using Pen borderPen = new(_outlineColor, 1f);
+        pevent.Graphics.DrawPath(borderPen, borderPath);
     }
 }
 
@@ -1158,6 +1225,9 @@ internal sealed class SettingsSidebarItem : Control, ISurfaceBackgroundProvider,
     private static readonly Color SidebarHoverDark = Color.FromArgb(29, 34, 43);
     private static readonly Color SidebarSelectedDark = Color.FromArgb(35, 42, 53);
     private static readonly Color SidebarAccentDark = Color.FromArgb(124, 92, 255);
+    private static readonly Color SidebarBackgroundLight = Color.FromArgb(248, 250, 252);
+    private static readonly Color SidebarHoverLight = Color.FromArgb(226, 233, 242);
+    private static readonly Color SidebarSelectedLight = Color.FromArgb(214, 226, 240);
 
     private readonly FluentIconControl _iconControl;
     private readonly Label _titleLabel;
@@ -1193,7 +1263,7 @@ internal sealed class SettingsSidebarItem : Control, ISurfaceBackgroundProvider,
             AutoSize = false,
             BackColor = Color.Transparent,
             TextAlign = ContentAlignment.MiddleLeft,
-            Font = new Font("Segoe UI Semibold", 9.4f, FontStyle.Bold),
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 9.4f, FontStyle.Bold),
             AutoEllipsis = true
         };
 
@@ -1235,7 +1305,7 @@ internal sealed class SettingsSidebarItem : Control, ISurfaceBackgroundProvider,
         {
             if (_selected)
             {
-                return _useDarkPalette ? SidebarSelectedDark : _palette.ButtonHover;
+                return _useDarkPalette ? SidebarSelectedDark : SidebarSelectedLight;
             }
 
             if (_pressed)
@@ -1245,10 +1315,10 @@ internal sealed class SettingsSidebarItem : Control, ISurfaceBackgroundProvider,
 
             if (_hovered)
             {
-                return _useDarkPalette ? SidebarHoverDark : _palette.ButtonHover;
+                return _useDarkPalette ? SidebarHoverDark : SidebarHoverLight;
             }
 
-            return _useDarkPalette ? SidebarBackgroundDark : _palette.ButtonBackground;
+            return _useDarkPalette ? SidebarBackgroundDark : SidebarBackgroundLight;
         }
     }
 
@@ -1507,7 +1577,7 @@ internal sealed class ModernDropdown : Control, ISurfaceBackgroundProvider
             ControlStyles.UserPaint |
             ControlStyles.Selectable,
             true);
-        Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
+        Font = ControlDrawing.UiFont("Segoe UI", 9.5f, FontStyle.Regular);
         Height = 36;
         Width = 240;
         Cursor = Cursors.Hand;
@@ -2094,7 +2164,7 @@ internal sealed class SettingsRow : ModernSurfacePanel
         {
             Text = title,
             AutoSize = true,
-            Font = new Font("Segoe UI Semibold", 10f, FontStyle.Bold),
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 10f, FontStyle.Bold),
             Margin = new Padding(0),
             BackColor = Color.Transparent
         };
@@ -2102,7 +2172,7 @@ internal sealed class SettingsRow : ModernSurfacePanel
         {
             Text = description,
             AutoSize = true,
-            Font = new Font("Segoe UI", 8.8f, FontStyle.Regular),
+            Font = ControlDrawing.UiFont("Segoe UI", 8.8f, FontStyle.Regular),
             Margin = new Padding(0, 4, 0, 0),
             BackColor = Color.Transparent
         };
@@ -2197,7 +2267,7 @@ internal sealed class SettingsSection : Panel
         {
             Text = title,
             AutoSize = true,
-            Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 9.5f, FontStyle.Bold),
             Margin = new Padding(0),
             BackColor = Color.Transparent,
             ForeColor = palette.SecondaryText
@@ -2207,7 +2277,7 @@ internal sealed class SettingsSection : Panel
             Text = description,
             AutoSize = true,
             MaximumSize = new Size(760, 0),
-            Font = new Font("Segoe UI", 8.6f, FontStyle.Regular),
+            Font = ControlDrawing.UiFont("Segoe UI", 8.6f, FontStyle.Regular),
             Margin = new Padding(0, 4, 0, 12),
             BackColor = Color.Transparent,
             ForeColor = palette.SecondaryText
@@ -2314,7 +2384,7 @@ internal sealed class SettingsPageView : Panel
         {
             Text = title,
             AutoSize = true,
-            Font = new Font("Segoe UI Semibold", 18f, FontStyle.Bold),
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 18f, FontStyle.Bold),
             Margin = new Padding(0),
             BackColor = Color.Transparent,
             ForeColor = palette.Text
@@ -2324,7 +2394,7 @@ internal sealed class SettingsPageView : Panel
             Text = description,
             AutoSize = true,
             MaximumSize = new Size(520, 0),
-            Font = new Font("Segoe UI", 9f, FontStyle.Regular),
+            Font = ControlDrawing.UiFont("Segoe UI", 9f, FontStyle.Regular),
             Margin = new Padding(0, 4, 0, 12),
             BackColor = Color.Transparent,
             ForeColor = palette.SecondaryText
@@ -2397,7 +2467,7 @@ internal sealed class TrayPopupWindow : Form
         TopMost = true;
         KeyPreview = true;
         AutoScaleMode = AutoScaleMode.Dpi;
-        BackColor = Color.FromArgb(18, 18, 18);
+        BackColor = palette.MenuBackground;
         Padding = new Padding(1);
 
         _surface = new ModernSurfacePanel
@@ -2494,9 +2564,12 @@ internal sealed class TrayPopupWindow : Form
 
     private void LayoutAnchored(Point anchor)
     {
-        int popupContentWidth = ControlDrawing.ScaleLogical(this, DefaultLogicalContentWidth);
         Rectangle area = Screen.FromPoint(anchor).WorkingArea;
         int maxClientHeight = Math.Max(ControlDrawing.ScaleLogical(this, 220), area.Height - ControlDrawing.ScaleLogical(this, 24));
+        int maxClientWidth = Math.Max(
+            ControlDrawing.ScaleLogical(this, 260),
+            area.Width - ControlDrawing.ScaleLogical(this, 24) - _surface.Padding.Horizontal - Padding.Horizontal);
+        int popupContentWidth = Math.Min(GetRequestedContentWidth(), maxClientWidth);
 
         ContentHost.MinimumSize = new Size(popupContentWidth, 0);
         ContentHost.MaximumSize = new Size(popupContentWidth, 0);
@@ -2508,8 +2581,7 @@ internal sealed class TrayPopupWindow : Form
             ControlDrawing.ScaleLogical(this, 90),
             desiredContent.Height + _surface.Padding.Vertical + Padding.Vertical);
         bool needsVerticalScroll = naturalClientHeight > maxClientHeight;
-        int availableContentWidth = popupContentWidth - (needsVerticalScroll ? SystemInformation.VerticalScrollBarWidth : 0);
-        availableContentWidth = Math.Max(ControlDrawing.ScaleLogical(this, 220), availableContentWidth);
+        int availableContentWidth = popupContentWidth;
 
         ContentHost.MinimumSize = new Size(availableContentWidth, 0);
         ContentHost.MaximumSize = new Size(availableContentWidth, 0);
@@ -2517,7 +2589,8 @@ internal sealed class TrayPopupWindow : Form
         ContentHost.PerformLayout();
         desiredContent = MeasureContentHost(availableContentWidth);
 
-        int clientWidth = popupContentWidth + _surface.Padding.Horizontal + Padding.Horizontal;
+        int clientWidth = popupContentWidth + _surface.Padding.Horizontal + Padding.Horizontal +
+            (needsVerticalScroll ? SystemInformation.VerticalScrollBarWidth : 0);
         int clientHeight = Math.Min(
             Math.Max(ControlDrawing.ScaleLogical(this, 90), desiredContent.Height + _surface.Padding.Vertical + Padding.Vertical),
             maxClientHeight);
@@ -2536,7 +2609,7 @@ internal sealed class TrayPopupWindow : Form
 
         int gutter = ControlDrawing.ScaleLogical(this, 8);
         int x = anchor.X - Width + gutter + 4;
-        int y = anchor.Y - Height - gutter;
+        int y = anchor.Y - Height;
 
         if (x < area.Left + gutter)
         {
@@ -2553,12 +2626,27 @@ internal sealed class TrayPopupWindow : Form
             y = Math.Min(area.Bottom - Height - gutter, anchor.Y + gutter + 4);
         }
 
-        if (y + Height > area.Bottom - gutter)
+        if (y + Height > area.Bottom)
         {
-            y = area.Bottom - Height - gutter;
+            y = area.Bottom - Height;
         }
 
         Location = new Point(x, y);
+    }
+
+    private int GetRequestedContentWidth()
+    {
+        int requestedWidth = Math.Max(
+            ControlDrawing.ScaleLogical(this, DefaultLogicalContentWidth),
+            Math.Max(ContentHost.MinimumSize.Width, ContentHost.Width));
+
+        foreach (Control child in ContentHost.Controls)
+        {
+            requestedWidth = Math.Max(requestedWidth, child.Width + child.Margin.Horizontal);
+            requestedWidth = Math.Max(requestedWidth, child.MinimumSize.Width + child.Margin.Horizontal);
+        }
+
+        return requestedWidth;
     }
 
     private Size MeasureContentHost(int width)

@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -10,6 +10,7 @@
     <ApplicationIcon>assets\icons\magnifier_dark.ico</ApplicationIcon>
     <PublishTrimmed>false</PublishTrimmed>
     <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
+    <NoWarn>$(NoWarn);WFO1000</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="assets\icons\magnifier_dark.ico">

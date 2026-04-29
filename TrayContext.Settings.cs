@@ -12,6 +12,7 @@ internal sealed partial class TrayContext
     private sealed class Settings
     {
         public int ThemeMode { get; set; } = (int)TrayContext.ThemeMode.AutoSystem;
+        public int UiFontSize { get; set; } = (int)TrayContext.UiFontSize.Large;
         public int StepPercent { get; set; } = 25;
         public int MaxPercent { get; set; } = 400;
         public bool MagnificationEnabled { get; set; } = true;
@@ -40,6 +41,7 @@ internal sealed partial class TrayContext
         return new Settings
         {
             ThemeMode = (int)ThemeMode.AutoSystem,
+            UiFontSize = (int)UiFontSize.Large,
             StepPercent = 25,
             MaxPercent = 400,
             MagnificationEnabled = true,
@@ -71,6 +73,10 @@ internal sealed partial class TrayContext
         _themeMode = Enum.IsDefined(typeof(ThemeMode), s.ThemeMode)
             ? (ThemeMode)s.ThemeMode
             : ThemeMode.AutoSystem;
+        _uiFontSize = Enum.IsDefined(typeof(UiFontSize), s.UiFontSize)
+            ? (UiFontSize)s.UiFontSize
+            : UiFontSize.Large;
+        ApplyUiFontScale();
         _enabled = s.MagnificationEnabled;
         _invertEnabled = s.InvertEnabled;
         _followCursor = s.FollowCursor;
@@ -174,6 +180,7 @@ internal sealed partial class TrayContext
             var s = new Settings
             {
                 ThemeMode = (int)_themeMode,
+                UiFontSize = (int)_uiFontSize,
                 StepPercent = _stepPercent,
                 MaxPercent = _maxPercent,
                 MagnificationEnabled = _enabled,
@@ -246,6 +253,45 @@ internal sealed partial class TrayContext
         ShortcutInputMode.MouseOnly => L("Settings.ShortcutModeMouseOnly"),
         _ => L("Settings.ShortcutModeBoth")
     };
+
+    private void ApplyUiFontScale()
+    {
+        ControlDrawing.UiFontScale = _uiFontSize switch
+        {
+            UiFontSize.Large => 1.14f,
+            UiFontSize.ExtraLarge => 1.28f,
+            _ => 1f
+        };
+    }
+
+    private string UiFontSizeLabel(UiFontSize size) => size switch
+    {
+        UiFontSize.Large => L("Settings.FontSizeLarge"),
+        UiFontSize.ExtraLarge => L("Settings.FontSizeExtraLarge"),
+        _ => L("Settings.FontSizeDefault")
+    };
+
+    private string[] BuildUiFontSizeItems() =>
+    [
+        L("Settings.FontSizeDefault"),
+        L("Settings.FontSizeLarge"),
+        L("Settings.FontSizeExtraLarge")
+    ];
+
+    private UiFontSize ParseUiFontSize(string value)
+    {
+        if (string.Equals(value, L("Settings.FontSizeLarge"), StringComparison.Ordinal))
+        {
+            return UiFontSize.Large;
+        }
+
+        if (string.Equals(value, L("Settings.FontSizeExtraLarge"), StringComparison.Ordinal))
+        {
+            return UiFontSize.ExtraLarge;
+        }
+
+        return UiFontSize.Default;
+    }
 
     private ShortcutInputMode ParseShortcutInputMode(string value)
     {

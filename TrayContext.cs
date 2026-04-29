@@ -5,6 +5,7 @@ using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace QuickZoom;
@@ -79,6 +80,13 @@ internal sealed partial class TrayContext : ApplicationContext
         MouseOnly = 2
     }
 
+    private enum UiFontSize
+    {
+        Default = 0,
+        Large = 1,
+        ExtraLarge = 2
+    }
+
     private NotifyIcon _tray = null!;
     private Icon? _iconRef;
     private Control _uiInvoker = null!;
@@ -86,6 +94,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private bool _useDarkTheme;
     private ThemeMode _themeMode = ThemeMode.AutoSystem;
     private UiLanguage _language = UiText.GetStartupLanguage();
+    private UiFontSize _uiFontSize = UiFontSize.Large;
 
     // Hook + timers
     private IntPtr _hook = IntPtr.Zero;
@@ -178,13 +187,15 @@ internal sealed partial class TrayContext : ApplicationContext
     private bool _cursorSpotlightHidesSystemCursor;
     private bool _cursorSpotlightOverridesSystemCursors;
     private long _lastSlowPerMonitorFrameLogTick;
+    private readonly string? _startupReadyEventName;
 
     // Settings
     private readonly string _settingsPath = AppPaths.SettingsPath;
     private readonly string _legacySettingsPath = AppPaths.LegacySettingsPath;
 
-    public TrayContext()
+    public TrayContext(string? startupReadyEventName = null)
     {
+        _startupReadyEventName = startupReadyEventName;
         LoadSettings();
         RestoreSystemCursorScheme();
         _uiInvoker = new Control();

@@ -43,17 +43,17 @@ internal static class ThemePalettes
 
     public static ThemePalette Light => new()
     {
-        MenuBackground = Color.FromArgb(244, 246, 248),
-        HoverBackground = Color.FromArgb(230, 234, 238),
-        Text = Color.FromArgb(26, 30, 34),
-        SecondaryText = Color.FromArgb(96, 106, 116),
+        MenuBackground = Color.FromArgb(239, 243, 247),
+        HoverBackground = Color.FromArgb(218, 226, 236),
+        Text = Color.FromArgb(17, 24, 39),
+        SecondaryText = Color.FromArgb(70, 82, 97),
         DisabledText = Color.FromArgb(132, 140, 148),
-        Separator = Color.FromArgb(216, 221, 226),
+        Separator = Color.FromArgb(198, 207, 217),
         ControlBackground = Color.FromArgb(255, 255, 255),
-        ButtonBackground = Color.FromArgb(246, 248, 250),
-        Border = Color.FromArgb(212, 218, 224),
-        ButtonHover = Color.FromArgb(236, 240, 244),
-        ButtonPressed = Color.FromArgb(224, 229, 234),
+        ButtonBackground = Color.FromArgb(247, 249, 252),
+        Border = Color.FromArgb(190, 201, 213),
+        ButtonHover = Color.FromArgb(226, 233, 242),
+        ButtonPressed = Color.FromArgb(210, 221, 234),
         Accent = Color.FromArgb(72, 163, 96),
         AccentHover = Color.FromArgb(83, 175, 107),
         AccentPressed = Color.FromArgb(62, 145, 86)
