@@ -299,7 +299,7 @@ internal sealed partial class TrayContext
         resetCursorRow.ActionRequested += (_, _) => ExecuteTrayAction(() =>
         {
             ResetExitConfirmation();
-            SystemParametersInfo(SPI_SETCURSORS, 0, IntPtr.Zero, 0);
+            RestoreSystemCursorScheme();
             ShowTrayRowDone(resetCursorRow, L("Tray.ResetCursor"));
         });
         actions.Controls.Add(resetCursorRow);
@@ -887,10 +887,16 @@ internal sealed partial class TrayContext
         }
     }
 
-    private void RestoreSystemCursorScheme()
+    private void RestoreSystemCursorScheme(bool reapplyCursorEnhancement = true)
     {
         _ = SystemParametersInfo(SPI_SETCURSORS, 0, IntPtr.Zero, 0);
         _cursorSpotlightOverridesSystemCursors = false;
+        _cursorEnhancementApplied = false;
+
+        if (reapplyCursorEnhancement && _cursorEnhancementEnabled && !_applyingCursorEnhancement)
+        {
+            ApplyCursorEnhancement();
+        }
     }
 
     private static IntPtr CreateTransparentCursor(int width, int height)

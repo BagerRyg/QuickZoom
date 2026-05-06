@@ -12,6 +12,7 @@ internal sealed partial class TrayContext
         General,
         Display,
         Appearance,
+        Cursor,
         Zoom,
         Input,
         About
@@ -181,6 +182,7 @@ internal sealed partial class TrayContext
             [SettingsPage.General] = BuildGeneralSettingsPage(),
             [SettingsPage.Display] = BuildDisplaySettingsPage(),
             [SettingsPage.Appearance] = BuildAppearanceSettingsPage(),
+            [SettingsPage.Cursor] = BuildCursorSettingsPage(),
             [SettingsPage.Zoom] = BuildZoomSettingsPage(),
             [SettingsPage.Input] = BuildInputSettingsPage(),
             [SettingsPage.About] = BuildAboutSettingsPage()
@@ -191,6 +193,7 @@ internal sealed partial class TrayContext
             [SettingsPage.General] = new SettingsSidebarItem(palette, L("Settings.General"), TrayFluentIcon.Settings),
             [SettingsPage.Display] = new SettingsSidebarItem(palette, L("Settings.Display"), TrayFluentIcon.MagnifiedDisplays),
             [SettingsPage.Appearance] = new SettingsSidebarItem(palette, L("Settings.Appearance"), TrayFluentIcon.Appearance),
+            [SettingsPage.Cursor] = new SettingsSidebarItem(palette, L("Settings.Cursor"), TrayFluentIcon.Cursor),
             [SettingsPage.Zoom] = new SettingsSidebarItem(palette, L("Settings.Zoom"), TrayFluentIcon.Zoom),
             [SettingsPage.Input] = new SettingsSidebarItem(palette, L("Settings.Input"), TrayFluentIcon.KeyBinds),
             [SettingsPage.About] = new SettingsSidebarItem(palette, L("Settings.About"), TrayFluentIcon.About)
@@ -369,19 +372,6 @@ internal sealed partial class TrayContext
             SaveSettings();
         }, rightColumnWidth: 96));
 
-        section.AddRow(CreateToggleRow(L("Settings.WiggleSpotlight"), L("Settings.WiggleSpotlightHelp"), _wiggleSpotlightEnabled, value =>
-        {
-            _wiggleSpotlightEnabled = value;
-            if (!_wiggleSpotlightEnabled)
-            {
-                _recentCursorSamples.Clear();
-                _cursorSpotlightVisibleUntilTick = 0;
-                _cursorSpotlightOverlay?.HideSpotlight();
-            }
-
-            SaveSettings();
-        }, rightColumnWidth: 96));
-
         page.AddSection(section);
         return page;
     }
@@ -517,6 +507,92 @@ internal sealed partial class TrayContext
             ApplyFps();
             SaveSettings();
         }, rightColumnWidth: 420));
+
+        page.AddSection(section);
+        return page;
+    }
+
+    private SettingsPageView BuildCursorSettingsPage()
+    {
+        ThemePalette palette = CurrentTheme;
+        var page = new SettingsPageView(palette, L("Settings.CursorTitle"), L("Settings.CursorDescription"));
+        var section = new SettingsSection(palette, string.Empty, string.Empty);
+        var preview = new CursorPreviewControl(
+            palette,
+            Color.FromArgb(_cursorFillColorArgb),
+            Color.FromArgb(_cursorBorderColorArgb),
+            _cursorScale);
+
+        section.AddRow(CreateToggleRow(L("Settings.WiggleSpotlight"), L("Settings.WiggleSpotlightHelp"), _wiggleSpotlightEnabled, value =>
+        {
+            _wiggleSpotlightEnabled = value;
+            if (!_wiggleSpotlightEnabled)
+            {
+                _recentCursorSamples.Clear();
+                _cursorSpotlightVisibleUntilTick = 0;
+                _cursorSpotlightOverlay?.HideSpotlight();
+            }
+
+            SaveSettings();
+        }, rightColumnWidth: 96));
+
+        section.AddRow(CreateToggleRow(L("Settings.CursorEnhancement"), L("Settings.CursorEnhancementHelp"), _cursorEnhancementEnabled, value =>
+        {
+            _cursorEnhancementEnabled = value;
+            ApplyCursorEnhancementIfNeeded();
+            SaveSettings();
+        }, rightColumnWidth: 96));
+
+        section.AddRow(CreateSliderRow(
+            L("Settings.CursorSize"),
+            L("Settings.CursorSizeHelp"),
+            _cursorScale,
+            CursorScaleMinimum,
+            CursorScaleMaximum,
+            10,
+            value => value + "%",
+            value =>
+            {
+                _cursorScale = value;
+                preview.ScalePercent = value;
+                preview.Invalidate();
+                SaveSettings();
+                ScheduleCursorScaleApply();
+            },
+            rightColumnWidth: 420));
+
+        section.AddRow(CreateColorPaletteRow(
+            L("Settings.CursorFillColor"),
+            L("Settings.CursorFillColorHelp"),
+            Color.FromArgb(_cursorFillColorArgb),
+            color =>
+            {
+                _cursorFillColorArgb = color.ToArgb();
+                preview.FillColor = color;
+                preview.Invalidate();
+                ApplyCursorEnhancementIfNeeded();
+                SaveSettings();
+            }));
+
+        section.AddRow(CreateColorPaletteRow(
+            L("Settings.CursorBorderColor"),
+            L("Settings.CursorBorderColorHelp"),
+            Color.FromArgb(_cursorBorderColorArgb),
+            color =>
+            {
+                _cursorBorderColorArgb = color.ToArgb();
+                preview.BorderColor = color;
+                preview.Invalidate();
+                ApplyCursorEnhancementIfNeeded();
+                SaveSettings();
+            }));
+
+        section.AddRow(new SettingsRow(
+            palette,
+            L("Settings.CursorPreview"),
+            L("Settings.CursorPreviewHelp"),
+            preview,
+            rightColumnWidth: 260));
 
         page.AddSection(section);
         return page;
@@ -803,6 +879,16 @@ internal sealed partial class TrayContext
         return new SettingsRow(CurrentTheme, title, description, rightControl, rightColumnWidth);
     }
 
+    private SettingsRow CreateColorPaletteRow(string title, string description, Color selectedColor, Action<Color> onChanged)
+    {
+        var paletteControl = new ColorPaletteControl(CurrentTheme, BuildCursorColorPalette(), selectedColor)
+        {
+            Width = 264
+        };
+        paletteControl.ColorSelected += (_, color) => onChanged(Color.FromArgb(255, color));
+        return new SettingsRow(CurrentTheme, title, description, paletteControl, rightColumnWidth: 280);
+    }
+
     private SettingsRow CreateKeybindRow(string title, string description, string currentKeyLabel, Action onCustomize, int rightColumnWidth = 360)
     {
         var badge = new KeyBadgeControl(CurrentTheme, currentKeyLabel)
@@ -913,6 +999,46 @@ internal sealed partial class TrayContext
     }
 
     private string[] BuildThemeModeItems() => [L("Settings.ThemeAuto"), L("Settings.ThemeDark"), L("Settings.ThemeLight")];
+
+    private static Color[] BuildCursorColorPalette() =>
+    [
+        Color.White,
+        Color.Black,
+        Color.FromArgb(248, 250, 252),
+        Color.FromArgb(107, 114, 128),
+        Color.FromArgb(31, 41, 55),
+        Color.FromArgb(239, 68, 68),
+        Color.FromArgb(220, 38, 38),
+        Color.FromArgb(249, 115, 22),
+        Color.FromArgb(245, 158, 11),
+        Color.FromArgb(234, 179, 8),
+        Color.FromArgb(250, 204, 21),
+        Color.FromArgb(132, 204, 22),
+        Color.FromArgb(34, 197, 94),
+        Color.FromArgb(16, 185, 129),
+        Color.FromArgb(20, 184, 166),
+        Color.FromArgb(6, 182, 212),
+        Color.FromArgb(14, 165, 233),
+        Color.FromArgb(59, 130, 246),
+        Color.FromArgb(37, 99, 235),
+        Color.FromArgb(99, 102, 241),
+        Color.FromArgb(139, 92, 246),
+        Color.FromArgb(168, 85, 247),
+        Color.FromArgb(217, 70, 239),
+        Color.FromArgb(236, 72, 153),
+        Color.FromArgb(244, 63, 94),
+        Color.FromArgb(252, 165, 165),
+        Color.FromArgb(253, 186, 116),
+        Color.FromArgb(253, 224, 71),
+        Color.FromArgb(134, 239, 172),
+        Color.FromArgb(103, 232, 249),
+        Color.FromArgb(147, 197, 253),
+        Color.FromArgb(216, 180, 254),
+        Color.FromArgb(251, 207, 232),
+        Color.FromArgb(254, 202, 202),
+        Color.FromArgb(209, 213, 219),
+        Color.FromArgb(120, 113, 108)
+    ];
 
     private string ThemeModeLabel(ThemeMode mode) => mode switch
     {

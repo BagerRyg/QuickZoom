@@ -238,18 +238,23 @@ internal sealed partial class TrayContext
         public IntPtr HostHandle => _host.Handle;
         public IntPtr MagnifierHandle => _magnifierHandle;
 
-        public MonitorMagnifierWindow(Rectangle bounds)
+        public MonitorMagnifierWindow(Rectangle bounds, bool showMagnifiedCursor)
         {
             _host = new MonitorMagnifierHostForm(bounds);
             _host.Bounds = bounds;
             _ = _host.Handle;
             _ = SetLayeredWindowAttributes(_host.Handle, 0, 255, LWA_ALPHA);
+            int style = WS_CHILD | WS_VISIBLE | WS_DISABLED;
+            if (showMagnifiedCursor)
+            {
+                style |= MS_SHOWMAGNIFIEDCURSOR;
+            }
 
             _magnifierHandle = CreateWindowEx(
                 WS_EX_TRANSPARENT,
                 "Magnifier",
                 null,
-                WS_CHILD | WS_VISIBLE | WS_DISABLED | MS_SHOWMAGNIFIEDCURSOR,
+                style,
                 0,
                 0,
                 bounds.Width,
@@ -491,7 +496,7 @@ internal sealed partial class TrayContext
             // Cursor reset is only needed for fullscreen magnification transitions.
             if (wasFullscreenBackend)
             {
-                SystemParametersInfo(SPI_SETCURSORS, 0, IntPtr.Zero, 0);
+                RestoreSystemCursorScheme();
             }
         }
     }
@@ -539,7 +544,7 @@ internal sealed partial class TrayContext
             {
                 try
                 {
-                    window = new MonitorMagnifierWindow(screen.Bounds);
+                    window = new MonitorMagnifierWindow(screen.Bounds, !_cursorEnhancementEnabled);
                     _monitorWindows[screen.DeviceName] = window;
                 }
                 catch (Exception ex)
@@ -588,6 +593,19 @@ internal sealed partial class TrayContext
 
         _monitorWindows.Clear();
         _lastAnchorByMonitor.Clear();
+    }
+
+    private void RefreshMagnifierCursorRendering()
+    {
+        if (!_magActive || _useFullscreenBackend || _monitorWindows.Count == 0)
+        {
+            return;
+        }
+
+        DestroyMonitorWindows();
+        _monitorLayoutDirty = true;
+        SyncMonitorWindows();
+        ApplyTransformCurrentPoint();
     }
 
     private void ApplyMagnifierFilterLists()

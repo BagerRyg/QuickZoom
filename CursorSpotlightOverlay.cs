@@ -58,6 +58,9 @@ internal sealed class CursorSpotlightOverlay : Form
     [DllImport("gdi32.dll", SetLastError = true)]
     private static extern bool DeleteObject(IntPtr hObject);
 
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern int GetObject(IntPtr hObject, int nCount, out BITMAP lpObject);
+
     [DllImport("user32.dll")]
     private static extern int GetSystemMetrics(int nIndex);
 
@@ -88,10 +91,26 @@ internal sealed class CursorSpotlightOverlay : Form
         public IntPtr hbmColor;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BITMAP
+    {
+        public int bmType;
+        public int bmWidth;
+        public int bmHeight;
+        public int bmWidthBytes;
+        public ushort bmPlanes;
+        public ushort bmBitsPixel;
+        public IntPtr bmBits;
+    }
+
     private readonly Color _transparentKey = Color.Lime;
     private IntPtr _cursorHandle;
     private Bitmap? _cursorBitmap;
+    private Bitmap? _spotlightBitmap;
     private IntPtr _bitmapCursorHandle;
+    private IntPtr _spotlightCursorHandle;
+    private Size _spotlightSourceSize;
+    private float _spotlightScale;
     private int _hotspotX;
     private int _hotspotY;
     private float _scale = 1f;
@@ -187,17 +206,23 @@ internal sealed class CursorSpotlightOverlay : Form
             return;
         }
 
-        e.Graphics.SmoothingMode = SmoothingMode.HighQuality;
-        e.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-        e.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-        e.Graphics.CompositingQuality = CompositingQuality.HighQuality;
+        RefreshSpotlightBitmapIfNeeded();
+        if (_spotlightBitmap == null)
+        {
+            return;
+        }
 
-        int drawWidth = (int)Math.Round(_cursorBitmap.Width * _scale);
-        int drawHeight = (int)Math.Round(_cursorBitmap.Height * _scale);
+        e.Graphics.SmoothingMode = SmoothingMode.None;
+        e.Graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+        e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
+        e.Graphics.CompositingQuality = CompositingQuality.HighSpeed;
+
+        int drawWidth = _spotlightBitmap.Width;
+        int drawHeight = _spotlightBitmap.Height;
         int drawX = (int)Math.Round((_hotspotX * _scale * -1) + ((Width - drawWidth) / 2.0) + _hotspotX);
         int drawY = (int)Math.Round((_hotspotY * _scale * -1) + ((Height - drawHeight) / 2.0) + _hotspotY);
 
-        e.Graphics.DrawImage(_cursorBitmap, new Rectangle(drawX, drawY, drawWidth, drawHeight));
+        e.Graphics.DrawImageUnscaled(_spotlightBitmap, drawX, drawY);
     }
 
     private bool TryPrepareCursor(Point cursorPoint, double progress)
@@ -219,12 +244,13 @@ internal sealed class CursorSpotlightOverlay : Form
 
         try
         {
-            int baseWidth = Math.Max(16, GetSystemMetrics(SM_CXCURSOR));
-            int baseHeight = Math.Max(16, GetSystemMetrics(SM_CYCURSOR));
+            Size cursorSize = GetCursorBitmapSize(iconInfo);
+            int baseWidth = cursorSize.Width;
+            int baseHeight = cursorSize.Height;
             _cursorHandle = cursorInfo.hCursor;
             _hotspotX = iconInfo.xHotspot;
             _hotspotY = iconInfo.yHotspot;
-            _scale = 3.2f - (float)(Math.Max(0d, Math.Min(1d, progress)) * 2.2d);
+            _scale = 2f;
             RefreshCursorBitmapIfNeeded(baseWidth, baseHeight);
 
             int drawWidth = (int)Math.Round(baseWidth * _scale);
@@ -267,6 +293,8 @@ internal sealed class CursorSpotlightOverlay : Form
         }
 
         _cursorBitmap?.Dispose();
+        _spotlightBitmap?.Dispose();
+        _spotlightBitmap = null;
         _cursorBitmap = new Bitmap(baseWidth, baseHeight, PixelFormat.Format32bppArgb);
         _bitmapCursorHandle = _cursorHandle;
         using Graphics graphics = Graphics.FromImage(_cursorBitmap);
@@ -283,12 +311,85 @@ internal sealed class CursorSpotlightOverlay : Form
         }
     }
 
+    private void RefreshSpotlightBitmapIfNeeded()
+    {
+        if (_cursorBitmap == null)
+        {
+            return;
+        }
+
+        Size sourceSize = _cursorBitmap.Size;
+        if (_spotlightBitmap != null &&
+            _spotlightCursorHandle == _cursorHandle &&
+            _spotlightSourceSize == sourceSize &&
+            Math.Abs(_spotlightScale - _scale) < 0.001f)
+        {
+            return;
+        }
+
+        _spotlightBitmap?.Dispose();
+        int width = Math.Max(1, (int)Math.Round(_cursorBitmap.Width * _scale));
+        int height = Math.Max(1, (int)Math.Round(_cursorBitmap.Height * _scale));
+        _spotlightBitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+        _spotlightCursorHandle = _cursorHandle;
+        _spotlightSourceSize = sourceSize;
+        _spotlightScale = _scale;
+
+        using Graphics graphics = Graphics.FromImage(_spotlightBitmap);
+        graphics.Clear(Color.Transparent);
+        graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+        graphics.PixelOffsetMode = PixelOffsetMode.Half;
+        graphics.CompositingQuality = CompositingQuality.HighSpeed;
+        graphics.DrawImage(_cursorBitmap, new Rectangle(0, 0, width, height));
+    }
+
+    private static Size GetCursorBitmapSize(ICONINFO iconInfo)
+    {
+        if (TryGetBitmapSize(iconInfo.hbmColor, out Size colorSize))
+        {
+            return colorSize;
+        }
+
+        if (TryGetBitmapSize(iconInfo.hbmMask, out Size maskSize))
+        {
+            return new Size(maskSize.Width, Math.Max(16, maskSize.Height / 2));
+        }
+
+        return new Size(
+            Math.Max(16, GetSystemMetrics(SM_CXCURSOR)),
+            Math.Max(16, GetSystemMetrics(SM_CYCURSOR)));
+    }
+
+    private static bool TryGetBitmapSize(IntPtr bitmapHandle, out Size size)
+    {
+        size = Size.Empty;
+        if (bitmapHandle == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        if (GetObject(bitmapHandle, Marshal.SizeOf<BITMAP>(), out BITMAP bitmap) == 0)
+        {
+            return false;
+        }
+
+        if (bitmap.bmWidth <= 0 || bitmap.bmHeight <= 0)
+        {
+            return false;
+        }
+
+        size = new Size(bitmap.bmWidth, bitmap.bmHeight);
+        return true;
+    }
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
             _cursorBitmap?.Dispose();
             _cursorBitmap = null;
+            _spotlightBitmap?.Dispose();
+            _spotlightBitmap = null;
         }
 
         base.Dispose(disposing);

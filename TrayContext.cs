@@ -27,6 +27,9 @@ internal sealed partial class TrayContext : ApplicationContext
     [DllImport("gdi32.dll", SetLastError = true)]
     private static extern bool DeleteObject(IntPtr hObject);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool DestroyIcon(IntPtr hIcon);
+
     [StructLayout(LayoutKind.Sequential)]
     private struct ICONINFO
     {
@@ -122,6 +125,12 @@ internal sealed partial class TrayContext : ApplicationContext
     private bool _useFullscreenBackend;
     private bool _centerCursor;
     private bool _wiggleSpotlightEnabled = true;
+    private bool _cursorEnhancementEnabled;
+    private int _cursorScale = 100;
+    private int _cursorFillColorArgb = Color.White.ToArgb();
+    private int _cursorBorderColorArgb = Color.Black.ToArgb();
+    private bool _cursorEnhancementApplied;
+    private bool _applyingCursorEnhancement;
 
     // Animation
     private int _animDurationMs = 140;
@@ -161,6 +170,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private SettingsSection? _displaySelectionSettingsSection;
     private ModernButton? _resetDefaultsButton;
     private System.Windows.Forms.Timer? _resetDefaultsConfirmTimer;
+    private System.Windows.Forms.Timer? _cursorScaleApplyTimer;
     private bool _pendingResetDefaultsConfirmation;
 
     // Refresh rate
@@ -197,7 +207,8 @@ internal sealed partial class TrayContext : ApplicationContext
     {
         _startupReadyEventName = startupReadyEventName;
         LoadSettings();
-        RestoreSystemCursorScheme();
+        RestoreSystemCursorScheme(reapplyCursorEnhancement: false);
+        ApplyCursorEnhancementIfNeeded();
         _uiInvoker = new Control();
         _uiInvoker.CreateControl();
         InitializeCoreRuntime();
@@ -229,8 +240,11 @@ internal sealed partial class TrayContext : ApplicationContext
             _cursorSpotlightTimer?.Dispose();
             _startupTimer?.Stop();
             _startupTimer?.Dispose();
+            _cursorScaleApplyTimer?.Stop();
+            _cursorScaleApplyTimer?.Dispose();
             _shellMessageWindow?.Dispose();
             RestoreSystemCursorVisibility();
+            RestoreSystemCursorScheme(reapplyCursorEnhancement: false);
             _cursorSpotlightOverlay?.HideSpotlight();
             _cursorSpotlightOverlay?.Dispose();
             CloseTrayPopup();

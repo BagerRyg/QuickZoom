@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -31,6 +32,10 @@ internal sealed partial class TrayContext
         public int Fps { get; set; } = 120;
         public bool CenterCursor { get; set; }
         public bool WiggleSpotlightEnabled { get; set; } = true;
+        public bool CursorEnhancementEnabled { get; set; }
+        public int CursorScale { get; set; } = 100;
+        public int CursorFillColor { get; set; } = unchecked((int)0xFFFFFFFF);
+        public int CursorBorderColor { get; set; } = unchecked((int)0xFF000000);
         public bool AutoSwitchMonitor { get; set; } = true;
         public bool UseCursorMonitorSelection { get; set; }
         public List<string> SelectedMonitorDeviceNames { get; set; } = new();
@@ -60,6 +65,10 @@ internal sealed partial class TrayContext
             Fps = 120,
             CenterCursor = false,
             WiggleSpotlightEnabled = true,
+            CursorEnhancementEnabled = false,
+            CursorScale = 100,
+            CursorFillColor = Color.White.ToArgb(),
+            CursorBorderColor = Color.Black.ToArgb(),
             AutoSwitchMonitor = true,
             UseCursorMonitorSelection = false,
             SelectedMonitorDeviceNames = new List<string>()
@@ -102,6 +111,10 @@ internal sealed partial class TrayContext
         _fps = Math.Clamp(s.Fps, 60, 360);
         _centerCursor = s.CenterCursor;
         _wiggleSpotlightEnabled = s.WiggleSpotlightEnabled;
+        _cursorEnhancementEnabled = s.CursorEnhancementEnabled;
+        _cursorScale = NormalizeCursorScale(s.CursorScale);
+        _cursorFillColorArgb = NormalizeCursorColor(s.CursorFillColor, Color.White);
+        _cursorBorderColorArgb = NormalizeCursorColor(s.CursorBorderColor, Color.Black);
         _useCursorMonitorSelection = s.UseCursorMonitorSelection;
         if (!_invertEnabled)
         {
@@ -200,6 +213,10 @@ internal sealed partial class TrayContext
                 Fps = _fps,
                 CenterCursor = _centerCursor,
                 WiggleSpotlightEnabled = _wiggleSpotlightEnabled,
+                CursorEnhancementEnabled = _cursorEnhancementEnabled,
+                CursorScale = _cursorScale,
+                CursorFillColor = _cursorFillColorArgb,
+                CursorBorderColor = _cursorBorderColorArgb,
                 UseCursorMonitorSelection = _useCursorMonitorSelection,
                 SelectedMonitorDeviceNames = _selectedMonitorDeviceNames.ToList()
             };
@@ -224,6 +241,7 @@ internal sealed partial class TrayContext
         _zoomPercent = 100;
         _animTargetPercent = 100;
         DisableMagAndReset();
+        ApplyCursorEnhancementIfNeeded();
         SaveSettings();
         RefreshMenuAndTrayUi(rebuildPopup: true);
 
@@ -236,6 +254,22 @@ internal sealed partial class TrayContext
     private void UpdateMenuLabels()
     {
         // Reserved for future live-menu label updates. The current tray UI is rebuilt instead.
+    }
+
+    private static int NormalizeCursorColor(int argb, Color fallback)
+    {
+        Color color = Color.FromArgb(argb);
+        return color.A == 0 ? fallback.ToArgb() : Color.FromArgb(255, color).ToArgb();
+    }
+
+    private static int NormalizeCursorScale(int scale)
+    {
+        if (scale >= 1 && scale <= 5)
+        {
+            scale *= 100;
+        }
+
+        return Math.Clamp(scale, CursorScaleMinimum, CursorScaleMaximum);
     }
 
     private string KeyLabel(Keys key) => key switch
