@@ -66,8 +66,11 @@ internal sealed partial class TrayContext
 
     private void OnCursorScaleApplyTimerTick(object? sender, EventArgs e)
     {
-        _cursorScaleApplyTimer?.Stop();
-        ApplyCursorEnhancementIfNeeded();
+        RunGuarded("CursorEnhancement.ApplyTimer", () =>
+        {
+            _cursorScaleApplyTimer?.Stop();
+            ApplyCursorEnhancementIfNeeded();
+        });
     }
 
     private void ApplyCursorEnhancement()
@@ -93,12 +96,14 @@ internal sealed partial class TrayContext
                 IntPtr systemCursor = LoadCursor(IntPtr.Zero, new IntPtr(cursorId));
                 if (systemCursor == IntPtr.Zero)
                 {
+                    ErrorLog.WriteThrottled("CursorEnhancement.LoadCursor", $"LoadCursor failed for OCR value {cursorId} with Win32 error {Marshal.GetLastWin32Error()}.");
                     continue;
                 }
 
                 IntPtr enhancedCursor = CreateEnhancedCursor(systemCursor, baseWidth, baseHeight, scale, fillColor, borderColor);
                 if (enhancedCursor == IntPtr.Zero)
                 {
+                    ErrorLog.WriteThrottled("CursorEnhancement.CreateCursor", $"Could not create enhanced cursor for OCR value {cursorId}.");
                     continue;
                 }
 

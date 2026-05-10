@@ -88,6 +88,20 @@ internal sealed partial class TrayContext
 
     private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
+        try
+        {
+            return HookCallbackCore(nCode, wParam, lParam);
+        }
+        catch (Exception ex)
+        {
+            _wheelDeltaRemainder = 0;
+            ErrorLog.WriteThrottled("MouseHook", ex);
+            return CallNextHookEx(_hook, nCode, wParam, lParam);
+        }
+    }
+
+    private IntPtr HookCallbackCore(int nCode, IntPtr wParam, IntPtr lParam)
+    {
         if (!_enabled && !_invertEnabled)
         {
             _enableKeyPressed = false;
@@ -133,6 +147,23 @@ internal sealed partial class TrayContext
     }
 
     private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        try
+        {
+            return KeyboardHookCallbackCore(nCode, wParam, lParam);
+        }
+        catch (Exception ex)
+        {
+            _enableKeyPressed = false;
+            _invertKeyPressed = false;
+            _followCursorKeyPressed = false;
+            _wheelDeltaRemainder = 0;
+            ErrorLog.WriteThrottled("KeyboardHook", ex);
+            return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
+        }
+    }
+
+    private IntPtr KeyboardHookCallbackCore(int nCode, IntPtr wParam, IntPtr lParam)
     {
         if (!_enabled && !_invertEnabled && !KeyboardShortcutsAllowed())
         {

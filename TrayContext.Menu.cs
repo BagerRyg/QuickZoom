@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Drawing;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -54,15 +55,18 @@ internal sealed partial class TrayContext
         };
         _startupTimer.Tick += (_, _) =>
         {
-            if (!IsShellReady())
+            RunGuarded("Startup.DeferredInitialization", () =>
             {
-                return;
-            }
+                if (!IsShellReady())
+                {
+                    return;
+                }
 
-            _startupTimer?.Stop();
-            _startupTimer?.Dispose();
-            _startupTimer = null;
-            CompleteStartupInitialization();
+                _startupTimer?.Stop();
+                _startupTimer?.Dispose();
+                _startupTimer = null;
+                CompleteStartupInitialization();
+            });
         };
         _startupTimer.Start();
     }
@@ -75,9 +79,16 @@ internal sealed partial class TrayContext
             return;
         }
 
-        BuildMenuAndTray();
-        _startupInitialized = true;
-        SignalStartupReady();
+        try
+        {
+            BuildMenuAndTray();
+            _startupInitialized = true;
+            SignalStartupReady();
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.WriteThrottled("Startup.TrayInitialization", ex);
+        }
     }
 
     private void OnTaskbarCreated()
@@ -157,10 +168,17 @@ internal sealed partial class TrayContext
             return;
         }
 
-        CreateNotifyIcon();
-        if (_trayPopup != null && !_trayPopup.IsDisposed)
+        try
         {
-            RebuildTrayPopupIfOpen();
+            CreateNotifyIcon();
+            if (_trayPopup != null && !_trayPopup.IsDisposed)
+            {
+                RebuildTrayPopupIfOpen();
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.WriteThrottled("Startup.TrayRestore", ex);
         }
     }
 
@@ -431,15 +449,18 @@ internal sealed partial class TrayContext
         var timer = new System.Windows.Forms.Timer { Interval = 2500 };
         timer.Tick += (_, _) =>
         {
-            timer.Stop();
-            timer.Dispose();
-            if (row.IsDisposed)
+            RunGuarded("TrayPopup.RowDoneTimer", () =>
             {
-                return;
-            }
+                timer.Stop();
+                timer.Dispose();
+                if (row.IsDisposed)
+                {
+                    return;
+                }
 
-            row.Title = defaultTitle;
-            row.IsSuccess = false;
+                row.Title = defaultTitle;
+                row.IsSuccess = false;
+            });
         };
         timer.Start();
     }
@@ -506,7 +527,10 @@ internal sealed partial class TrayContext
     {
         int effectiveFps = GetEffectiveRenderingFps();
         int interval = Math.Max(5, 1000 / Math.Max(10, effectiveFps));
-        _followTimer.Interval = interval;
+        if (_followTimer != null)
+        {
+            _followTimer.Interval = interval;
+        }
 
         if (_animTimer != null)
         {
@@ -598,32 +622,35 @@ internal sealed partial class TrayContext
         ApplyFps();
         _followTimer.Tick += (_, _) =>
         {
-            if (!_enabled || _zoomPercent <= 100)
+            RunGuarded("TrayContext.FollowTimer", () =>
             {
-                return;
-            }
+                if (!_enabled || _zoomPercent <= 100)
+                {
+                    return;
+                }
 
-            if (!_followCursor || !_magActive)
-            {
-                return;
-            }
+                if (!_followCursor || !_magActive)
+                {
+                    return;
+                }
 
-            UpdateShellUiTrackingState();
+                UpdateShellUiTrackingState();
 
-            if (IsPerMonitorTrackingSuspended && !_useFullscreenBackend)
-            {
-                return;
-            }
+                if (IsPerMonitorTrackingSuspended && !_useFullscreenBackend)
+                {
+                    return;
+                }
 
-            if (_animTimer != null && _animTimer.Enabled)
-            {
-                return;
-            }
+                if (_animTimer != null && _animTimer.Enabled)
+                {
+                    return;
+                }
 
-            if (GetCursorPos(out var pt))
-            {
-                ApplyTransformAtPoint(pt, PercentToMag(_zoomPercent));
-            }
+                if (GetCursorPos(out var pt))
+                {
+                    ApplyTransformAtPoint(pt, PercentToMag(_zoomPercent));
+                }
+            });
         };
 
         if (_followCursor)
@@ -635,31 +662,34 @@ internal sealed partial class TrayContext
         ApplyFps();
         _animTimer.Tick += (_, _) =>
         {
-            if (_zoomPercent == _animTargetPercent)
+            RunGuarded("TrayContext.AnimationTimer", () =>
             {
-                _animAnchorValid = false;
-                _animTimer.Stop();
-                return;
-            }
+                if (_zoomPercent == _animTargetPercent)
+                {
+                    _animAnchorValid = false;
+                    _animTimer.Stop();
+                    return;
+                }
 
-            _animElapsedMs += _animTimer.Interval;
-            double t = Math.Min(1.0, _animElapsedMs / (double)_animDurationMs);
-            double ease = t * t * (3 - 2 * t);
-            _zoomPercent = (int)Math.Round(_animStartPercent + ((_animTargetPercent - _animStartPercent) * ease));
-            ApplyTransformCurrentPoint();
+                _animElapsedMs += _animTimer.Interval;
+                double t = Math.Min(1.0, _animElapsedMs / (double)_animDurationMs);
+                double ease = t * t * (3 - 2 * t);
+                _zoomPercent = (int)Math.Round(_animStartPercent + ((_animTargetPercent - _animStartPercent) * ease));
+                ApplyTransformCurrentPoint();
 
-            if (t >= 1.0)
-            {
-                _animAnchorValid = false;
-                _animTimer.Stop();
-            }
+                if (t >= 1.0)
+                {
+                    _animAnchorValid = false;
+                    _animTimer.Stop();
+                }
+            });
         };
 
         _cursorSpotlightTimer = new System.Windows.Forms.Timer
         {
             Interval = 20
         };
-        _cursorSpotlightTimer.Tick += (_, _) => HandleCursorSpotlightTick();
+        _cursorSpotlightTimer.Tick += (_, _) => RunGuarded("TrayContext.CursorSpotlightTimer", HandleCursorSpotlightTick);
         _cursorSpotlightTimer.Start();
     }
 
@@ -874,6 +904,7 @@ internal sealed partial class TrayContext
                 if (!SetSystemCursor(blankCursor, cursorId))
                 {
                     int error = Marshal.GetLastWin32Error();
+                    _ = DestroyIcon(blankCursor);
                     throw new InvalidOperationException($"SetSystemCursor failed for OCR value {cursorId} with Win32 error {error}.");
                 }
             }
@@ -889,7 +920,11 @@ internal sealed partial class TrayContext
 
     private void RestoreSystemCursorScheme(bool reapplyCursorEnhancement = true)
     {
-        _ = SystemParametersInfo(SPI_SETCURSORS, 0, IntPtr.Zero, 0);
+        if (!SystemParametersInfo(SPI_SETCURSORS, 0, IntPtr.Zero, 0))
+        {
+            ErrorLog.WriteThrottled("CursorRestore", new Win32Exception(Marshal.GetLastWin32Error()));
+        }
+
         _cursorSpotlightOverridesSystemCursors = false;
         _cursorEnhancementApplied = false;
 

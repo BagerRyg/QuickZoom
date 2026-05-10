@@ -466,19 +466,22 @@ internal sealed partial class TrayContext
 
         if (_settingsWindow.InvokeRequired)
         {
-            _settingsWindow.BeginInvoke((MethodInvoker)RefreshDisplaySettingsUi);
+            _settingsWindow.BeginInvoke((MethodInvoker)(() => RunGuarded("Settings.RefreshDisplay.Invoke", RefreshDisplaySettingsUi)));
             return;
         }
 
         _settingsWindow.BeginInvoke((MethodInvoker)(() =>
         {
-            if (_displaySelectionSettingsSection == null || _settingsWindow == null || _settingsWindow.IsDisposed)
+            RunGuarded("Settings.RefreshDisplay", () =>
             {
-                return;
-            }
+                if (_displaySelectionSettingsSection == null || _settingsWindow == null || _settingsWindow.IsDisposed)
+                {
+                    return;
+                }
 
-            PopulateDisplaySelectionSettingsSection();
-            _displaySelectionSettingsSection.PerformLayout();
+                PopulateDisplaySelectionSettingsSection();
+                _displaySelectionSettingsSection.PerformLayout();
+            });
         }));
     }
 
@@ -626,7 +629,7 @@ internal sealed partial class TrayContext
             RefreshMenuAndTrayUi(rebuildPopup: true);
             if (_settingsWindow != null && !_settingsWindow.IsDisposed)
             {
-                _settingsWindow.BeginInvoke((MethodInvoker)(() => RefreshSettingsWindow(SettingsPage.Appearance)));
+                _settingsWindow.BeginInvoke((MethodInvoker)(() => RunGuarded("Settings.LanguageRefresh", () => RefreshSettingsWindow(SettingsPage.Appearance))));
             }
             else
             {
@@ -1105,7 +1108,7 @@ internal sealed partial class TrayContext
 
         if (_settingsWindow.InvokeRequired)
         {
-            _settingsWindow.BeginInvoke((MethodInvoker)(() => RefreshSettingsWindow(page)));
+            _settingsWindow.BeginInvoke((MethodInvoker)(() => RunGuarded("Settings.RefreshWindow.Invoke", () => RefreshSettingsWindow(page))));
             return;
         }
 
@@ -1140,7 +1143,7 @@ internal sealed partial class TrayContext
 
     private void OnResetDefaultsConfirmTimeout(object? sender, EventArgs e)
     {
-        CancelResetDefaultsConfirmation();
+        RunGuarded("Settings.ResetDefaultsConfirmTimer", CancelResetDefaultsConfirmation);
     }
 
     private void CancelResetDefaultsConfirmation()

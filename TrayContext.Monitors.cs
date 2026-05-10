@@ -42,7 +42,7 @@ internal sealed partial class TrayContext
 
     private void OnDisplaySettingsChanged(object? sender, EventArgs e)
     {
-        RunOnUiThread(() =>
+        RunOnUiThread("DisplaySettingsChanged", () =>
         {
             EnsureSelectedMonitorsValid();
             EnsureLockedScreenStillValid();

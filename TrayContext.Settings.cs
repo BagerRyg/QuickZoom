@@ -130,7 +130,7 @@ internal sealed partial class TrayContext
         _useCursorMonitorSelection = _displaySelectionMode == DisplaySelectionMode.MonitorUnderCursor;
 
         _selectedMonitorDeviceNames.Clear();
-        foreach (string name in s.SelectedMonitorDeviceNames.Where(n => !string.IsNullOrWhiteSpace(n)))
+        foreach (string name in (s.SelectedMonitorDeviceNames ?? Enumerable.Empty<string>()).Where(n => !string.IsNullOrWhiteSpace(n)))
         {
             _selectedMonitorDeviceNames.Add(name);
         }
@@ -176,12 +176,26 @@ internal sealed partial class TrayContext
         {
             TryQuarantineCorruptSettingsFile();
             ErrorLog.Write("LoadSettings", ex);
+            TryApplyDefaultSettingsAfterLoadFailure();
         }
         catch (Exception ex)
         {
             ErrorLog.Write("LoadSettings", ex);
+            TryApplyDefaultSettingsAfterLoadFailure();
         }
         UpdateMenuLabels();
+    }
+
+    private void TryApplyDefaultSettingsAfterLoadFailure()
+    {
+        try
+        {
+            ApplySettingsModel(CreateDefaultSettings());
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.WriteThrottled("LoadSettings.DefaultFallback", ex);
+        }
     }
 
     private void SaveSettings()

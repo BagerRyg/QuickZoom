@@ -16,16 +16,33 @@ internal static class FilePersistence
             Directory.CreateDirectory(directory);
         }
 
-        string tempPath = path + ".tmp";
-        File.WriteAllText(tempPath, content, Utf8NoBom);
+        string tempPath = path + "." + Environment.ProcessId.ToString() + ".tmp";
+        try
+        {
+            File.WriteAllText(tempPath, content, Utf8NoBom);
 
-        if (File.Exists(path))
-        {
-            File.Replace(tempPath, path, destinationBackupFileName: null, ignoreMetadataErrors: true);
+            if (File.Exists(path))
+            {
+                File.Replace(tempPath, path, destinationBackupFileName: null, ignoreMetadataErrors: true);
+            }
+            else
+            {
+                File.Move(tempPath, path);
+            }
         }
-        else
+        finally
         {
-            File.Move(tempPath, path);
+            try
+            {
+                if (File.Exists(tempPath))
+                {
+                    File.Delete(tempPath);
+                }
+            }
+            catch
+            {
+                // Best effort cleanup.
+            }
         }
     }
 }

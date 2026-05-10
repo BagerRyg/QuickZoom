@@ -196,33 +196,41 @@ internal sealed class CursorSpotlightOverlay : Form
     {
         base.OnPaint(e);
 
-        if (_cursorHandle == IntPtr.Zero)
+        try
         {
-            return;
-        }
+            if (_cursorHandle == IntPtr.Zero)
+            {
+                return;
+            }
 
-        if (_cursorBitmap == null)
+            if (_cursorBitmap == null)
+            {
+                return;
+            }
+
+            RefreshSpotlightBitmapIfNeeded();
+            if (_spotlightBitmap == null)
+            {
+                return;
+            }
+
+            e.Graphics.SmoothingMode = SmoothingMode.None;
+            e.Graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+            e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
+            e.Graphics.CompositingQuality = CompositingQuality.HighSpeed;
+
+            int drawWidth = _spotlightBitmap.Width;
+            int drawHeight = _spotlightBitmap.Height;
+            int drawX = (int)Math.Round((_hotspotX * _scale * -1) + ((Width - drawWidth) / 2.0) + _hotspotX);
+            int drawY = (int)Math.Round((_hotspotY * _scale * -1) + ((Height - drawHeight) / 2.0) + _hotspotY);
+
+            e.Graphics.DrawImageUnscaled(_spotlightBitmap, drawX, drawY);
+        }
+        catch (Exception ex)
         {
-            return;
+            ErrorLog.WriteThrottled("CursorSpotlight.Paint", ex);
+            HideSpotlight();
         }
-
-        RefreshSpotlightBitmapIfNeeded();
-        if (_spotlightBitmap == null)
-        {
-            return;
-        }
-
-        e.Graphics.SmoothingMode = SmoothingMode.None;
-        e.Graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
-        e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
-        e.Graphics.CompositingQuality = CompositingQuality.HighSpeed;
-
-        int drawWidth = _spotlightBitmap.Width;
-        int drawHeight = _spotlightBitmap.Height;
-        int drawX = (int)Math.Round((_hotspotX * _scale * -1) + ((Width - drawWidth) / 2.0) + _hotspotX);
-        int drawY = (int)Math.Round((_hotspotY * _scale * -1) + ((Height - drawHeight) / 2.0) + _hotspotY);
-
-        e.Graphics.DrawImageUnscaled(_spotlightBitmap, drawX, drawY);
     }
 
     private bool TryPrepareCursor(Point cursorPoint, double progress)

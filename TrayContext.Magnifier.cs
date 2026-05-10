@@ -243,7 +243,11 @@ internal sealed partial class TrayContext
             _host = new MonitorMagnifierHostForm(bounds);
             _host.Bounds = bounds;
             _ = _host.Handle;
-            _ = SetLayeredWindowAttributes(_host.Handle, 0, 255, LWA_ALPHA);
+            if (!SetLayeredWindowAttributes(_host.Handle, 0, 255, LWA_ALPHA))
+            {
+                ErrorLog.WriteThrottled("Magnification.SetLayeredWindowAttributes", new Win32Exception(Marshal.GetLastWin32Error()));
+            }
+
             int style = WS_CHILD | WS_VISIBLE | WS_DISABLED;
             if (showMagnifiedCursor)
             {
@@ -281,7 +285,10 @@ internal sealed partial class TrayContext
             _hasLastFrame = false;
             if (_magnifierHandle != IntPtr.Zero)
             {
-                _ = MoveWindow(_magnifierHandle, 0, 0, bounds.Width, bounds.Height, true);
+                if (!MoveWindow(_magnifierHandle, 0, 0, bounds.Width, bounds.Height, true))
+                {
+                    ErrorLog.WriteThrottled("Magnification.MoveWindow", new Win32Exception(Marshal.GetLastWin32Error()));
+                }
             }
         }
 
@@ -303,7 +310,11 @@ internal sealed partial class TrayContext
             if (!_hasLastFrame || _lastInvertColors != invertColors)
             {
                 MAGCOLOREFFECT colorEffect = invertColors ? InvertColorEffect : IdentityColorEffect;
-                _ = MagSetColorEffect(_magnifierHandle, ref colorEffect);
+                if (!MagSetColorEffect(_magnifierHandle, ref colorEffect))
+                {
+                    ErrorLog.WriteThrottled("Magnification.SetColorEffect", "MagSetColorEffect failed.");
+                    return;
+                }
             }
 
             if (!_hasLastFrame || Math.Abs(_lastMagnification - magnification) >= 0.0001f)
@@ -314,12 +325,20 @@ internal sealed partial class TrayContext
                     v11 = magnification,
                     v22 = 1f
                 };
-                _ = MagSetWindowTransform(_magnifierHandle, ref transform);
+                if (!MagSetWindowTransform(_magnifierHandle, ref transform))
+                {
+                    ErrorLog.WriteThrottled("Magnification.SetWindowTransform", "MagSetWindowTransform failed.");
+                    return;
+                }
             }
 
             if (!_hasLastFrame || !RectEquals(_lastSourceRect, sourceRect))
             {
-                _ = MagSetWindowSource(_magnifierHandle, sourceRect);
+                if (!MagSetWindowSource(_magnifierHandle, sourceRect))
+                {
+                    ErrorLog.WriteThrottled("Magnification.SetWindowSource", "MagSetWindowSource failed.");
+                    return;
+                }
             }
 
             _lastMagnification = magnification;
@@ -488,7 +507,10 @@ internal sealed partial class TrayContext
                 var identity = IdentityColorEffect;
                 _ = MagSetFullscreenColorEffect(ref identity);
             }
-            MagUninitialize();
+            if (!MagUninitialize())
+            {
+                ErrorLog.WriteThrottled("Magnification.Uninitialize", "MagUninitialize failed.");
+            }
             _magActive = false;
             _useFullscreenBackend = false;
             _monitorLayoutDirty = true;
@@ -626,7 +648,10 @@ internal sealed partial class TrayContext
         {
             if (window.MagnifierHandle != IntPtr.Zero)
             {
-                _ = MagSetWindowFilterList(window.MagnifierHandle, MW_FILTERMODE_EXCLUDE, hostHandles.Length, hostHandles);
+                if (!MagSetWindowFilterList(window.MagnifierHandle, MW_FILTERMODE_EXCLUDE, hostHandles.Length, hostHandles))
+                {
+                    ErrorLog.WriteThrottled("Magnification.FilterList", "MagSetWindowFilterList failed.");
+                }
             }
         }
     }
@@ -868,8 +893,15 @@ internal sealed partial class TrayContext
         }
 
         MAGCOLOREFFECT colorEffect = _invertColors ? InvertColorEffect : IdentityColorEffect;
-        _ = MagSetFullscreenColorEffect(ref colorEffect);
-        _ = MagSetFullscreenTransform(mag, xOffset, yOffset);
+        if (!MagSetFullscreenColorEffect(ref colorEffect))
+        {
+            ErrorLog.WriteThrottled("Magnification.FullscreenColorEffect", "MagSetFullscreenColorEffect failed.");
+        }
+
+        if (!MagSetFullscreenTransform(mag, xOffset, yOffset))
+        {
+            ErrorLog.WriteThrottled("Magnification.FullscreenTransform", "MagSetFullscreenTransform failed.");
+        }
     }
 
     private RECT BuildSourceRect(Rectangle bounds, Point anchorPoint, float mag)

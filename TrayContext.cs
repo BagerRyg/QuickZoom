@@ -287,7 +287,7 @@ internal sealed partial class TrayContext : ApplicationContext
         {
             if (m.Msg == _taskbarCreatedMessage)
             {
-                _owner.OnTaskbarCreated();
+                _owner.RunGuarded("Startup.TaskbarCreated", _owner.OnTaskbarCreated);
             }
 
             base.WndProc(ref m);
@@ -342,10 +342,15 @@ internal sealed partial class TrayContext : ApplicationContext
 
     private void LogTrayFailure(Exception ex)
     {
-        ErrorLog.Write("TrayContext", ex);
+        ErrorLog.WriteThrottled("TrayContext", ex);
     }
 
     private void RunOnUiThread(Action action)
+    {
+        RunOnUiThread("TrayContext.UiCallback", action);
+    }
+
+    private void RunOnUiThread(string source, Action action)
     {
         try
         {
@@ -354,18 +359,35 @@ internal sealed partial class TrayContext : ApplicationContext
                 return;
             }
 
+            void RunSafely()
+            {
+                RunGuarded(source, action);
+            }
+
             if (_uiInvoker.InvokeRequired)
             {
-                _uiInvoker.BeginInvoke((MethodInvoker)(() => action()));
+                _uiInvoker.BeginInvoke((MethodInvoker)RunSafely);
             }
             else
             {
-                action();
+                RunSafely();
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore shutdown races.
+            ErrorLog.WriteThrottled(source, ex);
+        }
+    }
+
+    private void RunGuarded(string source, Action action)
+    {
+        try
+        {
+            action();
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.WriteThrottled(source, ex);
         }
     }
 }

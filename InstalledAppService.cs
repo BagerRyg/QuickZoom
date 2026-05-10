@@ -20,6 +20,7 @@ internal static class InstalledAppService
     private static readonly string LegacyVersionsRoot = Path.Combine(StateRoot, "versions");
     private static readonly string LegacyCurrentInstallPointerPath = Path.Combine(StateRoot, "current.txt");
     private const string LocalesFolderName = "locales";
+    private const int PreviousManagedVersionRetentionCount = 1;
 
     private static readonly string[] OptionalPayloadFileNames =
     [
@@ -174,6 +175,7 @@ internal static class InstalledAppService
             FilePersistence.WriteAllTextAtomic(CurrentInstallPointerPath, installedExePath);
             HardenInstallDirectory(targetDirectory);
             HardenInstallFile(CurrentInstallPointerPath);
+            CleanupOldManagedVersions(targetDirectory);
             return File.Exists(installedExePath);
         }
         catch (Exception ex)
@@ -310,6 +312,64 @@ internal static class InstalledAppService
         fileInfo.SetAccessControl(CreateInstallFileSecurity());
     }
 
+    private static void CleanupOldManagedVersions(string currentVersionDirectory)
+    {
+        try
+        {
+            if (!Directory.Exists(VersionsRoot))
+            {
+                return;
+            }
+
+            string currentFullPath = Path.GetFullPath(currentVersionDirectory);
+            string? pointerExePath = ReadInstalledExecutablePointer(CurrentInstallPointerPath);
+            string? pointerDirectory = string.IsNullOrWhiteSpace(pointerExePath)
+                ? null
+                : Path.GetDirectoryName(pointerExePath);
+
+            var removableVersions = new List<DirectoryInfo>();
+            foreach (DirectoryInfo directory in new DirectoryInfo(VersionsRoot).EnumerateDirectories())
+            {
+                string directoryPath = Path.GetFullPath(directory.FullName);
+                if (PathsEqual(directoryPath, currentFullPath) || PathsEqual(directoryPath, pointerDirectory))
+                {
+                    continue;
+                }
+
+                removableVersions.Add(directory);
+            }
+
+            foreach (DirectoryInfo oldVersion in removableVersions
+                .OrderByDescending(directory => directory.LastWriteTimeUtc)
+                .Skip(PreviousManagedVersionRetentionCount))
+            {
+                TryDeleteManagedVersionDirectory(oldVersion);
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("InstalledAppService.Cleanup", ex);
+        }
+    }
+
+    private static void TryDeleteManagedVersionDirectory(DirectoryInfo directory)
+    {
+        try
+        {
+            if (!IsUnderRoot(Path.GetFullPath(directory.FullName), VersionsRoot))
+            {
+                return;
+            }
+
+            directory.Delete(recursive: true);
+            ErrorLog.Write("InstalledAppService.Cleanup", "Removed old managed install version: " + directory.FullName);
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("InstalledAppService.Cleanup", "Could not remove old managed install version '" + directory.FullName + "'. " + ex.Message);
+        }
+    }
+
     private static DirectorySecurity CreateInstallDirectorySecurity()
     {
         SecurityIdentifier userSid = WindowsIdentity.GetCurrent().User
@@ -344,6 +404,19 @@ internal static class InstalledAppService
     {
         string normalizedRoot = EnsureTrailingSeparator(Path.GetFullPath(rootPath));
         return fullPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool PathsEqual(string? left, string? right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+        {
+            return false;
+        }
+
+        return string.Equals(
+            Path.GetFullPath(left),
+            Path.GetFullPath(right),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static string EnsureTrailingSeparator(string path)

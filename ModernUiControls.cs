@@ -1808,13 +1808,27 @@ internal sealed class ModernDropdown : Control, ISurfaceBackgroundProvider
             _activeMenu = null;
             if (IsHandleCreated && !IsDisposed)
             {
-                BeginInvoke((MethodInvoker)(() =>
+                try
                 {
-                    if (!menu.IsDisposed)
+                    BeginInvoke((MethodInvoker)(() =>
                     {
-                        menu.Dispose();
-                    }
-                }));
+                        try
+                        {
+                            if (!menu.IsDisposed)
+                            {
+                                menu.Dispose();
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            ErrorLog.WriteThrottled("ModernDropdown.DisposeMenu", ex);
+                        }
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    ErrorLog.WriteThrottled("ModernDropdown.BeginDisposeMenu", ex);
+                }
             }
             else if (!menu.IsDisposed)
             {
@@ -2521,13 +2535,27 @@ internal sealed class TrayPopupWindow : Form
 
             if (!IsDisposed && Visible)
             {
-                BeginInvoke((MethodInvoker)(() =>
+                try
                 {
-                    if (!IsDisposed && Visible && !ContainsFocus && !IgnoreDeactivateClose)
+                    BeginInvoke((MethodInvoker)(() =>
                     {
-                        Close();
-                    }
-                }));
+                        try
+                        {
+                            if (!IsDisposed && Visible && !ContainsFocus && !IgnoreDeactivateClose)
+                            {
+                                Close();
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            ErrorLog.WriteThrottled("TrayPopup.DeactivateClose", ex);
+                        }
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    ErrorLog.WriteThrottled("TrayPopup.BeginDeactivateClose", ex);
+                }
             }
         };
     }

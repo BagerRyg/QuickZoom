@@ -257,8 +257,13 @@ internal static class Program
         {
             Application.Run(new TrayContext(startupReadyEventName));
         }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("ApplicationRun", ex);
+        }
         finally
         {
+            ErrorLog.Write("Shutdown", "QuickZoom process exiting.");
             ReleaseSingleInstanceMutex();
         }
     }
@@ -929,9 +934,7 @@ internal static class Program
     {
         try
         {
-            string fileName = Path.GetFileNameWithoutExtension(exePath);
-            return string.Equals(fileName, "QuickZoom", StringComparison.OrdinalIgnoreCase) ||
-                   exePath.IndexOf("QuickZoom", StringComparison.OrdinalIgnoreCase) >= 0;
+            return string.Equals(Path.GetFileName(exePath), "QuickZoom.exe", StringComparison.OrdinalIgnoreCase);
         }
         catch
         {
@@ -1072,8 +1075,7 @@ internal static class Program
 
         foreach (string candidatePath in Directory.GetFiles(startupFolder))
         {
-            string fileName = Path.GetFileName(candidatePath);
-            if (fileName.IndexOf("QuickZoom", StringComparison.OrdinalIgnoreCase) < 0)
+            if (!LooksLikeQuickZoomStartupFile(candidatePath))
             {
                 continue;
             }
@@ -1118,59 +1120,6 @@ internal static class Program
         foreach (string knownName in LegacyStartupTaskNames)
         {
             names.Add(knownName);
-        }
-
-        const string queryArguments = "/Query /FO CSV /NH";
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "schtasks.exe",
-            Arguments = queryArguments,
-            CreateNoWindow = true,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-
-        using Process? process = Process.Start(startInfo);
-        if (process == null)
-        {
-            return names;
-        }
-
-        if (!process.WaitForExit(4000))
-        {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-                // Best effort.
-            }
-
-            return names;
-        }
-
-        string output = process.StandardOutput.ReadToEnd();
-        foreach (string rawLine in output.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries))
-        {
-            string line = rawLine.Trim();
-            if (line.Length < 2 || line[0] != '"')
-            {
-                continue;
-            }
-
-            int closingQuote = line.IndexOf("\",", StringComparison.Ordinal);
-            if (closingQuote <= 1)
-            {
-                continue;
-            }
-
-            string taskName = line.Substring(1, closingQuote - 1);
-            if (taskName.IndexOf("QuickZoom", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                names.Add(taskName);
-            }
         }
 
         return names;
@@ -1225,25 +1174,80 @@ internal static class Program
         return success;
     }
 
-    private static bool LooksLikeMissingScheduledTask(string text)
+    private static bool LooksLikeQuickZoomStartupFile(string path)
     {
-        return text.IndexOf("cannot find", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               text.IndexOf("the system cannot find", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               text.IndexOf("specified file", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               text.IndexOf("angivne fil", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               text.IndexOf("blev ikke fundet", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               text.IndexOf("kan ikke finde", StringComparison.OrdinalIgnoreCase) >= 0;
+        try
+        {
+            string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(path);
+            if (!fileNameWithoutExtension.StartsWith("QuickZoom", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            string extension = Path.GetExtension(path);
+            return extension.Equals(".lnk", StringComparison.OrdinalIgnoreCase) ||
+                   extension.Equals(".url", StringComparison.OrdinalIgnoreCase) ||
+                   extension.Equals(".bat", StringComparison.OrdinalIgnoreCase) ||
+                   extension.Equals(".cmd", StringComparison.OrdinalIgnoreCase) ||
+                   extension.Equals(".ps1", StringComparison.OrdinalIgnoreCase) ||
+                   extension.Equals(".exe", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool LooksLikeQuickZoomStartupReference(string name, string? value)
     {
-        if (!string.IsNullOrWhiteSpace(name) && name.IndexOf("QuickZoom", StringComparison.OrdinalIgnoreCase) >= 0)
+        if (IsQuickZoomExecutableReference(value))
         {
             return true;
         }
 
-        return !string.IsNullOrWhiteSpace(value) &&
-               value.IndexOf("QuickZoom", StringComparison.OrdinalIgnoreCase) >= 0;
+        return string.Equals(name, "QuickZoom", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(name, "QuickZoom2", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(name, "QuickZoom Startup", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsQuickZoomExecutableReference(string? reference)
+    {
+        string? executablePath = TryExtractExecutablePath(reference);
+        if (!string.IsNullOrWhiteSpace(executablePath))
+        {
+            return LooksLikeQuickZoomExecutable(executablePath);
+        }
+
+        return !string.IsNullOrWhiteSpace(reference) &&
+               reference.IndexOf("QuickZoom.exe", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static string? TryExtractExecutablePath(string? reference)
+    {
+        if (string.IsNullOrWhiteSpace(reference))
+        {
+            return null;
+        }
+
+        string text = Environment.ExpandEnvironmentVariables(reference.Trim());
+        if (text.Length == 0)
+        {
+            return null;
+        }
+
+        if (text[0] == '"')
+        {
+            int closingQuote = text.IndexOf('"', 1);
+            return closingQuote > 1 ? text[1..closingQuote] : null;
+        }
+
+        int exeIndex = text.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+        if (exeIndex < 0)
+        {
+            return null;
+        }
+
+        return text[..(exeIndex + 4)].Trim();
     }
 
     private static bool ReferencePointsToCurrentExecutable(string? reference, string? currentExePath)
@@ -1254,6 +1258,22 @@ internal static class Program
         }
 
         string currentFullPath = Path.GetFullPath(currentExePath);
+        string? executablePath = TryExtractExecutablePath(reference);
+        if (!string.IsNullOrWhiteSpace(executablePath))
+        {
+            return PathsEqual(executablePath, currentFullPath);
+        }
+
         return reference.IndexOf(currentFullPath, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static bool LooksLikeMissingScheduledTask(string text)
+    {
+        return text.IndexOf("cannot find", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               text.IndexOf("the system cannot find", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               text.IndexOf("specified file", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               text.IndexOf("angivne fil", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               text.IndexOf("blev ikke fundet", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               text.IndexOf("kan ikke finde", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 }

@@ -38,7 +38,7 @@ internal sealed partial class TrayContext
             return;
         }
 
-        RunOnUiThread(() => ApplyThemePreference(force: false));
+        RunOnUiThread("UserPreferenceChanged", () => ApplyThemePreference(force: false));
     }
 
     private void ApplyThemePreference(bool force)
