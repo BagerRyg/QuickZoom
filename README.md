@@ -1,138 +1,136 @@
 # QuickZoom
 
-QuickZoom is a lightweight screen magnifier for Windows 10 and Windows 11 x64.
+<p align="center">
+  <img src="assets/icons/magnifier_dark.ico" alt="QuickZoom" width="96">
+</p>
 
-I built it because I am visually impaired myself and wanted something faster, simpler, and easier to use than Windows Magnifier. I also wanted a practical alternative to expensive software like SuperNova and ZoomText, without the extra bulk.
+<h3 align="center">Fast tray-based screen magnification for Windows</h3>
 
-QuickZoom lives in the system tray, opens fast, and is built for everyday use when you need zoom right now, not after clicking through menus.
+<p align="center">
+  A lightweight accessibility tool for quick desktop zoom, cursor focus, inverted colors, and multi-monitor workflows.
+</p>
 
-## Why this project exists
+<p align="center">
+  <a href="https://github.com/BagerRyg/QuickZoom/releases">
+    <img src="https://img.shields.io/badge/version-2.122-6ee08f?style=for-the-badge" alt="Version 2.122">
+  </a>
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-64748b?style=for-the-badge" alt="Windows 10 and Windows 11">
+  <img src="https://img.shields.io/badge/runtime-.NET%2010-512bd4?style=for-the-badge" alt=".NET 10">
+</p>
 
-Windows Magnifier works, but it never felt quick enough or comfortable enough for the way I use a PC every day.
+<p align="center">
+  <a href="https://dev.ryg.dk/quickzoom/">Website</a> |
+  <a href="https://github.com/BagerRyg/QuickZoom/releases">Download</a> |
+  <a href="#features">Features</a> |
+  <a href="#shortcuts">Shortcuts</a> |
+  <a href="#build-from-source">Build from source</a>
+</p>
 
-Paid solutions exist, but they can be expensive, heavy, and overkill if all you want is reliable magnification with simple controls.
+---
 
-QuickZoom was made to solve that:
+QuickZoom is a Windows screen magnifier built for people who need zoom immediately without opening a heavy accessibility suite or digging through menus. It runs from the system tray, responds to simple keyboard and mouse shortcuts, and stays out of the way until you need it.
 
-- faster access to zoom
-- simpler controls
-- less clutter
-- lighter than larger accessibility suites
-- built for practical day-to-day desktop use
+I built it because I am visually impaired and wanted something faster, simpler, and more comfortable than Windows Magnifier for daily PC use.
 
-## Features
+## Contents
 
-- Tray-based quick access
-- Fast zoom with keyboard and mouse shortcuts
-- Inverted colors mode
-- Follow cursor support
-- Smooth zooming
-- Auto-disable at 100%
-- Optional center-cursor behavior
-- Cursor locate on wiggle
-- Multi-monitor support
-- Per-monitor display selection
-- Dark, light, or system theme
-- English and Danish UI
-- Optional elevated startup support for better compatibility with elevated apps
-
-## How to use
-
-By default:
-
-### Zoom
-- Hold `Alt` and scroll the mouse wheel
-- Hold `Alt` and press `+` or `-`
-
-### Invert colors
-- Hold `Alt` and click the middle mouse button
-- Or press `Alt + I`
-
-QuickZoom is designed to stay out of the way until you need it.
-
-## Settings
-
-QuickZoom includes a settings window for the main options, including:
-
-- zoom step
-- maximum zoom level
-- refresh rate
-- display mode
-- theme
-- language
-- enable key
-- invert hotkey
-- follow cursor
-- smooth zoom
-- center cursor
-- wiggle-to-locate cursor
-
-## Multi-monitor support
-
-QuickZoom works with single and multi-monitor setups.
-
-You can choose to:
-- magnify all displays
-- follow the monitor under the cursor
-- select specific display(s)
-
-## Elevated app support
-
-QuickZoom includes an optional startup service setup that can improve compatibility with elevated applications.
-
-This setup can:
-- install QuickZoom to a managed location
-- register an elevated startup task
-- reduce repeated UAC prompts after one-time setup
-
-## Supported platforms
-
-- Windows 10 x64
-- Windows 11 x64
-
-## Requirements
-
-- .NET 8 Desktop Runtime or later  
-  or
-- a self-contained published build
-
-## Screenshots
-
-### Tray Menu
-
-![QuickZoom tray menu](assets/images/tray_menu.png)
-
-### Settings Window
-
-![QuickZoom settings window](assets/images/settings.png)
-
-## Build from source
-
-```powershell
-dotnet build .\QuickZoom.csproj -c Release
-```
-
-## Publish self-contained
-
-```powershell
-dotnet publish .\QuickZoom.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -o .\Build76
-```
+- [Project goal](#project-goal)
+- [Features](#features)
+- [Shortcuts](#shortcuts)
+- [Screenshots](#screenshots)
+- [Requirements](#requirements)
+- [Download](#download)
+- [Build from source](#build-from-source)
+- [Elevated startup support](#elevated-startup-support)
+- [Status](#status)
+- [License](#license)
 
 ## Project goal
 
-QuickZoom is meant to be a practical accessibility tool for people who want:
+QuickZoom is meant to be a practical accessibility tool for everyday Windows use:
 
-- quick temporary magnification
-- a simpler alternative to Windows Magnifier
-- a lightweight tray-first workflow
-- something less bulky than commercial accessibility suites
+- Fast temporary magnification.
+- Simple tray-first controls.
+- Better cursor visibility.
+- Multi-monitor support.
+- A lighter alternative to large commercial accessibility suites.
 
-## Notes
+## Features
 
-This repository currently does not include a formal `LICENSE` file.
+- Tray-based quick controls.
+- Mouse and keyboard zoom shortcuts.
+- Inverted colors mode.
+- Follow cursor support.
+- Smooth zoom transitions.
+- Auto-disable at 100%.
+- Optional center-cursor behavior.
+- Cursor enhancement and wiggle-to-locate.
+- Single-monitor and multi-monitor modes.
+- Per-monitor display selection.
+- Dark, light, and system theme support.
+- English and Danish interface.
+- Optional elevated startup support for better compatibility with administrator apps.
 
-Until a license is added, the code should not be treated as fully open-source for reuse or redistribution.
+## Shortcuts
+
+These are the default shortcuts. They can be changed in Settings.
+
+| Action | Shortcut |
+| --- | --- |
+| Zoom with mouse | `Alt` + mouse wheel |
+| Zoom with keyboard | `Alt` + `+` / `-` |
+| Invert colors with mouse | `Alt` + middle mouse button |
+| Invert colors with keyboard | `Alt` + `I` |
+
+## Screenshots
+
+### Tray menu
+
+![QuickZoom tray menu](assets/images/tray_menu.png)
+
+### Settings window
+
+![QuickZoom settings window](assets/images/settings.png)
+
+## Requirements
+
+- Windows 10 x64 or Windows 11 x64.
+- .NET 10 Desktop Runtime, unless you use the self-contained release build.
+
+## Download
+
+Download the latest release from the [GitHub releases page](https://github.com/BagerRyg/QuickZoom/releases).
+
+The published release is intended for Windows x64.
+
+## Build from source
+
+Clone the repository and build the project in Release mode:
+
+```powershell
+git clone https://github.com/BagerRyg/QuickZoom.git
+cd QuickZoom
+dotnet build .\QuickZoom.csproj -c Release
+```
+
+Create a self-contained Windows x64 build:
+
+```powershell
+dotnet publish .\QuickZoom.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -p:DebugType=None -o ".\Build 1"
+```
+
+## Elevated startup support
+
+QuickZoom can optionally install a managed startup copy and register an elevated startup task. This helps when you want QuickZoom to keep working smoothly with applications that run as administrator.
+
+This setup is optional. The app can also run directly without installing the startup task.
 
 ## Status
 
-QuickZoom is an actively developed Windows utility focused on accessibility, speed, and a cleaner user experience.
+QuickZoom is actively developed as a focused Windows accessibility utility.
+
+## License
+
+QuickZoom is licensed under the GNU General Public License v3.0.
+
+See [LICENSE](LICENSE) for the full license text.
