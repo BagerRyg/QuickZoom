@@ -22,6 +22,23 @@ for /f "delims=" %%v in ('dotnet --version') do set SDKVER=%%v
 echo .NET SDK version: !SDKVER!
 echo.
 
+set "BUILD_NUMBER="
+for /f "usebackq delims=" %%N in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$root = Get-Location; $latest = Get-ChildItem -LiteralPath $root -Directory -Filter 'Build *' -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^Build (\d+)$' } | ForEach-Object { [int]$Matches[1] } | Sort-Object -Descending | Select-Object -First 1; if ($null -eq $latest) { 1 } else { $latest + 1 }"`) do set "BUILD_NUMBER=%%N"
+if "%BUILD_NUMBER%"=="" (
+  echo ERROR: Could not determine next build number.
+  pause
+  exit /b 1
+)
+
+echo Updating AppInfo build number to %BUILD_NUMBER%...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\update_build_number.ps1" -BuildNumber %BUILD_NUMBER%
+if errorlevel 1 (
+  echo ERROR: Could not update AppInfo build number.
+  pause
+  exit /b 1
+)
+echo.
+
 echo Restoring...
 dotnet restore
 if errorlevel 1 (

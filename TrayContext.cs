@@ -124,6 +124,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private bool _magActive;
     private bool _useFullscreenBackend;
     private bool _centerCursor;
+    private bool _suppressAltKeyInOfficeApps;
     private bool _wiggleSpotlightEnabled = true;
     private bool _cursorEnhancementEnabled;
     private int _cursorScale = 100;
@@ -143,6 +144,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private bool _enableKeyPressed;
     private bool _invertKeyPressed;
     private bool _followCursorKeyPressed;
+    private bool _suppressEnableKeyForForeground;
     private bool _pendingExitConfirmation;
 
     private POINT _staticCenter;
@@ -171,6 +173,11 @@ internal sealed partial class TrayContext : ApplicationContext
     private ModernButton? _resetDefaultsButton;
     private System.Windows.Forms.Timer? _resetDefaultsConfirmTimer;
     private System.Windows.Forms.Timer? _cursorScaleApplyTimer;
+    private System.Windows.Forms.Timer? _settingsSaveTimer;
+    private readonly object _settingsSaveSync = new();
+    private readonly object _settingsWriteSync = new();
+    private Settings? _pendingSettingsSave;
+    private Task? _settingsSaveTask;
     private bool _pendingResetDefaultsConfirmation;
 
     // Refresh rate
@@ -240,6 +247,9 @@ internal sealed partial class TrayContext : ApplicationContext
             _cursorSpotlightTimer?.Dispose();
             _startupTimer?.Stop();
             _startupTimer?.Dispose();
+            FlushSettingsSave();
+            _settingsSaveTimer?.Stop();
+            _settingsSaveTimer?.Dispose();
             _cursorScaleApplyTimer?.Stop();
             _cursorScaleApplyTimer?.Dispose();
             _shellMessageWindow?.Dispose();

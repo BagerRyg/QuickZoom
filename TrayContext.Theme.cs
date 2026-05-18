@@ -64,6 +64,7 @@ internal sealed partial class TrayContext
     {
         _themeMode = mode;
         SaveSettings();
+        FlushSettingsSave();
         ApplyThemePreference(force: true);
     }
 

@@ -5,39 +5,36 @@ using System.Windows.Forms;
 
 namespace QuickZoom;
 
-internal sealed class ColorPaletteControl : FlowLayoutPanel
+internal sealed class ColorPaletteControl : Control
 {
     private readonly ThemePalette _palette;
     private readonly Color[] _colors;
     private Color _selectedColor;
+    private int _hoveredIndex = -1;
+    private const int SwatchSize = 18;
+    private const int SwatchGap = 4;
 
     public ColorPaletteControl(ThemePalette palette, Color[] colors, Color selectedColor)
     {
         _palette = palette;
         _colors = colors;
         _selectedColor = selectedColor;
+        SetStyle(
+            ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.OptimizedDoubleBuffer |
+            ControlStyles.ResizeRedraw |
+            ControlStyles.SupportsTransparentBackColor |
+            ControlStyles.UserPaint |
+            ControlStyles.Selectable,
+            true);
         Width = 264;
         Height = 66;
         AutoSize = false;
-        FlowDirection = FlowDirection.LeftToRight;
-        WrapContents = true;
         BackColor = System.Drawing.Color.Transparent;
         Margin = new Padding(0);
         Padding = new Padding(0);
-
-        foreach (Color color in _colors)
-        {
-            var swatch = new ColorSwatchControl(_palette, color)
-            {
-                IsSelected = ColorsEqual(color, _selectedColor)
-            };
-            swatch.Click += (_, _) =>
-            {
-                SelectedColor = color;
-                ColorSelected?.Invoke(this, color);
-            };
-            Controls.Add(swatch);
-        }
+        Cursor = Cursors.Hand;
+        TabStop = true;
     }
 
     public event EventHandler<Color>? ColorSelected;
@@ -48,13 +45,124 @@ internal sealed class ColorPaletteControl : FlowLayoutPanel
         set
         {
             _selectedColor = value;
-            foreach (Control control in Controls)
+            Invalidate();
+        }
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        int nextHoveredIndex = HitTest(e.Location);
+        if (_hoveredIndex != nextHoveredIndex)
+        {
+            _hoveredIndex = nextHoveredIndex;
+            Invalidate();
+        }
+
+        base.OnMouseMove(e);
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        _hoveredIndex = -1;
+        Invalidate();
+        base.OnMouseLeave(e);
+    }
+
+    protected override void OnClick(EventArgs e)
+    {
+        int index = _hoveredIndex;
+        if (index >= 0 && index < _colors.Length)
+        {
+            SelectedColor = _colors[index];
+            ColorSelected?.Invoke(this, _colors[index]);
+        }
+
+        base.OnClick(e);
+    }
+
+    protected override bool IsInputKey(Keys keyData) => keyData is Keys.Space or Keys.Enter || base.IsInputKey(keyData);
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.KeyCode is Keys.Space or Keys.Enter)
+        {
+            int selectedIndex = Array.FindIndex(_colors, color => ColorsEqual(color, _selectedColor));
+            if (selectedIndex >= 0)
             {
-                if (control is ColorSwatchControl swatch)
-                {
-                    swatch.IsSelected = ColorsEqual(swatch.Color, _selectedColor);
-                }
+                ColorSelected?.Invoke(this, _colors[selectedIndex]);
             }
+
+            e.Handled = true;
+        }
+
+        base.OnKeyDown(e);
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs pevent)
+    {
+        using SolidBrush brush = new(ControlDrawing.EffectiveBackColor(this));
+        pevent.Graphics.FillRectangle(brush, ClientRectangle);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+        for (int i = 0; i < _colors.Length; i++)
+        {
+            Rectangle rect = GetSwatchBounds(i);
+            if (!ClientRectangle.IntersectsWith(rect))
+            {
+                continue;
+            }
+
+            DrawSwatch(e.Graphics, rect, _colors[i], i == _hoveredIndex, ColorsEqual(_colors[i], _selectedColor));
+        }
+
+        if (Focused)
+        {
+            Rectangle focusRect = new(0, 0, Width - 1, Height - 1);
+            using Pen focusPen = new(System.Drawing.Color.FromArgb(120, _palette.Accent), 1.25f);
+            e.Graphics.DrawRectangle(focusPen, focusRect);
+        }
+    }
+
+    private int HitTest(Point point)
+    {
+        for (int i = 0; i < _colors.Length; i++)
+        {
+            if (GetSwatchBounds(i).Contains(point))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private Rectangle GetSwatchBounds(int index)
+    {
+        int columns = Math.Max(1, (Width + SwatchGap) / (SwatchSize + SwatchGap));
+        int row = index / columns;
+        int column = index % columns;
+        return new Rectangle(column * (SwatchSize + SwatchGap), row * (SwatchSize + SwatchGap), SwatchSize, SwatchSize);
+    }
+
+    private void DrawSwatch(Graphics graphics, Rectangle bounds, Color color, bool hovered, bool selected)
+    {
+        Rectangle outer = new(bounds.X + 1, bounds.Y + 1, bounds.Width - 3, bounds.Height - 3);
+        using GraphicsPath outerPath = ControlDrawing.RoundedRect(outer, 6);
+        using SolidBrush fillBrush = new(color);
+        using Pen fillBorder = new(color.GetBrightness() > 0.78f ? System.Drawing.Color.FromArgb(150, 60, 65, 72) : System.Drawing.Color.FromArgb(110, System.Drawing.Color.White));
+        graphics.FillPath(fillBrush, outerPath);
+        graphics.DrawPath(fillBorder, outerPath);
+
+        if (hovered || selected)
+        {
+            Color outline = selected ? _palette.Accent : _palette.SecondaryText;
+            using Pen outlinePen = new(outline, selected ? 2f : 1.25f);
+            graphics.DrawPath(outlinePen, outerPath);
         }
     }
 

@@ -85,7 +85,7 @@ internal static class WindowChrome
     {
         try
         {
-            form.HandleCreated += (_, _) =>
+            void Apply()
             {
                 if (form.Handle == IntPtr.Zero)
                 {
@@ -95,7 +95,16 @@ internal static class WindowChrome
                 int useDark = enabled ? 1 : 0;
                 _ = DwmSetWindowAttribute(form.Handle, 20, ref useDark, sizeof(int));
                 _ = DwmSetWindowAttribute(form.Handle, 19, ref useDark, sizeof(int));
-            };
+            }
+
+            if (form.IsHandleCreated)
+            {
+                Apply();
+            }
+            else
+            {
+                form.HandleCreated += (_, _) => Apply();
+            }
         }
         catch
         {
@@ -212,6 +221,12 @@ internal sealed class ToggleSwitchControl : Control
 
     protected override void OnMouseEnter(EventArgs e)
     {
+        if (!Enabled)
+        {
+            base.OnMouseEnter(e);
+            return;
+        }
+
         _hovered = true;
         Invalidate();
         base.OnMouseEnter(e);
@@ -227,6 +242,12 @@ internal sealed class ToggleSwitchControl : Control
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
+        if (!Enabled)
+        {
+            base.OnMouseDown(e);
+            return;
+        }
+
         _pressed = true;
         Invalidate();
         base.OnMouseDown(e);
@@ -241,6 +262,11 @@ internal sealed class ToggleSwitchControl : Control
 
     protected override void OnClick(EventArgs e)
     {
+        if (!Enabled)
+        {
+            return;
+        }
+
         IsOn = !IsOn;
         base.OnClick(e);
     }
@@ -249,6 +275,12 @@ internal sealed class ToggleSwitchControl : Control
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
+        if (!Enabled)
+        {
+            base.OnKeyDown(e);
+            return;
+        }
+
         if (e.KeyCode is Keys.Space or Keys.Enter)
         {
             IsOn = !IsOn;
@@ -266,11 +298,13 @@ internal sealed class ToggleSwitchControl : Control
         Rectangle trackRect = new(0, 2, Width - 1, Height - 4);
         using GraphicsPath trackPath = ControlDrawing.RoundedRect(trackRect, trackRect.Height / 2);
 
-        Color trackColor = _isOn
+        Color trackColor = !Enabled
+            ? Color.FromArgb(100, _palette.Border)
+            : _isOn
             ? (_hovered ? _palette.AccentHover : _palette.Accent)
             : (_hovered ? _palette.ButtonHover : _palette.ButtonBackground);
 
-        if (_pressed)
+        if (Enabled && _pressed)
         {
             trackColor = _isOn ? _palette.AccentPressed : _palette.ButtonPressed;
         }
@@ -284,12 +318,12 @@ internal sealed class ToggleSwitchControl : Control
         int knobX = _isOn ? trackRect.Right - knobSize - 2 : trackRect.Left + 2;
         Rectangle knobRect = new(knobX, trackRect.Top + 2, knobSize, knobSize);
 
-        using SolidBrush knobBrush = new(Color.FromArgb(245, 247, 250));
-        using Pen knobBorder = new(Color.FromArgb(48, 52, 56));
+        using SolidBrush knobBrush = new(Enabled ? Color.FromArgb(245, 247, 250) : Color.FromArgb(160, 164, 170));
+        using Pen knobBorder = new(Enabled ? Color.FromArgb(48, 52, 56) : Color.FromArgb(96, 100, 106));
         e.Graphics.FillEllipse(knobBrush, knobRect);
         e.Graphics.DrawEllipse(knobBorder, knobRect);
 
-        if (Focused)
+        if (Enabled && Focused)
         {
             Rectangle focusRect = new(0, 0, Width - 1, Height - 1);
             using GraphicsPath focusPath = ControlDrawing.RoundedRect(focusRect, focusRect.Height / 2);
@@ -302,6 +336,15 @@ internal sealed class ToggleSwitchControl : Control
     {
         base.OnCreateControl();
         Size = new Size(ControlDrawing.ScaleLogical(this, 42), ControlDrawing.ScaleLogical(this, 24));
+    }
+
+    protected override void OnEnabledChanged(EventArgs e)
+    {
+        Cursor = Enabled ? Cursors.Hand : Cursors.Default;
+        _hovered = false;
+        _pressed = false;
+        Invalidate();
+        base.OnEnabledChanged(e);
     }
 
     protected override void OnPaintBackground(PaintEventArgs pevent)
@@ -901,6 +944,12 @@ internal sealed class KeyBadgeControl : Control, ISurfaceBackgroundProvider
         Invalidate();
     }
 
+    protected override void OnTextChanged(EventArgs e)
+    {
+        Invalidate();
+        base.OnTextChanged(e);
+    }
+
     public Color SurfaceBackgroundColor => _pressed
         ? _palette.ButtonPressed
         : (_hovered ? _palette.ButtonHover : _palette.ButtonBackground);
@@ -1288,6 +1337,11 @@ internal sealed class SettingsSidebarItem : Control, ISurfaceBackgroundProvider,
         get => _selected;
         set
         {
+            if (_selected == value)
+            {
+                return;
+            }
+
             _selected = value;
             ApplyTheme(_palette);
         }
@@ -2130,7 +2184,7 @@ internal sealed class SettingsRow : ModernSurfacePanel
     private readonly int _rightColumnWidth;
     private readonly string? _valueText;
 
-    public SettingsRow(ThemePalette palette, string title, string description, Control control, int rightColumnWidth = 220, string? valueText = null)
+    public SettingsRow(ThemePalette palette, string title, string description, Control control, int rightColumnWidth = 220, string? valueText = null, bool compactDescription = false)
     {
         bool hasDescription = !string.IsNullOrWhiteSpace(description);
         _accessoryControl = control;
@@ -2146,7 +2200,7 @@ internal sealed class SettingsRow : ModernSurfacePanel
 
         _grid = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Top,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 2,
@@ -2157,7 +2211,7 @@ internal sealed class SettingsRow : ModernSurfacePanel
         };
         _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, _rightColumnWidth));
-        _grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        _grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         _left = new TableLayoutPanel
         {
@@ -2364,7 +2418,7 @@ internal sealed class SettingsSection : Panel
     }
 }
 
-internal sealed class SettingsPageView : Panel
+internal class SettingsPageView : UserControl
 {
     private readonly Label _titleLabel;
     private readonly Label _descriptionLabel;
@@ -2461,6 +2515,333 @@ internal sealed class SettingsPageView : Panel
         foreach (Control section in _sectionHost.Controls)
         {
             section.Width = targetWidth;
+        }
+    }
+}
+
+internal sealed class GeneralSettingsPageView : SettingsPageView
+{
+    public GeneralSettingsPageView(ThemePalette palette, string title, string description) : base(palette, title, description) { }
+}
+
+internal sealed class DisplaySettingsPageView : SettingsPageView
+{
+    public DisplaySettingsPageView(ThemePalette palette, string title, string description) : base(palette, title, description) { }
+}
+
+internal sealed class AppearanceSettingsPageView : SettingsPageView
+{
+    public AppearanceSettingsPageView(ThemePalette palette, string title, string description) : base(palette, title, description) { }
+}
+
+internal sealed class CursorSettingsPageView : SettingsPageView
+{
+    public CursorSettingsPageView(ThemePalette palette, string title, string description) : base(palette, title, description) { }
+}
+
+internal sealed class ZoomSettingsPageView : SettingsPageView
+{
+    public ZoomSettingsPageView(ThemePalette palette, string title, string description) : base(palette, title, description) { }
+}
+
+internal sealed class ShortcutsSettingsPageView : SettingsPageView
+{
+    public ShortcutsSettingsPageView(ThemePalette palette, string title, string description) : base(palette, title, description) { }
+}
+
+internal sealed class AboutSettingsPageView : SettingsPageView
+{
+    public AboutSettingsPageView(ThemePalette palette, string title, string description) : base(palette, title, description) { }
+}
+
+internal sealed class SettingsPageDefinition
+{
+    public SettingsPageDefinition(Type pageType, string title, TrayFluentIcon icon, Func<UserControl> createPage)
+    {
+        PageType = pageType;
+        Title = title;
+        Icon = icon;
+        CreatePage = createPage;
+    }
+
+    public Type PageType { get; }
+    public string Title { get; }
+    public TrayFluentIcon Icon { get; }
+    public Func<UserControl> CreatePage { get; }
+}
+
+internal sealed class SettingsForm : Form
+{
+    private readonly Dictionary<Type, UserControl> _pageCache = new();
+    private readonly Dictionary<Type, SettingsSidebarItem> _navItems = new();
+    private readonly Dictionary<Type, Func<UserControl>> _pageFactories = new();
+    private readonly Panel _contentHost;
+    private readonly Size _minimumClientSize;
+    private Type? _currentPageType;
+
+    public SettingsForm(
+        ThemePalette palette,
+        bool useDarkTheme,
+        string title,
+        Size clientSize,
+        string appName,
+        string doneText,
+        ModernButton resetButton,
+        IReadOnlyList<SettingsPageDefinition> pages)
+    {
+        Text = title;
+        StartPosition = FormStartPosition.Manual;
+        ClientSize = clientSize;
+        FormBorderStyle = FormBorderStyle.FixedSingle;
+        MinimizeBox = false;
+        MaximizeBox = false;
+        ShowInTaskbar = true;
+        AutoScaleMode = AutoScaleMode.Dpi;
+        BackColor = palette.MenuBackground;
+        ForeColor = palette.Text;
+        KeyPreview = true;
+        _minimumClientSize = clientSize;
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            Padding = new Padding(20),
+            Margin = new Padding(0),
+            BackColor = palette.MenuBackground
+        };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 270));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var sidebarSurface = new ModernSurfacePanel
+        {
+            Dock = DockStyle.Fill,
+            CornerRadius = 18,
+            BorderAlpha = 14,
+            Margin = new Padding(0, 0, 16, 0),
+            Padding = new Padding(12, 14, 12, 14),
+            BackColor = useDarkTheme ? Color.FromArgb(17, 20, 26) : palette.ControlBackground
+        };
+
+        var sidebarLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+            BackColor = Color.Transparent
+        };
+        sidebarLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        sidebarLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var sidebarHeader = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            ColumnCount = 1,
+            RowCount = 1,
+            Margin = new Padding(0, 0, 0, 16),
+            Padding = new Padding(0),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            BackColor = Color.Transparent
+        };
+        sidebarHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        sidebarHeader.Controls.Add(new Label
+        {
+            Text = appName,
+            AutoSize = true,
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 15f, FontStyle.Bold),
+            Margin = new Padding(0),
+            ForeColor = palette.Text,
+            BackColor = Color.Transparent
+        }, 0, 0);
+
+        var navHost = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = false,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+            BackColor = Color.Transparent
+        };
+
+        foreach (SettingsPageDefinition page in pages)
+        {
+            _pageFactories[page.PageType] = page.CreatePage;
+            var item = new SettingsSidebarItem(palette, page.Title, page.Icon);
+            Type pageType = page.PageType;
+            item.Click += (_, _) => ShowPage(pageType);
+            _navItems[pageType] = item;
+            navHost.Controls.Add(item);
+        }
+
+        void UpdateSidebarItemWidths()
+        {
+            int itemWidth = Math.Max(ControlDrawing.ScaleLogical(this, 216), navHost.ClientSize.Width - 8);
+            foreach (SettingsSidebarItem item in _navItems.Values)
+            {
+                item.Width = itemWidth;
+            }
+        }
+
+        navHost.Resize += (_, _) => UpdateSidebarItemWidths();
+        sidebarLayout.Controls.Add(sidebarHeader, 0, 0);
+        sidebarLayout.Controls.Add(navHost, 0, 1);
+        sidebarSurface.Controls.Add(sidebarLayout);
+
+        _contentHost = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+            BackColor = palette.MenuBackground,
+            AutoScroll = false
+        };
+
+        var footer = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Margin = new Padding(0, 8, 0, 0),
+            Padding = new Padding(0),
+            BackColor = Color.Transparent
+        };
+        var closeButton = new ModernButton
+        {
+            Text = doneText,
+            DialogResult = DialogResult.OK
+        };
+        closeButton.ApplyTheme(palette, emphasis: false);
+        closeButton.SetOutlineColor(useDarkTheme ? Color.FromArgb(96, 165, 250) : Color.FromArgb(65, 105, 170));
+        closeButton.Click += (_, _) => Close();
+        footer.Controls.Add(closeButton);
+        footer.Controls.Add(resetButton);
+
+        var rightLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+            BackColor = palette.MenuBackground
+        };
+        rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        rightLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        rightLayout.Controls.Add(_contentHost, 0, 0);
+        rightLayout.Controls.Add(footer, 0, 1);
+
+        root.Controls.Add(sidebarSurface, 0, 0);
+        root.Controls.Add(rightLayout, 1, 0);
+        Controls.Add(root);
+        AcceptButton = closeButton;
+        CancelButton = closeButton;
+        KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Escape)
+            {
+                Close();
+            }
+        };
+        Shown += (_, _) => UpdateSidebarItemWidths();
+    }
+
+    public event EventHandler<Type>? PageShown;
+
+    public void ShowPage(Type pageType)
+    {
+        if (_currentPageType == pageType &&
+            _pageCache.TryGetValue(pageType, out UserControl? currentPage) &&
+            currentPage.Visible)
+        {
+            return;
+        }
+
+        if (!_pageCache.TryGetValue(pageType, out UserControl? page))
+        {
+            if (!_pageFactories.TryGetValue(pageType, out Func<UserControl>? factory))
+            {
+                return;
+            }
+
+            page = factory();
+            page.Dock = DockStyle.Top;
+            page.MinimumSize = new Size(Math.Max(400, _contentHost.ClientSize.Width), 0);
+            page.Visible = false;
+            _pageCache[pageType] = page;
+            _contentHost.Controls.Add(page);
+        }
+
+        Type? previousPageType = _currentPageType;
+        _contentHost.SuspendLayout();
+        try
+        {
+            if (previousPageType != null &&
+                _pageCache.TryGetValue(previousPageType, out UserControl? previousPage) &&
+                previousPage != page)
+            {
+                previousPage.Visible = false;
+            }
+
+            page.Visible = true;
+            page.BringToFront();
+        }
+        finally
+        {
+            _contentHost.ResumeLayout(performLayout: true);
+        }
+
+        if (previousPageType != null &&
+            previousPageType != pageType &&
+            _navItems.TryGetValue(previousPageType, out SettingsSidebarItem? previousItem))
+        {
+            previousItem.Selected = false;
+        }
+
+        if (_navItems.TryGetValue(pageType, out SettingsSidebarItem? selectedItem))
+        {
+            selectedItem.Selected = true;
+        }
+
+        _currentPageType = pageType;
+        FitToCurrentPage();
+        PageShown?.Invoke(this, pageType);
+    }
+
+    public void FitToCurrentPage()
+    {
+        if (_currentPageType == null ||
+            !_pageCache.TryGetValue(_currentPageType, out UserControl? page) ||
+            _contentHost.ClientSize.Width <= 0)
+        {
+            return;
+        }
+
+        int pageWidth = Math.Max(400, _contentHost.ClientSize.Width);
+        page.MinimumSize = new Size(pageWidth, 0);
+        page.Width = pageWidth;
+        page.PerformLayout();
+
+        int preferredPageHeight = page.GetPreferredSize(new Size(pageWidth, 0)).Height;
+        int nonContentHeight = Math.Max(0, ClientSize.Height - _contentHost.Height);
+        int desiredClientHeight = Math.Max(_minimumClientSize.Height, preferredPageHeight + nonContentHeight);
+        Rectangle area = Screen.FromControl(this).WorkingArea;
+        int maxClientHeight = Math.Max(
+            _minimumClientSize.Height,
+            (int)Math.Round((area.Height - ControlDrawing.ScaleLogical(this, 16)) * 0.8));
+        int nextHeight = Math.Min(desiredClientHeight, maxClientHeight);
+
+        if (nextHeight != ClientSize.Height)
+        {
+            ClientSize = new Size(Math.Max(ClientSize.Width, _minimumClientSize.Width), nextHeight);
         }
     }
 }

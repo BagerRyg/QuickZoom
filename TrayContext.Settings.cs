@@ -31,6 +31,7 @@ internal sealed partial class TrayContext
         public bool AutoDisableAt100 { get; set; } = true;
         public int Fps { get; set; } = 120;
         public bool CenterCursor { get; set; }
+        public bool SuppressAltKeyInOfficeApps { get; set; }
         public bool WiggleSpotlightEnabled { get; set; } = true;
         public bool CursorEnhancementEnabled { get; set; }
         public int CursorScale { get; set; } = 100;
@@ -64,6 +65,7 @@ internal sealed partial class TrayContext
             AutoDisableAt100 = true,
             Fps = 120,
             CenterCursor = false,
+            SuppressAltKeyInOfficeApps = false,
             WiggleSpotlightEnabled = true,
             CursorEnhancementEnabled = false,
             CursorScale = 100,
@@ -110,6 +112,7 @@ internal sealed partial class TrayContext
         _autoDisableAt100 = s.AutoDisableAt100;
         _fps = Math.Clamp(s.Fps, 60, 360);
         _centerCursor = s.CenterCursor;
+        _suppressAltKeyInOfficeApps = s.SuppressAltKeyInOfficeApps && IsAltEnableKey();
         _wiggleSpotlightEnabled = s.WiggleSpotlightEnabled;
         _cursorEnhancementEnabled = s.CursorEnhancementEnabled;
         _cursorScale = NormalizeCursorScale(s.CursorScale);
@@ -200,51 +203,128 @@ internal sealed partial class TrayContext
 
     private void SaveSettings()
     {
+        Settings snapshot = CreateSettingsSnapshot();
+        lock (_settingsSaveSync)
+        {
+            _pendingSettingsSave = snapshot;
+        }
+
+        void ScheduleSave()
+        {
+            _settingsSaveTimer ??= new System.Windows.Forms.Timer { Interval = 400 };
+            _settingsSaveTimer.Tick -= OnSettingsSaveTimerTick;
+            _settingsSaveTimer.Tick += OnSettingsSaveTimerTick;
+            _settingsSaveTimer.Stop();
+            _settingsSaveTimer.Start();
+        }
+
+        if (_uiInvoker != null && !_uiInvoker.IsDisposed && _uiInvoker.InvokeRequired)
+        {
+            _uiInvoker.BeginInvoke((MethodInvoker)ScheduleSave);
+        }
+        else
+        {
+            ScheduleSave();
+        }
+
+        UpdateMenuLabels();
+    }
+
+    private void OnSettingsSaveTimerTick(object? sender, EventArgs e)
+    {
+        _settingsSaveTimer?.Stop();
+        Settings? snapshot;
+        lock (_settingsSaveSync)
+        {
+            snapshot = _pendingSettingsSave;
+            _pendingSettingsSave = null;
+        }
+
+        if (snapshot == null)
+        {
+            return;
+        }
+
+        _settingsSaveTask = Task.Run(() => WriteSettingsSnapshot(snapshot));
+    }
+
+    private void FlushSettingsSave()
+    {
+        Settings? snapshot;
+        lock (_settingsSaveSync)
+        {
+            snapshot = _pendingSettingsSave;
+            _pendingSettingsSave = null;
+        }
+
+        _settingsSaveTimer?.Stop();
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!);
+            _settingsSaveTask?.Wait(1000);
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.WriteThrottled("SaveSettings.FlushWait", ex);
+        }
 
-            var s = new Settings
+        if (snapshot != null)
+        {
+            WriteSettingsSnapshot(snapshot);
+        }
+    }
+
+    private Settings CreateSettingsSnapshot()
+    {
+        return new Settings
+        {
+            ThemeMode = (int)_themeMode,
+            UiFontSize = (int)_uiFontSize,
+            StepPercent = _stepPercent,
+            MaxPercent = _maxPercent,
+            MagnificationEnabled = _enabled,
+            InvertEnabled = _invertEnabled,
+            FollowCursor = _followCursor,
+            DisplaySelectionMode = (int)_displaySelectionMode,
+            AutoSwitchMonitor = _autoSwitchMonitor,
+            ShortcutInputMode = (int)_shortcutInputMode,
+            EnableKey = (int)_enableKey,
+            Language = (int)_language,
+            InvertColors = _invertColors,
+            InvertKey = (int)_invertKey,
+            FollowCursorKey = (int)_followCursorKey,
+            InvertTrigger = (int)_invertTrigger,
+            SmoothZoom = _smoothZoom,
+            AutoDisableAt100 = _autoDisableAt100,
+            Fps = _fps,
+            CenterCursor = _centerCursor,
+            SuppressAltKeyInOfficeApps = _suppressAltKeyInOfficeApps && IsAltEnableKey(),
+            WiggleSpotlightEnabled = _wiggleSpotlightEnabled,
+            CursorEnhancementEnabled = _cursorEnhancementEnabled,
+            CursorScale = _cursorScale,
+            CursorFillColor = _cursorFillColorArgb,
+            CursorBorderColor = _cursorBorderColorArgb,
+            UseCursorMonitorSelection = _useCursorMonitorSelection,
+            SelectedMonitorDeviceNames = _selectedMonitorDeviceNames.ToList()
+        };
+    }
+
+    private void WriteSettingsSnapshot(Settings s)
+    {
+        try
+        {
+            lock (_settingsWriteSync)
             {
-                ThemeMode = (int)_themeMode,
-                UiFontSize = (int)_uiFontSize,
-                StepPercent = _stepPercent,
-                MaxPercent = _maxPercent,
-                MagnificationEnabled = _enabled,
-                InvertEnabled = _invertEnabled,
-                FollowCursor = _followCursor,
-                DisplaySelectionMode = (int)_displaySelectionMode,
-                AutoSwitchMonitor = _autoSwitchMonitor,
-                ShortcutInputMode = (int)_shortcutInputMode,
-                EnableKey = (int)_enableKey,
-                Language = (int)_language,
-                InvertColors = _invertColors,
-                InvertKey = (int)_invertKey,
-                FollowCursorKey = (int)_followCursorKey,
-                InvertTrigger = (int)_invertTrigger,
-                SmoothZoom = _smoothZoom,
-                AutoDisableAt100 = _autoDisableAt100,
-                Fps = _fps,
-                CenterCursor = _centerCursor,
-                WiggleSpotlightEnabled = _wiggleSpotlightEnabled,
-                CursorEnhancementEnabled = _cursorEnhancementEnabled,
-                CursorScale = _cursorScale,
-                CursorFillColor = _cursorFillColorArgb,
-                CursorBorderColor = _cursorBorderColorArgb,
-                UseCursorMonitorSelection = _useCursorMonitorSelection,
-                SelectedMonitorDeviceNames = _selectedMonitorDeviceNames.ToList()
-            };
-
-            FilePersistence.WriteAllTextAtomic(
-                _settingsPath,
-                JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true }));
+                Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!);
+                FilePersistence.WriteAllTextAtomic(
+                    _settingsPath,
+                    JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true }));
+            }
         }
         catch (Exception ex)
         {
             ErrorLog.Write("SaveSettings", ex);
         }
 
-        UpdateMenuLabels();
     }
 
     private void ResetSettingsToDefaults()
@@ -257,6 +337,7 @@ internal sealed partial class TrayContext
         DisableMagAndReset();
         ApplyCursorEnhancementIfNeeded();
         SaveSettings();
+        FlushSettingsSave();
         RefreshMenuAndTrayUi(rebuildPopup: true);
 
         if (_settingsWindow != null && !_settingsWindow.IsDisposed)

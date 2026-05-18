@@ -36,6 +36,9 @@ internal sealed partial class TrayContext
     [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     private static extern IntPtr GetModuleHandle(string lpModuleName);
 
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
     [StructLayout(LayoutKind.Sequential)]
     private struct MSLLHOOKSTRUCT
     {
@@ -187,6 +190,12 @@ internal sealed partial class TrayContext
             if ((_enabled || _invertEnabled) && IsEnableKeyMatch(_enableKey, vk))
             {
                 _enableKeyPressed = true;
+
+                if (ShouldSuppressEnableKeyForForeground())
+                {
+                    _suppressEnableKeyForForeground = true;
+                    return (IntPtr)1;
+                }
             }
 
             bool invertKeyPressed = _invertEnabled &&
@@ -248,6 +257,12 @@ internal sealed partial class TrayContext
             {
                 _enableKeyPressed = false;
                 _wheelDeltaRemainder = 0;
+
+                if (_suppressEnableKeyForForeground)
+                {
+                    _suppressEnableKeyForForeground = false;
+                    return (IntPtr)1;
+                }
             }
 
             bool invertKeyReleased = _invertEnabled &&
@@ -288,6 +303,57 @@ internal sealed partial class TrayContext
             Keys.RWin => vk == (int)Keys.LWin || vk == (int)Keys.RWin,
             _ => vk == (int)enableKey
         };
+    }
+
+    private bool IsAltEnableKey()
+    {
+        return _enableKey == Keys.Menu || _enableKey == Keys.LMenu || _enableKey == Keys.RMenu;
+    }
+
+    private bool ShouldSuppressEnableKeyForForeground()
+    {
+        if (!_suppressAltKeyInOfficeApps || !IsAltEnableKey() || !MouseShortcutsAllowed())
+        {
+            return false;
+        }
+
+        IntPtr foreground = GetForegroundWindow();
+        if (foreground == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        GetWindowThreadProcessId(foreground, out uint processId);
+        if (processId == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            using Process process = Process.GetProcessById((int)processId);
+            return IsOfficeProcessName(process.ProcessName);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsOfficeProcessName(string processName)
+    {
+        return processName.Equals("OUTLOOK", StringComparison.OrdinalIgnoreCase) ||
+               processName.Equals("WINWORD", StringComparison.OrdinalIgnoreCase) ||
+               processName.Equals("EXCEL", StringComparison.OrdinalIgnoreCase) ||
+               processName.Equals("POWERPNT", StringComparison.OrdinalIgnoreCase) ||
+               processName.Equals("ONENOTE", StringComparison.OrdinalIgnoreCase) ||
+               processName.Equals("MSACCESS", StringComparison.OrdinalIgnoreCase) ||
+               processName.Equals("MSPUB", StringComparison.OrdinalIgnoreCase) ||
+               processName.Equals("VISIO", StringComparison.OrdinalIgnoreCase);
     }
 
     private bool IsInvertKeyMatch(int vk)
