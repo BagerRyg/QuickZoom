@@ -4,18 +4,19 @@
   <img src="assets/icons/magnifier_dark.ico" alt="QuickZoom" width="96">
 </p>
 
-<h3 align="center">Fast tray-based screen magnification for Windows</h3>
+<h3 align="center">Lightweight screen magnification for Windows 10 and 11</h3>
 
 <p align="center">
-  A lightweight accessibility tool for quick desktop zoom, cursor focus, inverted colors, and multi-monitor workflows.
+  QuickZoom is a fast, tray-based accessibility tool built on the native Windows magnification engine.
 </p>
 
 <p align="center">
   <a href="https://github.com/BagerRyg/QuickZoom/releases">
-    <img src="https://img.shields.io/badge/version-2.122-6ee08f?style=for-the-badge" alt="Version 2.122">
+    <img src="https://img.shields.io/badge/version-2.167-6ee08f?style=for-the-badge" alt="Version 2.167">
   </a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-64748b?style=for-the-badge" alt="Windows 10 and Windows 11">
   <img src="https://img.shields.io/badge/runtime-.NET%2010-512bd4?style=for-the-badge" alt=".NET 10">
+  <img src="https://img.shields.io/badge/license-GPLv3-blue?style=for-the-badge" alt="GPLv3 license">
 </p>
 
 <p align="center">
@@ -28,48 +29,66 @@
 
 ---
 
-QuickZoom is a Windows screen magnifier built for people who need zoom immediately without opening a heavy accessibility suite or digging through menus. It runs from the system tray, responds to simple keyboard and mouse shortcuts, and stays out of the way until you need it.
+## About
 
-I built it because I am visually impaired and wanted something faster, simpler, and more comfortable than Windows Magnifier for daily PC use.
+QuickZoom is a lightweight magnification and accessibility tool for Windows 10 and Windows 11.
 
-## Contents
+It was built to extend and improve the native Windows magnification experience with faster access, better tray controls, smoother everyday use, and practical multi-monitor support. The goal is simple: make zooming the desktop feel quick, reliable, and easy to adjust.
 
-- [Project goal](#project-goal)
-- [Features](#features)
-- [Shortcuts](#shortcuts)
-- [Screenshots](#screenshots)
-- [Requirements](#requirements)
-- [Download](#download)
-- [Build from source](#build-from-source)
-- [Elevated startup support](#elevated-startup-support)
-- [Status](#status)
-- [License](#license)
+QuickZoom is also a free and open-source alternative for users who do not need a large paid accessibility suite. Tools such as ZoomText and SuperNova can be powerful, but they can also be expensive, resource-heavy, and more complex than some users need. QuickZoom focuses on the core magnification features that matter most during normal PC use.
 
-## Project goal
+## Why QuickZoom?
 
-QuickZoom is meant to be a practical accessibility tool for everyday Windows use:
+QuickZoom is designed for users who want:
 
-- Fast temporary magnification.
-- Simple tray-first controls.
-- Better cursor visibility.
-- Multi-monitor support.
-- A lighter alternative to large commercial accessibility suites.
+- Fast zoom control without opening a large application window.
+- A simple tray menu with the most important actions one click away.
+- A full settings window for deeper configuration.
+- Smooth magnification using the native Windows magnification engine.
+- Reliable multi-monitor magnification.
+- A portable, self-contained app that can also start automatically with Windows.
+- A free, open-source accessibility tool that is easy to inspect, modify, and improve.
 
 ## Features
 
 - Tray-based quick controls.
+- Full settings window for advanced configuration.
 - Mouse and keyboard zoom shortcuts.
-- Inverted colors mode.
-- Follow cursor support.
 - Smooth zoom transitions.
-- Auto-disable at 100%.
+- Follow-cursor magnification.
 - Optional center-cursor behavior.
-- Cursor enhancement and wiggle-to-locate.
-- Single-monitor and multi-monitor modes.
+- Auto-disable at 100% zoom.
+- Inverted colors mode.
+- Cursor enhancement and wiggle-to-locate support.
+- Single-display and multi-display magnification modes.
+- Magnification across all active displays.
 - Per-monitor display selection.
 - Dark, light, and system theme support.
 - English and Danish interface.
 - Optional elevated startup support for better compatibility with administrator apps.
+- Portable self-contained release builds.
+
+## Multi-monitor support
+
+QuickZoom supports magnification on multiple displays.
+
+The most reliable and smoothest mode is magnification across all active displays. This mode is recommended for most multi-monitor setups because it avoids many of the edge cases that can happen when only one selected monitor is magnified.
+
+Per-monitor selection is also available for users who need a more specific setup.
+
+## Protected video playback
+
+Because QuickZoom uses the native Windows magnification engine, it can often magnify protected video playback surfaces such as TV players, streaming services, and DRM-protected browser video.
+
+This can work better than some third-party magnification tools in certain setups, but behavior can still depend on the app, browser, GPU driver, hardware acceleration, and the type of protected content being played.
+
+## Portable or automatic startup
+
+QuickZoom can be run as a portable self-contained app.
+
+No full installation is required for normal use. Download the release, run the executable, and QuickZoom starts in the system tray.
+
+QuickZoom can also be configured to start automatically with Windows. This requires approving a single UAC prompt during setup because Windows needs permission to register the built-in elevated startup support.
 
 ## Shortcuts
 
@@ -121,13 +140,21 @@ dotnet publish .\QuickZoom.csproj -c Release -r win-x64 --self-contained true -p
 
 ## Elevated startup support
 
-QuickZoom can optionally install a managed startup copy and register an elevated startup task. This helps when you want QuickZoom to keep working smoothly with applications that run as administrator.
+QuickZoom can optionally install a managed startup copy and register elevated startup support. This helps QuickZoom work more consistently with applications that run as administrator.
 
-This setup is optional. The app can also run directly without installing the startup task.
+This setup is optional. QuickZoom can also run directly without registering startup support.
 
-## Status
+## Project status
 
 QuickZoom is actively developed as a focused Windows accessibility utility.
+
+The project aims to stay lightweight, practical, and easy to use instead of becoming a large all-in-one accessibility suite.
+
+## Limitations
+
+QuickZoom relies on Windows' native magnification functionality, so some behavior can depend on Windows, GPU drivers, display scaling, and the application being magnified.
+
+Fullscreen games, anti-cheat software, protected windows, and some video playback surfaces may behave differently depending on the system.
 
 ## License
 
