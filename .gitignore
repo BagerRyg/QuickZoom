@@ -3,10 +3,9 @@ bin/
 obj/
 dist/
 publish/
-Build */
-Build*/
-!UI Screenshots/
-!UI Screenshots/**
+/Build */
+/Build*/
+/Website/
 
 # Local tool/cache folders
 .appdata/
@@ -15,9 +14,20 @@ Build*/
 .nuget/
 .tmp/
 
+# Logs, crash dumps, traces, and local diagnostics
+*.log
+*.dmp
+*.dump
+*.mdmp
+*.etl
+*.trace
+*.wer
+*.evtx
+Crashpad/
+crashpad/
+
 # User/editor files
 *.user
 *.suo
 *.tmp
-*.log
 .DS_Store

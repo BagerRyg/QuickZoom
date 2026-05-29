@@ -4,7 +4,7 @@ param(
 )
 
 $root = Split-Path -Parent $PSScriptRoot
-$appInfoPath = Join-Path $root 'AppInfo.cs'
+$appInfoPath = Join-Path $root 'src\QuickZoom\AppInfo.cs'
 $projectPath = Join-Path $root 'QuickZoom.csproj'
 
 if (-not (Test-Path -LiteralPath $appInfoPath)) {
