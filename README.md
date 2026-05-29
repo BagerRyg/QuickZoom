@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/BagerRyg/QuickZoom/releases">
-    <img src="https://img.shields.io/badge/version-2.167-6ee08f?style=for-the-badge" alt="Version 2.167">
+    <img src="https://img.shields.io/badge/version-2.0.210-6ee08f?style=for-the-badge" alt="Version 2.0.210">
   </a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-64748b?style=for-the-badge" alt="Windows 10 and Windows 11">
   <img src="https://img.shields.io/badge/runtime-.NET%2010-512bd4?style=for-the-badge" alt=".NET 10">
@@ -25,6 +25,7 @@
   <a href="#features">Features</a> |
   <a href="#screenshots">Screenshots</a> |
   <a href="#shortcuts">Shortcuts</a> |
+  <a href="#translations">Translations</a> |
   <a href="#build-from-source">Build from source</a>
 </p>
 
@@ -65,7 +66,7 @@ QuickZoom is designed for users who want:
 - Magnification across all active displays.
 - Per-monitor display selection.
 - Dark, light, and system theme support.
-- English and Danish interface.
+- English, Danish, German, Norwegian, and Swedish interface.
 - Optional elevated startup support for better compatibility with administrator apps.
 - Portable self-contained release builds.
 
@@ -106,20 +107,33 @@ These are the default shortcuts. They can be changed in Settings.
 
 ### Tray Menu
 
-![QuickZoom tray menu](UI%20Screenshots/Build%20203/dark/en/tray-menu.png)
+![QuickZoom tray menu](assets/screenshots/Build%20203/dark/en/tray-menu.png)
 
 ### Cursor Settings
 
-![QuickZoom cursor settings](UI%20Screenshots/Build%20203/dark/en/settings-cursor.png)
+![QuickZoom cursor settings](assets/screenshots/Build%20203/dark/en/settings-cursor.png)
 
 ### Keyboard Shortcuts
 
-![QuickZoom shortcut settings](UI%20Screenshots/Build%20203/dark/en/settings-shortcuts.png)
+![QuickZoom shortcut settings](assets/screenshots/Build%20203/dark/en/settings-shortcuts.png)
 
 ## Requirements
 
 - Windows 10 x64 or Windows 11 x64.
 - .NET 10 Desktop Runtime, unless you use the self-contained release build.
+
+## Translations
+
+QuickZoom locale files are stored in `locales/` as JSON files. To add a new language:
+
+1. Copy `locales/en.json`.
+2. Rename the copy to the language code, for example `fr.json`.
+3. Translate the JSON values only. Keep the keys unchanged.
+4. Add the language to `UiLanguage` in `src/QuickZoom/UiText.cs`.
+5. Add its file code in `src/QuickZoom/LocalizationManager.cs`.
+6. Add its display name key to each locale file, then build normally.
+
+Locale files are embedded in the app and also copied beside the executable during publish.
 
 ## Download
 
