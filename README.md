@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/BagerRyg/QuickZoom/releases">
-    <img src="https://img.shields.io/badge/version-2.0.210-6ee08f?style=for-the-badge" alt="Version 2.0.210">
+    <img src="https://img.shields.io/badge/version-2.2.0-6ee08f?style=for-the-badge" alt="Version 2.2.0">
   </a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-64748b?style=for-the-badge" alt="Windows 10 and Windows 11">
   <img src="https://img.shields.io/badge/runtime-.NET%2010-512bd4?style=for-the-badge" alt=".NET 10">

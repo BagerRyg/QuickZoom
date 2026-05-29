@@ -12,24 +12,31 @@ if (-not (Test-Path -LiteralPath $appInfoPath)) {
 }
 
 $content = Get-Content -LiteralPath $appInfoPath -Raw
+$releaseVersion = [regex]::Match($content, 'internal const string ReleaseVersion = "([^"]+)";').Groups[1].Value
+if ([string]::IsNullOrWhiteSpace($releaseVersion)) {
+    throw 'Could not find ReleaseVersion constant.'
+}
+
+if ($content -notmatch 'internal const int BuildNumber = \d+;' -or
+    $content -notmatch 'internal const string ProductVersion = "[^"]+";') {
+    throw 'Could not find version constants to update.'
+}
+
 $updated = [regex]::Replace(
     $content,
     'internal const int BuildNumber = \d+;',
     "internal const int BuildNumber = $BuildNumber;")
 $updated = [regex]::Replace(
     $updated,
-    'internal const string ProductVersion = "2\.0\.\d+\.0";',
-    "internal const string ProductVersion = `"2.0.$BuildNumber.0`";")
-
-if ($updated -eq $content) {
-    throw 'Could not find BuildNumber constant to update.'
-}
+    'internal const string ProductVersion = "[^"]+";',
+    "internal const string ProductVersion = `"$releaseVersion.$BuildNumber`";")
 
 Set-Content -LiteralPath $appInfoPath -Value $updated -NoNewline
 
 if (Test-Path -LiteralPath $projectPath) {
     $project = Get-Content -LiteralPath $projectPath -Raw
-    $project = [regex]::Replace($project, '<Version>2\.0\.\d+</Version>', "<Version>2.0.$BuildNumber</Version>")
-    $project = [regex]::Replace($project, '<FileVersion>2\.0\.\d+\.0</FileVersion>', "<FileVersion>2.0.$BuildNumber.0</FileVersion>")
+    $project = [regex]::Replace($project, '<Version>[^<]+</Version>', "<Version>$releaseVersion</Version>")
+    $project = [regex]::Replace($project, '<FileVersion>[^<]+</FileVersion>', "<FileVersion>$releaseVersion.$BuildNumber</FileVersion>")
+    $project = [regex]::Replace($project, '<AssemblyVersion>[^<]+</AssemblyVersion>', "<AssemblyVersion>$releaseVersion.0</AssemblyVersion>")
     Set-Content -LiteralPath $projectPath -Value $project -NoNewline
 }

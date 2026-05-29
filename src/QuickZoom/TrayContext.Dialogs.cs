@@ -44,7 +44,7 @@ internal sealed partial class TrayContext
         {
             AutoSize = true,
             Text = L("About.Help") + "\n\n" +
-                   L("About.VersionBuild", AppInfo.MajorVersion, AppInfo.BuildNumber) + "\n" +
+                   L("About.VersionBuild", AppInfo.ReleaseVersion, AppInfo.BuildNumber) + "\n" +
                    L("About.Description") + "\n\n" +
                    StartupTaskService.GetStatusLabel(_language) + "\n\n" +
                    L("About.InstallPath") + ": " + installPath + "\n\n" +

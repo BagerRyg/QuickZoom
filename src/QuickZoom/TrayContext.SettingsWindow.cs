@@ -730,7 +730,7 @@ internal sealed partial class TrayContext
         var overviewSection = new SettingsSection(palette, string.Empty, string.Empty);
         overviewSection.AddRow(CreateInfoRow(
             L("Settings.AboutBuildStartup"),
-            L("About.VersionBuild", AppInfo.MajorVersion, AppInfo.BuildNumber),
+            L("About.VersionBuild", AppInfo.ReleaseVersion, AppInfo.BuildNumber),
             L("Settings.Loading")));
         overviewSection.AddRow(CreateTextTileRow(
             L("Settings.UsageHelp"),
@@ -781,7 +781,7 @@ internal sealed partial class TrayContext
             overviewSection.ClearRows();
             overviewSection.AddRow(CreateInfoRow(
                 L("Settings.AboutBuildStartup"),
-                L("About.VersionBuild", AppInfo.MajorVersion, AppInfo.BuildNumber),
+                L("About.VersionBuild", AppInfo.ReleaseVersion, AppInfo.BuildNumber),
                 details.StartupStatus,
                 details.Status == StartupTaskStatus.Broken
                     ? CreateInlineActionButton(L("About.FixStartup"), RepairStartupServiceNow)

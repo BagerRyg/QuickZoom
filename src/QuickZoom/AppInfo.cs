@@ -4,12 +4,12 @@ namespace QuickZoom;
 
 internal static class AppInfo
 {
-    internal const int MajorVersion = 2;
-    internal const int BuildNumber = 210;
-    internal const string ProductVersion = "2.0.210.0";
+    internal const string ReleaseVersion = "2.2.0";
+    internal const int BuildNumber = 211;
+    internal const string ProductVersion = "2.2.0.211";
     private static string? _versionHash;
 
-    internal static string DisplayVersion => $"Version {MajorVersion}, Build {BuildNumber}";
+    internal static string DisplayVersion => $"Version {ReleaseVersion}, Build {BuildNumber}";
     internal static string VersionHash => _versionHash ??= CreateVersionHash();
 
     private static string CreateVersionHash()
