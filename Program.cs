@@ -22,6 +22,7 @@ internal static class Program
     private const string StartupTaskInstallFlag = "--install-startup-task";
     private const string StartupReadyEventFlag = "--startup-ready-event";
     private const string StartupTaskUserFlag = "--startup-task-user";
+    private const string CaptureUiScreenshotsFlag = "--capture-ui-screenshots";
     private const int StartupTaskPriority = 3;
     private static readonly string[] LegacyStartupTaskNames =
     [
@@ -80,11 +81,12 @@ internal static class Program
         bool shouldInstallStartupTask = HasArg(args, StartupTaskInstallFlag);
         string? startupReadyEventName = GetArgValue(args, StartupReadyEventFlag);
         string? startupTaskUser = GetArgValue(args, StartupTaskUserFlag);
+        bool shouldCaptureUiScreenshots = HasArg(args, CaptureUiScreenshotsFlag);
         bool acquiredMutex = false;
 
         ConfigureErrorLoggingFromSettings();
 
-        if (!shouldInstallStartupTask && startupReadyEventName == null)
+        if (!shouldCaptureUiScreenshots && !shouldInstallStartupTask && startupReadyEventName == null)
         {
             if (ReconcileOtherQuickZoomInstances(exePath) == InstanceStartupDecision.ExitCurrent)
             {
@@ -108,6 +110,12 @@ internal static class Program
         Application.ThreadException += (_, e) => LogFatalException("UI thread", e.Exception);
         AppDomain.CurrentDomain.UnhandledException += (_, e) => LogFatalException("AppDomain", e.ExceptionObject as Exception);
         ErrorLog.Write("Startup", $"Launching {AppInfo.DisplayVersion} from {AppContext.BaseDirectory}");
+
+        if (shouldCaptureUiScreenshots)
+        {
+            TrayContext.CaptureUiScreenshots(Path.Combine(Directory.GetCurrentDirectory(), "UI Screenshots", $"Build {AppInfo.BuildNumber}"));
+            return;
+        }
 
         bool isAdmin = IsRunningAsAdministrator();
         bool isManagedInstall = InstalledAppService.IsManagedInstallPath(exePath);

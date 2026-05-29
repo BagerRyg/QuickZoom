@@ -214,10 +214,17 @@ internal sealed partial class TrayContext : ApplicationContext
     private readonly string _settingsPath = AppPaths.SettingsPath;
     private readonly string _legacySettingsPath = AppPaths.LegacySettingsPath;
 
-    public TrayContext(string? startupReadyEventName = null)
+    public TrayContext(string? startupReadyEventName = null, bool screenshotMode = false)
     {
         _startupReadyEventName = startupReadyEventName;
         LoadSettings();
+        if (screenshotMode)
+        {
+            _uiInvoker = new Control();
+            _uiInvoker.CreateControl();
+            return;
+        }
+
         RestoreSystemCursorScheme(reapplyCursorEnhancement: false);
         ApplyCursorEnhancementIfNeeded();
         _uiInvoker = new Control();

@@ -23,6 +23,7 @@
   <a href="https://dev.ryg.dk/quickzoom/">Website</a> |
   <a href="https://github.com/BagerRyg/QuickZoom/releases">Download</a> |
   <a href="#features">Features</a> |
+  <a href="#screenshots">Screenshots</a> |
   <a href="#shortcuts">Shortcuts</a> |
   <a href="#build-from-source">Build from source</a>
 </p>
@@ -103,13 +104,17 @@ These are the default shortcuts. They can be changed in Settings.
 
 ## Screenshots
 
-### Tray menu
+### Tray Menu
 
-![QuickZoom tray menu](assets/images/tray_menu.png)
+![QuickZoom tray menu](UI%20Screenshots/Build%20203/dark/en/tray-menu.png)
 
-### Settings window
+### Cursor Settings
 
-![QuickZoom settings window](assets/images/settings.png)
+![QuickZoom cursor settings](UI%20Screenshots/Build%20203/dark/en/settings-cursor.png)
+
+### Keyboard Shortcuts
+
+![QuickZoom shortcut settings](UI%20Screenshots/Build%20203/dark/en/settings-shortcuts.png)
 
 ## Requirements
 

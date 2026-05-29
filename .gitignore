@@ -5,6 +5,8 @@ dist/
 publish/
 Build */
 Build*/
+!UI Screenshots/
+!UI Screenshots/**
 
 # Local tool/cache folders
 .appdata/
