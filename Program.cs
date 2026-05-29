@@ -235,6 +235,7 @@ internal static class Program
         if (!shouldOfferInstallOrUpdate && ShouldYieldToNewerInstance(exePath))
         {
             ShowLatestAlreadyRunningDialog();
+            ReleaseSingleInstanceMutex();
             return;
         }
 
@@ -275,6 +276,13 @@ internal static class Program
                         : T("Startup.NotElevatedBody"));
             }
         }
+
+        if (ReconcileOtherQuickZoomInstances(exePath) == InstanceStartupDecision.ExitCurrent)
+        {
+            ReleaseSingleInstanceMutex();
+            return;
+        }
+
         try
         {
             Application.Run(new TrayContext(startupReadyEventName));
@@ -372,7 +380,6 @@ internal static class Program
 
         Process currentProcess = Process.GetCurrentProcess();
         string normalizedCurrentPath = Path.GetFullPath(currentExePath);
-        string? currentInstalledExePath = InstalledAppService.GetCurrentInstalledExecutablePath();
         bool currentIsInstalledPreferred = InstalledAppService.IsCurrentInstalledExecutablePath(normalizedCurrentPath);
         DateTime currentWriteTimeUtc = TryGetExecutableWriteTimeUtc(normalizedCurrentPath);
 
@@ -406,7 +413,7 @@ internal static class Program
                     return InstanceStartupDecision.ExitCurrent;
                 }
 
-                TryTerminateOlderQuickZoom(otherProcess, otherExePath, currentInstalledExePath);
+                TryTerminateOlderQuickZoom(otherProcess, otherExePath);
                 Thread.Sleep(250);
             }
         }
@@ -1085,7 +1092,6 @@ internal static class Program
         }
 
         string currentExePath = Path.GetFullPath(exePath);
-        string? currentInstalledExePath = InstalledAppService.GetCurrentInstalledExecutablePath();
         bool currentIsInstalledPreferred = InstalledAppService.IsCurrentInstalledExecutablePath(currentExePath);
         DateTime currentWriteTimeUtc = TryGetExecutableWriteTimeUtc(currentExePath);
         Process currentProcess = Process.GetCurrentProcess();
@@ -1117,7 +1123,7 @@ internal static class Program
 
                 if (preference == InstancePreference.CurrentWins)
                 {
-                    TryTerminateOlderQuickZoom(otherProcess, otherExePath, currentInstalledExePath);
+                    TryTerminateOlderQuickZoom(otherProcess, otherExePath);
                 }
             }
         }
@@ -1203,15 +1209,10 @@ internal static class Program
         }
     }
 
-    private static void TryTerminateOlderQuickZoom(Process otherProcess, string otherExePath, string? currentInstalledExePath)
+    private static void TryTerminateOlderQuickZoom(Process otherProcess, string otherExePath)
     {
         try
         {
-            if (currentInstalledExePath != null && PathsEqual(otherExePath, currentInstalledExePath))
-            {
-                return;
-            }
-
             ErrorLog.Write("Startup", "Attempting to stop older QuickZoom instance. " + DescribeProcessInstance(otherProcess, otherExePath));
             otherProcess.Kill(entireProcessTree: false);
             if (!otherProcess.WaitForExit(2000))

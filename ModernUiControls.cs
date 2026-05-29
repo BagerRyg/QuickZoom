@@ -2680,6 +2680,8 @@ internal sealed class AboutSettingsPageView : SettingsPageView
 internal sealed class SettingsContentHost : Panel
 {
     private readonly ThemePalette _palette;
+    private readonly HashSet<Control> _scrollInputAttachedPages = new();
+    private readonly Dictionary<Control, PageLayoutCache> _layoutCache = new();
     private Control? _activePage;
     private int _scrollOffset;
     private int _contentHeight;
@@ -2691,10 +2693,26 @@ internal sealed class SettingsContentHost : Panel
     private const int ScrollBarWidth = 10;
     private const int ScrollBarInset = 2;
 
+    private sealed class PageLayoutCache
+    {
+        public int HostWidth { get; init; }
+        public int HostHeight { get; init; }
+        public int PageWidth { get; init; }
+        public int ContentHeight { get; init; }
+        public int ChildBottom { get; init; }
+        public bool ShowScrollBar { get; init; }
+    }
+
     public SettingsContentHost(ThemePalette palette)
     {
         _palette = palette;
-        SetStyle(ControlStyles.Selectable, true);
+        SetStyle(
+            ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.OptimizedDoubleBuffer |
+            ControlStyles.ResizeRedraw |
+            ControlStyles.Selectable |
+            ControlStyles.UserPaint,
+            true);
         DoubleBuffered = true;
         BackColor = palette.MenuBackground;
         AutoScroll = false;
@@ -2706,10 +2724,15 @@ internal sealed class SettingsContentHost : Panel
         if (_activePage != page)
         {
             _scrollOffset = 0;
+            _showScrollBar = false;
         }
 
         _activePage = page;
-        AttachScrollInput(page);
+        if (_scrollInputAttachedPages.Add(page))
+        {
+            AttachScrollInput(page);
+        }
+
         LayoutActivePage();
     }
 
@@ -2854,17 +2877,33 @@ internal sealed class SettingsContentHost : Panel
             return;
         }
 
-        int pageWidth = Math.Max(400, ClientSize.Width - (_showScrollBar ? ScrollBarWidth + 8 : 0));
+        int probeChildBottom = GetChildBottom(_activePage);
+        if (_layoutCache.TryGetValue(_activePage, out PageLayoutCache? cached) &&
+            cached.HostWidth == ClientSize.Width &&
+            cached.HostHeight == ClientSize.Height &&
+            cached.ChildBottom == probeChildBottom)
+        {
+            _showScrollBar = cached.ShowScrollBar;
+            _contentHeight = cached.ContentHeight;
+            _activePage.MinimumSize = new Size(cached.PageWidth, 0);
+            _activePage.Width = cached.PageWidth;
+            _activePage.Height = _contentHeight;
+            _scrollOffset = Math.Clamp(_scrollOffset, 0, Math.Max(0, _contentHeight - ClientSize.Height));
+            PositionActivePage();
+            return;
+        }
+
+        _showScrollBar = false;
+        int pageWidth = Math.Max(400, ClientSize.Width);
         _activePage.MinimumSize = new Size(pageWidth, 0);
         _activePage.Width = pageWidth;
         _activePage.PerformLayout();
-
         int pageHeight = GetNaturalContentHeight(_activePage, pageWidth);
         bool needsScrollBar = pageHeight > ClientSize.Height;
-        if (needsScrollBar != _showScrollBar)
+        if (needsScrollBar)
         {
-            _showScrollBar = needsScrollBar;
-            pageWidth = Math.Max(400, ClientSize.Width - (_showScrollBar ? ScrollBarWidth + 8 : 0));
+            _showScrollBar = true;
+            pageWidth = Math.Max(400, ClientSize.Width - ScrollBarWidth - 8);
             _activePage.MinimumSize = new Size(pageWidth, 0);
             _activePage.Width = pageWidth;
             _activePage.PerformLayout();
@@ -2874,6 +2913,15 @@ internal sealed class SettingsContentHost : Panel
         _contentHeight = pageHeight;
         _activePage.Height = _contentHeight;
         _scrollOffset = Math.Clamp(_scrollOffset, 0, Math.Max(0, _contentHeight - ClientSize.Height));
+        _layoutCache[_activePage] = new PageLayoutCache
+        {
+            HostWidth = ClientSize.Width,
+            HostHeight = ClientSize.Height,
+            PageWidth = pageWidth,
+            ContentHeight = _contentHeight,
+            ChildBottom = GetChildBottom(_activePage),
+            ShowScrollBar = _showScrollBar
+        };
         PositionActivePage();
     }
 
@@ -2908,13 +2956,19 @@ internal sealed class SettingsContentHost : Panel
     private static int GetNaturalContentHeight(Control control, int width)
     {
         int preferredHeight = control.GetPreferredSize(new Size(width, 0)).Height;
+        int childBottom = GetChildBottom(control);
+        return Math.Max(preferredHeight, childBottom);
+    }
+
+    private static int GetChildBottom(Control control)
+    {
         int childBottom = 0;
         foreach (Control child in control.Controls)
         {
             childBottom = Math.Max(childBottom, child.Bottom + child.Margin.Bottom);
         }
 
-        return Math.Max(preferredHeight, childBottom);
+        return childBottom;
     }
 }
 
@@ -2936,12 +2990,18 @@ internal sealed class SettingsPageDefinition
 
 internal sealed class SettingsForm : Form
 {
+    private const int WM_SETREDRAW = 0x000B;
     private readonly Dictionary<Type, UserControl> _pageCache = new();
     private readonly Dictionary<Type, SettingsSidebarItem> _navItems = new();
     private readonly Dictionary<Type, Func<UserControl>> _pageFactories = new();
     private readonly SettingsContentHost _contentHost;
     private readonly Size _minimumClientSize;
+    private readonly Queue<Type> _preloadQueue = new();
     private Type? _currentPageType;
+    private bool _preloadingPages;
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
     public SettingsForm(
         ThemePalette palette,
@@ -3113,7 +3173,11 @@ internal sealed class SettingsForm : Form
                 Close();
             }
         };
-        Shown += (_, _) => UpdateSidebarItemWidths();
+        Shown += (_, _) =>
+        {
+            UpdateSidebarItemWidths();
+            QueuePagePreload();
+        };
     }
 
     public event EventHandler<Type>? PageShown;
@@ -3127,25 +3191,25 @@ internal sealed class SettingsForm : Form
             return;
         }
 
-        if (!_pageCache.TryGetValue(pageType, out UserControl? page))
+        Type? previousPageType = _currentPageType;
+        SuspendRedraw();
+        SuspendLayout();
+        _contentHost.SuspendLayout();
+        try
         {
-            if (!_pageFactories.TryGetValue(pageType, out Func<UserControl>? factory))
+            UserControl? page = GetOrCreatePage(pageType);
+            if (page == null)
             {
                 return;
             }
 
-            page = factory();
-            page.Dock = DockStyle.Top;
-            page.MinimumSize = new Size(Math.Max(400, _contentHost.ClientSize.Width), 0);
             page.Visible = false;
-            _pageCache[pageType] = page;
-            _contentHost.Controls.Add(page);
-        }
+            page.SuspendLayout();
+            int pageWidth = Math.Max(400, _contentHost.ClientSize.Width);
+            page.MinimumSize = new Size(pageWidth, 0);
+            page.Width = pageWidth;
+            page.ResumeLayout(performLayout: false);
 
-        Type? previousPageType = _currentPageType;
-        _contentHost.SuspendLayout();
-        try
-        {
             if (previousPageType != null &&
                 _pageCache.TryGetValue(previousPageType, out UserControl? previousPage) &&
                 previousPage != page)
@@ -3159,7 +3223,9 @@ internal sealed class SettingsForm : Form
         }
         finally
         {
-            _contentHost.ResumeLayout(performLayout: true);
+            _contentHost.ResumeLayout(performLayout: false);
+            ResumeLayout(performLayout: false);
+            ResumeRedraw();
         }
 
         if (previousPageType != null &&
@@ -3175,11 +3241,11 @@ internal sealed class SettingsForm : Form
         }
 
         _currentPageType = pageType;
-        FitToCurrentPage();
+        FitToCurrentPage(resizeWindow: previousPageType == null);
         PageShown?.Invoke(this, pageType);
     }
 
-    public void FitToCurrentPage()
+    public void FitToCurrentPage(bool resizeWindow = false)
     {
         if (_currentPageType == null ||
             !_pageCache.TryGetValue(_currentPageType, out UserControl? page) ||
@@ -3191,21 +3257,150 @@ internal sealed class SettingsForm : Form
         int pageWidth = Math.Max(400, _contentHost.ClientSize.Width);
         page.MinimumSize = new Size(pageWidth, 0);
         page.Width = pageWidth;
-        page.PerformLayout();
 
-        int preferredPageHeight = page.GetPreferredSize(new Size(pageWidth, 0)).Height;
-        int nonContentHeight = Math.Max(0, ClientSize.Height - _contentHost.Height);
-        int desiredClientHeight = Math.Max(_minimumClientSize.Height, preferredPageHeight + nonContentHeight);
-        Rectangle area = Screen.FromControl(this).WorkingArea;
-        int maxClientHeight = Math.Max(
-            _minimumClientSize.Height,
-            (int)Math.Round((area.Height - ControlDrawing.ScaleLogical(this, 16)) * 0.8));
-        int nextHeight = Math.Min(desiredClientHeight, maxClientHeight);
-
-        if (nextHeight != ClientSize.Height)
+        if (resizeWindow)
         {
-            ClientSize = new Size(Math.Max(ClientSize.Width, _minimumClientSize.Width), nextHeight);
+            page.PerformLayout();
+            int preferredPageHeight = page.GetPreferredSize(new Size(pageWidth, 0)).Height;
+            int nonContentHeight = Math.Max(0, ClientSize.Height - _contentHost.Height);
+            int desiredClientHeight = Math.Max(_minimumClientSize.Height, preferredPageHeight + nonContentHeight);
+            Rectangle area = Screen.FromControl(this).WorkingArea;
+            int maxClientHeight = Math.Max(
+                _minimumClientSize.Height,
+                (int)Math.Round((area.Height - ControlDrawing.ScaleLogical(this, 16)) * 0.8));
+            int nextHeight = Math.Min(desiredClientHeight, maxClientHeight);
+
+            if (nextHeight != ClientSize.Height)
+            {
+                ClientSize = new Size(Math.Max(ClientSize.Width, _minimumClientSize.Width), nextHeight);
+            }
         }
+    }
+
+    private UserControl? GetOrCreatePage(Type pageType)
+    {
+        if (_pageCache.TryGetValue(pageType, out UserControl? page))
+        {
+            return page;
+        }
+
+        if (!_pageFactories.TryGetValue(pageType, out Func<UserControl>? factory))
+        {
+            return null;
+        }
+
+        page = factory();
+        page.Dock = DockStyle.Top;
+        page.MinimumSize = new Size(Math.Max(400, _contentHost.ClientSize.Width), 0);
+        page.Visible = false;
+        _pageCache[pageType] = page;
+        _contentHost.Controls.Add(page);
+        return page;
+    }
+
+    private void QueuePagePreload()
+    {
+        if (_preloadingPages)
+        {
+            return;
+        }
+
+        HashSet<Type> queued = new();
+        Type[] priorityPages =
+        [
+            typeof(CursorSettingsPageView),
+            typeof(ShortcutsSettingsPageView),
+            typeof(ZoomSettingsPageView),
+            typeof(DisplaySettingsPageView),
+            typeof(AppearanceSettingsPageView),
+            typeof(AboutSettingsPageView),
+            typeof(GeneralSettingsPageView)
+        ];
+
+        foreach (Type pageType in priorityPages)
+        {
+            EnqueuePreloadPage(pageType, queued);
+        }
+
+        foreach (Type pageType in _pageFactories.Keys)
+        {
+            EnqueuePreloadPage(pageType, queued);
+        }
+
+        void EnqueuePreloadPage(Type pageType, HashSet<Type> queuedPages)
+        {
+            if (queuedPages.Add(pageType) &&
+                pageType != _currentPageType &&
+                _pageFactories.ContainsKey(pageType) &&
+                !_pageCache.ContainsKey(pageType))
+            {
+                _preloadQueue.Enqueue(pageType);
+            }
+        }
+
+        if (_preloadQueue.Count == 0)
+        {
+            return;
+        }
+
+        _preloadingPages = true;
+        BeginInvoke((MethodInvoker)PreloadNextPage);
+    }
+
+    private void PreloadNextPage()
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (_preloadQueue.Count == 0)
+        {
+            _preloadingPages = false;
+            return;
+        }
+
+        Type pageType = _preloadQueue.Dequeue();
+        SuspendRedraw();
+        _contentHost.SuspendLayout();
+        try
+        {
+            _ = GetOrCreatePage(pageType);
+        }
+        finally
+        {
+            _contentHost.ResumeLayout(performLayout: false);
+            ResumeRedraw();
+        }
+
+        var timer = new System.Windows.Forms.Timer { Interval = 15 };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            timer.Dispose();
+            PreloadNextPage();
+        };
+        timer.Start();
+    }
+
+    private void SuspendRedraw()
+    {
+        if (_contentHost.IsHandleCreated)
+        {
+            _ = SendMessage(_contentHost.Handle, WM_SETREDRAW, IntPtr.Zero, IntPtr.Zero);
+        }
+    }
+
+    private void ResumeRedraw()
+    {
+        if (!_contentHost.IsHandleCreated)
+        {
+            return;
+        }
+
+        _ = SendMessage(_contentHost.Handle, WM_SETREDRAW, new IntPtr(1), IntPtr.Zero);
+        _contentHost.Invalidate(true);
+        _contentHost.Update();
     }
 }
 

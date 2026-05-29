@@ -1,5 +1,9 @@
 # QuickZoom Changelog
 
+## Version 2, Build 197
+
+- Improved UI startup and interface load times.
+
 ## Version 2, Build 193
 
 - Hardened startup service setup, repair, and verification so QuickZoom confirms the scheduled task points to the current managed install before reporting success.
