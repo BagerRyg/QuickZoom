@@ -264,7 +264,7 @@ internal sealed class ColorSwatchControl : Control
 internal sealed class CursorPreviewControl : Control
 {
     private ThemePalette _palette;
-    private const int PreviewSlotSize = 104;
+    private const int PreviewSlotSize = 164;
     private const int PreviewBaseCursorSize = 32;
 
     public CursorPreviewControl(ThemePalette palette, Color fillColor, Color borderColor, int scalePercent)
@@ -280,8 +280,8 @@ internal sealed class CursorPreviewControl : Control
             ControlStyles.SupportsTransparentBackColor |
             ControlStyles.UserPaint,
             true);
-        Width = 380;
-        Height = 112;
+        Width = 540;
+        Height = 172;
         Margin = new Padding(0);
         BackColor = Color.Transparent;
     }
@@ -315,13 +315,13 @@ internal sealed class CursorPreviewControl : Control
         e.Graphics.DrawPath(surfaceBorder, surfacePath);
 
         DrawCursorPreview(e.Graphics, Cursors.Default, new Rectangle(6, 4, PreviewSlotSize, PreviewSlotSize));
-        DrawCursorPreview(e.Graphics, Cursors.IBeam, new Rectangle(138, 4, PreviewSlotSize, PreviewSlotSize));
-        DrawCursorPreview(e.Graphics, Cursors.Hand, new Rectangle(270, 4, PreviewSlotSize, PreviewSlotSize));
+        DrawCursorPreview(e.Graphics, Cursors.IBeam, new Rectangle(188, 4, PreviewSlotSize, PreviewSlotSize));
+        DrawCursorPreview(e.Graphics, Cursors.Hand, new Rectangle(370, 4, PreviewSlotSize, PreviewSlotSize));
     }
 
     private void DrawCursorPreview(Graphics graphics, Cursor cursor, Rectangle slot)
     {
-        double scale = Math.Clamp(ScalePercent, 100, 300) / 100d;
+        double scale = Math.Clamp(ScalePercent, 100, 500) / 100d;
         int cursorSize = Math.Clamp((int)Math.Round(PreviewBaseCursorSize * scale), PreviewBaseCursorSize, PreviewSlotSize);
         Rectangle bounds = new(
             slot.Left + ((slot.Width - cursorSize) / 2),

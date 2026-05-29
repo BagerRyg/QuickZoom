@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Windows.Forms;
 
@@ -54,6 +55,7 @@ internal sealed partial class TrayContext
         }
 
         ThemePalette palette = CurrentTheme;
+        bool shouldStageDarkOpen = palette.MenuBackground.GetBrightness() < 0.5f;
         _resetDefaultsButton = new ModernButton
         {
             Text = L("Settings.Reset"),
@@ -69,8 +71,13 @@ internal sealed partial class TrayContext
             GetSettingsClientSize(),
             L("Common.AppName"),
             L("Settings.Done"),
+            _colourblindMode,
             _resetDefaultsButton,
             BuildSettingsPageDefinitions());
+        if (shouldStageDarkOpen)
+        {
+            form.Opacity = 0;
+        }
 
         _iconRef ??= LoadEmbeddedIconBySuffix("magnifier_dark.ico");
         if (_iconRef != null)
@@ -78,7 +85,13 @@ internal sealed partial class TrayContext
             form.Icon = (Icon)_iconRef.Clone();
         }
 
-        WindowChrome.TrySetDarkTitleBar(form, _useDarkTheme);
+        WindowChrome.TrySetDarkTitleBar(form, shouldStageDarkOpen);
+        if (shouldStageDarkOpen)
+        {
+            _ = form.Handle;
+            WindowChrome.TrySetDarkTitleBar(form, enabled: true);
+        }
+
         _settingsWindow = form;
         form.FormClosed += (_, _) =>
         {
@@ -105,7 +118,31 @@ internal sealed partial class TrayContext
         form.PageShown += (_, pageType) => _currentSettingsPage = GetSettingsPage(pageType);
         form.ShowPage(GetSettingsPageType(initialPage));
         CenterSettingsWindow(form, restoreLocation);
+        Point finalLocation = form.Location;
+        if (shouldStageDarkOpen)
+        {
+            form.Location = new Point(
+                SystemInformation.VirtualScreen.Left - form.Width - 200,
+                SystemInformation.VirtualScreen.Top - form.Height - 200);
+        }
+
         form.Show();
+        if (shouldStageDarkOpen)
+        {
+            form.BeginInvoke((MethodInvoker)(() =>
+            {
+                if (!form.IsDisposed)
+                {
+                    form.Update();
+                    form.Location = finalLocation;
+                    form.Opacity = 1;
+                    form.BringToFront();
+                    form.Activate();
+                }
+            }));
+            return;
+        }
+
         form.BringToFront();
         form.Activate();
     }
@@ -409,13 +446,13 @@ internal sealed partial class TrayContext
         var page = new ZoomSettingsPageView(palette, L("Settings.ZoomTitle"), L("Settings.ZoomDescription"));
         var section = new SettingsSection(palette, L("Settings.ZoomSection"), string.Empty);
 
-        section.AddRow(CreateSliderRow(L("Settings.ZoomStep"), L("Settings.ZoomStepHelp"), _stepPercent, 5, 100, 5, value => value + "%", value =>
+        section.AddRow(CreateSliderRow(L("Settings.ZoomStep"), L("Settings.ZoomStepHelp"), _stepPercent, 1, 200, 5, value => value + "%", value =>
         {
             _stepPercent = value;
             SaveSettings();
         }, rightColumnWidth: 420));
 
-        section.AddRow(CreateSliderRow(L("Settings.MaxZoom"), L("Settings.MaxZoomHelp"), _maxPercent, 200, 500, 10, value => value + "%", value =>
+        section.AddRow(CreateSliderRow(L("Settings.MaxZoom"), L("Settings.MaxZoomHelp"), _maxPercent, 150, 750, 10, value => value + "%", value =>
         {
             _maxPercent = value;
             ClampZoom();
@@ -470,7 +507,7 @@ internal sealed partial class TrayContext
             _cursorScale,
             CursorScaleMinimum,
             CursorScaleMaximum,
-            10,
+            5,
             value => value + "%",
             value =>
             {
@@ -513,7 +550,7 @@ internal sealed partial class TrayContext
             L("Settings.CursorPreview"),
             L("Settings.CursorPreviewHelp"),
             preview,
-            rightColumnWidth: 400));
+            rightColumnWidth: 560));
 
         page.AddSection(section);
         return page;
@@ -571,6 +608,14 @@ internal sealed partial class TrayContext
             RefreshMenuAndTrayUi(rebuildPopup: true);
             RefreshSettingsWindow(SettingsPage.Appearance);
         }, rightColumnWidth: 260));
+
+        themeSection.AddRow(CreateToggleRow(L("Settings.ColourblindMode"), L("Settings.ColourblindModeHelp"), _colourblindMode, value =>
+        {
+            _colourblindMode = value;
+            SaveSettings();
+            RefreshMenuAndTrayUi(rebuildPopup: true);
+            RefreshSettingsWindow(SettingsPage.Appearance);
+        }, rightColumnWidth: 106));
 
         page.AddSection(themeSection);
         return page;
@@ -825,7 +870,8 @@ internal sealed partial class TrayContext
         var toggle = new ToggleSwitchControl(CurrentTheme)
         {
             IsOn = initial,
-            Enabled = enabled
+            Enabled = enabled,
+            ShowStateText = _colourblindMode
         };
         toggle.Click += (_, _) => onChanged(toggle.IsOn);
         var row = new SettingsRow(CurrentTheme, title, description, toggle, rightColumnWidth, compactDescription: compact)
@@ -867,7 +913,8 @@ internal sealed partial class TrayContext
         {
             IsOn = _debugLoggingEnabled,
             Anchor = AnchorStyles.Right,
-            Margin = new Padding(0, 2, 0, 2)
+            Margin = new Padding(0, 2, 0, 2),
+            ShowStateText = _colourblindMode
         };
         toggle.Click += (_, _) =>
         {
@@ -1023,41 +1070,171 @@ internal sealed partial class TrayContext
 
     private SettingsRow CreateSliderRow(string title, string description, int value, int min, int max, int step, Func<int, string> valueFormatter, Action<int> onChanged, int rightColumnWidth = 420)
     {
+        bool updatingFromSlider = false;
+        bool updatingFromInput = false;
+        bool showingPlaceholder = true;
+        string placeholderText = valueFormatter(value);
+        Color normalTextColor = CurrentTheme.Text;
+        Color warningTextColor = _colourblindMode ? ShortcutWarningColor() : ShortcutErrorColor();
+        Color placeholderTextColor = CurrentTheme.SecondaryText;
+        Color inputBorderColor = ControlContrast.FieldBorder(CurrentTheme);
+        Color inputBackColor = ControlContrast.FieldBackground(CurrentTheme);
+        SettingsRow? row = null;
         var slider = new ModernSlider(CurrentTheme)
         {
             Minimum = min,
             Maximum = max,
             SnapStep = step,
-            Value = value,
             Dock = DockStyle.Fill,
-            Margin = new Padding(0, 0, 12, 0)
+            Margin = new Padding(0, 4, 12, 0)
         };
+        slider.SetExactValue(value);
 
-        var valueLabel = new Label
+        var valueInput = new TextBox
         {
             AutoSize = false,
-            Width = 72,
+            Width = 86,
             Height = 28,
-            Text = valueFormatter(value),
-            TextAlign = ContentAlignment.MiddleRight,
-            Font = ControlDrawing.UiFont("Segoe UI Semibold", 9.5f, FontStyle.Bold),
-            ForeColor = CurrentTheme.Text,
-            BackColor = Color.Transparent,
+            Text = placeholderText,
+            TextAlign = HorizontalAlignment.Center,
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 9f, FontStyle.Bold),
+            ForeColor = placeholderTextColor,
+            BackColor = inputBackColor,
+            BorderStyle = BorderStyle.None,
             Dock = DockStyle.Fill,
-            Margin = new Padding(0)
+            Margin = new Padding(0, 3, 0, 0)
         };
+        var valueInputFrame = new Panel
+        {
+            Width = 86,
+            Height = 32,
+            BackColor = inputBorderColor,
+            Anchor = AnchorStyles.Right | AnchorStyles.Top,
+            Margin = new Padding(0, 2, 0, 0),
+            Padding = new Padding(1)
+        };
+        valueInputFrame.Controls.Add(valueInput);
+        valueInputFrame.Click += (_, _) => valueInput.Focus();
 
         slider.ValueChanged += (_, _) =>
         {
-            valueLabel.Text = valueFormatter(slider.Value);
+            if (updatingFromInput)
+            {
+                return;
+            }
+
+            updatingFromSlider = true;
+            valueInput.ForeColor = normalTextColor;
+            placeholderText = valueFormatter(slider.Value);
+            showingPlaceholder = true;
+            valueInput.Text = placeholderText;
+            row?.SetStatus(null, normalTextColor);
+            updatingFromSlider = false;
             onChanged(slider.Value);
+        };
+
+        void ValidateInputText()
+        {
+            if (updatingFromSlider)
+            {
+                return;
+            }
+
+            if (showingPlaceholder || string.IsNullOrWhiteSpace(valueInput.Text))
+            {
+                valueInput.ForeColor = showingPlaceholder ? placeholderTextColor : normalTextColor;
+                valueInputFrame.BackColor = inputBorderColor;
+                row?.SetStatus(null, normalTextColor);
+            }
+            else if (TryParseSliderInput(valueInput.Text, out int entered) && entered >= min && entered <= max)
+            {
+                valueInput.ForeColor = normalTextColor;
+                valueInputFrame.BackColor = inputBorderColor;
+                row?.SetStatus(null, normalTextColor);
+            }
+            else
+            {
+                valueInput.ForeColor = warningTextColor;
+                valueInputFrame.BackColor = warningTextColor;
+                row?.SetStatus(L("Settings.SliderRangeWarning", min, max), warningTextColor);
+            }
+        }
+
+        void CommitInput()
+        {
+            if (showingPlaceholder || string.IsNullOrWhiteSpace(valueInput.Text))
+            {
+                ShowPlaceholder();
+                return;
+            }
+
+            if (!TryParseSliderInput(valueInput.Text, out int entered) || entered < min || entered > max)
+            {
+                ValidateInputText();
+                return;
+            }
+
+            updatingFromInput = true;
+            slider.SetExactValue(entered);
+            placeholderText = valueFormatter(entered);
+            showingPlaceholder = true;
+            valueInput.ForeColor = normalTextColor;
+            valueInput.Text = placeholderText;
+            valueInputFrame.BackColor = inputBorderColor;
+            row?.SetStatus(null, normalTextColor);
+            updatingFromInput = false;
+            onChanged(entered);
+        }
+
+        void ShowPlaceholder()
+        {
+            showingPlaceholder = true;
+            valueInput.ForeColor = placeholderTextColor;
+            valueInput.Text = placeholderText;
+            valueInputFrame.BackColor = inputBorderColor;
+            valueInput.SelectionStart = 0;
+            valueInput.SelectionLength = 0;
+        }
+
+        valueInput.Enter += (_, _) =>
+        {
+            showingPlaceholder = false;
+            valueInput.ForeColor = normalTextColor;
+            valueInput.Text = string.Empty;
+            row?.SetStatus(null, normalTextColor);
+        };
+        valueInput.MouseDown += (_, _) =>
+        {
+            if (showingPlaceholder)
+            {
+                valueInput.SelectionStart = 0;
+                valueInput.SelectionLength = 0;
+            }
+        };
+        valueInput.TextChanged += (_, _) => ValidateInputText();
+        valueInput.Leave += (_, _) => CommitInput();
+        valueInput.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                CommitInput();
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+            else if (e.KeyCode == Keys.Escape)
+            {
+                ShowPlaceholder();
+                row?.SetStatus(null, normalTextColor);
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
         };
 
         var host = new TableLayoutPanel
         {
             AutoSize = false,
             Width = rightColumnWidth,
-            Height = 34,
+            Height = 38,
             ColumnCount = 2,
             RowCount = 1,
             BackColor = Color.Transparent,
@@ -1065,12 +1242,22 @@ internal sealed partial class TrayContext
             Padding = new Padding(0)
         };
         host.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        host.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
+        host.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
         host.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         host.Controls.Add(slider, 0, 0);
-        host.Controls.Add(valueLabel, 1, 0);
+        host.Controls.Add(valueInputFrame, 1, 0);
 
-        return new SettingsRow(CurrentTheme, title, description, host, rightColumnWidth);
+        string effectiveDescription = string.IsNullOrWhiteSpace(description)
+            ? L("Settings.SliderManualHint")
+            : description + " " + L("Settings.SliderManualHint");
+        row = new SettingsRow(CurrentTheme, title, effectiveDescription, host, rightColumnWidth);
+        return row;
+    }
+
+    private static bool TryParseSliderInput(string text, out int value)
+    {
+        string digits = new(text.Where(char.IsDigit).ToArray());
+        return int.TryParse(digits, out value);
     }
 
     private SettingsRow CreateDropdownRow(string title, string description, string[] items, string current, Action<string> onChanged, Control? actionButton = null, int rightColumnWidth = 260, bool compact = false)
@@ -1424,7 +1611,7 @@ internal sealed partial class TrayContext
         FpsLabel(UnlimitedFps)
     ];
 
-    private string FpsLabel(int fps) => fps == UnlimitedFps ? $"Unlimited ({GetUnlimitedRenderingFps()} Hz)" : fps + " Hz";
+    private static string FpsLabel(int fps) => fps == UnlimitedFps ? "Unlimited" : fps + " Hz";
 
     private static int ParseFpsLabel(string value)
     {
@@ -1611,10 +1798,17 @@ internal sealed partial class TrayContext
         _resetDefaultsButton.Text = _pendingResetDefaultsConfirmation
             ? L("Settings.ResetDefaultsConfirm")
             : L("Settings.ResetDefaults");
-        _resetDefaultsButton.ApplyTheme(
-            CurrentTheme,
-            emphasis: false,
-            destructive: _pendingResetDefaultsConfirmation,
-            destructiveHoverEnabled: true);
+        if (_colourblindMode)
+        {
+            _resetDefaultsButton.ApplyWarningOutlineTheme(CurrentTheme, _pendingResetDefaultsConfirmation);
+        }
+        else
+        {
+            _resetDefaultsButton.ApplyTheme(
+                CurrentTheme,
+                emphasis: false,
+                destructive: _pendingResetDefaultsConfirmation,
+                destructiveHoverEnabled: true);
+        }
     }
 }

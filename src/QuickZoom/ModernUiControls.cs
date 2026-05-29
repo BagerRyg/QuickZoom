@@ -203,6 +203,7 @@ internal sealed class ToggleSwitchControl : Control
     private ThemePalette _palette;
     private bool _hovered;
     private bool _pressed;
+    private bool _showStateText;
 
     public ToggleSwitchControl(ThemePalette palette)
     {
@@ -219,6 +220,22 @@ internal sealed class ToggleSwitchControl : Control
         Cursor = Cursors.Hand;
         TabStop = true;
         BackColor = Color.Transparent;
+    }
+
+    public bool ShowStateText
+    {
+        get => _showStateText;
+        set
+        {
+            if (_showStateText == value)
+            {
+                return;
+            }
+
+            _showStateText = value;
+            ApplyPreferredSize();
+            Invalidate();
+        }
     }
 
     public bool IsOn
@@ -341,6 +358,11 @@ internal sealed class ToggleSwitchControl : Control
         int knobX = _isOn ? trackRect.Right - knobSize - 2 : trackRect.Left + 2;
         Rectangle knobRect = new(knobX, trackRect.Top + 2, knobSize, knobSize);
 
+        if (_showStateText)
+        {
+            DrawStateText(e.Graphics, trackRect, knobRect);
+        }
+
         using SolidBrush knobBrush = new(Enabled ? Color.FromArgb(245, 247, 250) : Color.FromArgb(160, 164, 170));
         using Pen knobBorder = new(Enabled ? Color.FromArgb(48, 52, 56) : Color.FromArgb(96, 100, 106));
         e.Graphics.FillEllipse(knobBrush, knobRect);
@@ -358,7 +380,39 @@ internal sealed class ToggleSwitchControl : Control
     protected override void OnCreateControl()
     {
         base.OnCreateControl();
-        Size = new Size(ControlDrawing.ScaleLogical(this, 42), ControlDrawing.ScaleLogical(this, 24));
+        ApplyPreferredSize();
+    }
+
+    private void ApplyPreferredSize()
+    {
+        Size = new Size(
+            ControlDrawing.ScaleLogical(this, _showStateText ? 58 : 42),
+            ControlDrawing.ScaleLogical(this, 24));
+    }
+
+    private void DrawStateText(Graphics graphics, Rectangle trackRect, Rectangle knobRect)
+    {
+        string text = _isOn ? "ON" : "OFF";
+        Rectangle textBounds = _isOn
+            ? Rectangle.FromLTRB(trackRect.Left + 7, trackRect.Top, knobRect.Left - 1, trackRect.Bottom)
+            : Rectangle.FromLTRB(knobRect.Right + 1, trackRect.Top, trackRect.Right - 5, trackRect.Bottom);
+
+        if (textBounds.Width < 14)
+        {
+            return;
+        }
+
+        Color textColor = Enabled
+            ? (_isOn ? Color.White : _palette.SecondaryText)
+            : _palette.DisabledText;
+        using Font font = ControlDrawing.UiFont("Segoe UI Semibold", 6.7f, FontStyle.Bold);
+        TextRenderer.DrawText(
+            graphics,
+            text,
+            font,
+            textBounds,
+            textColor,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
     }
 
     protected override void OnEnabledChanged(EventArgs e)
@@ -576,7 +630,7 @@ internal sealed class TrayMenuDivider : Control
     {
         base.OnPaint(e);
         int y = Height / 2;
-        using Pen pen = new(Color.FromArgb(56, _palette.Border));
+        using Pen pen = new(Color.FromArgb(82, _palette.Border), 2f);
         e.Graphics.DrawLine(pen, 8, y, Width - 8, y);
     }
 
@@ -598,7 +652,9 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
     private bool _pressed;
     private bool _active;
     private bool _isDestructive;
+    private bool _useWarningDestructiveColor;
     private bool _isSuccess;
+    private bool _useColourblindSuccessColor;
 
     public TrayMenuRow(ThemePalette palette, string title, string? rightText = null, ToggleSwitchControl? toggle = null, TrayFluentIcon? icon = null)
     {
@@ -723,6 +779,16 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
         }
     }
 
+    public bool UseWarningDestructiveColor
+    {
+        get => _useWarningDestructiveColor;
+        set
+        {
+            _useWarningDestructiveColor = value;
+            Invalidate(true);
+        }
+    }
+
     public bool IsSuccess
     {
         get => _isSuccess;
@@ -733,12 +799,29 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
         }
     }
 
+    public bool UseColourblindSuccessColor
+    {
+        get => _useColourblindSuccessColor;
+        set
+        {
+            _useColourblindSuccessColor = value;
+            Invalidate(true);
+        }
+    }
+
     public Color SurfaceBackgroundColor
     {
         get
         {
             if (_isSuccess)
             {
+                if (_useColourblindSuccessColor)
+                {
+                    return _palette.MenuBackground.GetBrightness() > 0.65f
+                        ? Color.FromArgb(219, 234, 254)
+                        : Color.FromArgb(30, 64, 175);
+                }
+
                 return _palette.MenuBackground.GetBrightness() > 0.65f
                     ? Color.FromArgb(217, 247, 225)
                     : Color.FromArgb(24, 94, 54);
@@ -748,6 +831,20 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
             {
                 if (_isDestructive)
                 {
+                    if (_useWarningDestructiveColor)
+                    {
+                        if (_palette.MenuBackground.GetBrightness() > 0.65f)
+                        {
+                            return _pressed
+                                ? Color.FromArgb(254, 215, 170)
+                                : Color.FromArgb(255, 237, 213);
+                        }
+
+                        return _pressed
+                            ? Color.FromArgb(124, 45, 18)
+                            : Color.FromArgb(91, 52, 24);
+                    }
+
                     if (_palette.MenuBackground.GetBrightness() > 0.65f)
                     {
                         return _pressed
@@ -888,8 +985,8 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
             Color fill = SurfaceBackgroundColor;
             using SolidBrush fillBrush = new(fill);
             Color borderColor = _isDestructive
-                ? Color.FromArgb(186, 82, 92)
-                : (_isSuccess ? _palette.Accent : (_active ? _palette.Accent : _palette.Border));
+                ? (_useWarningDestructiveColor ? Color.FromArgb(251, 146, 60) : Color.FromArgb(186, 82, 92))
+                : (_isSuccess ? (_useColourblindSuccessColor ? Color.FromArgb(96, 165, 250) : _palette.Accent) : (_active ? _palette.Accent : _palette.Border));
             int borderAlpha = _isDestructive ? 76 : (_isSuccess ? 96 : (_active ? 72 : 28));
             using Pen borderPen = new(Color.FromArgb(borderAlpha, borderColor));
             e.Graphics.FillPath(fillBrush, path);
@@ -1331,17 +1428,43 @@ internal sealed class ModernButton : Button
         Invalidate();
     }
 
-    public void ApplySuccessOutlineTheme(ThemePalette palette)
+    public void ApplySuccessOutlineTheme(ThemePalette palette, bool colourblindMode = false)
     {
         _successHoverEnabled = true;
         BackColor = palette.ButtonBackground;
         _successNormalText = palette.Text;
         _successHoverText = Color.White;
         ForeColor = _successNormalText;
-        FlatAppearance.BorderColor = Color.FromArgb(72, 163, 96);
+        FlatAppearance.BorderColor = colourblindMode
+            ? Color.FromArgb(37, 99, 235)
+            : Color.FromArgb(72, 163, 96);
         _outlineColor = FlatAppearance.BorderColor;
-        FlatAppearance.MouseOverBackColor = Color.FromArgb(62, 145, 86);
-        FlatAppearance.MouseDownBackColor = Color.FromArgb(50, 124, 72);
+        FlatAppearance.MouseOverBackColor = colourblindMode
+            ? Color.FromArgb(29, 78, 216)
+            : Color.FromArgb(62, 145, 86);
+        FlatAppearance.MouseDownBackColor = colourblindMode
+            ? Color.FromArgb(30, 64, 175)
+            : Color.FromArgb(50, 124, 72);
+        Invalidate();
+    }
+
+    public void ApplyWarningOutlineTheme(ThemePalette palette, bool confirm)
+    {
+        _successHoverEnabled = true;
+        bool lightPalette = palette.MenuBackground.GetBrightness() > 0.65f;
+        Color border = lightPalette ? Color.FromArgb(217, 119, 6) : Color.FromArgb(251, 146, 60);
+        BackColor = confirm
+            ? (lightPalette ? Color.FromArgb(255, 237, 213) : Color.FromArgb(67, 40, 24))
+            : palette.ButtonBackground;
+        _successNormalText = confirm
+            ? (lightPalette ? Color.FromArgb(154, 52, 18) : Color.FromArgb(255, 237, 213))
+            : palette.Text;
+        _successHoverText = Color.White;
+        ForeColor = _successNormalText;
+        FlatAppearance.BorderColor = border;
+        _outlineColor = border;
+        FlatAppearance.MouseOverBackColor = Color.FromArgb(234, 88, 12);
+        FlatAppearance.MouseDownBackColor = Color.FromArgb(194, 65, 12);
         Invalidate();
     }
 
@@ -2126,16 +2249,13 @@ internal sealed class ModernSlider : Control
         get => _value;
         set
         {
-            int next = Snap(Math.Clamp(value, _minimum, _maximum));
-            if (_value == next)
-            {
-                return;
-            }
-
-            _value = next;
-            Invalidate();
-            ValueChanged?.Invoke(this, EventArgs.Empty);
+            SetValue(value, snap: true);
         }
+    }
+
+    public void SetExactValue(int value)
+    {
+        SetValue(value, snap: false);
     }
 
     public void ApplyTheme(ThemePalette palette)
@@ -2273,6 +2393,24 @@ internal sealed class ModernSlider : Control
         int normalized = value - _minimum;
         int snapped = (int)Math.Round(normalized / (double)_snapStep) * _snapStep;
         return Math.Clamp(_minimum + snapped, _minimum, _maximum);
+    }
+
+    private void SetValue(int value, bool snap)
+    {
+        int next = Math.Clamp(value, _minimum, _maximum);
+        if (snap)
+        {
+            next = Snap(next);
+        }
+
+        if (_value == next)
+        {
+            return;
+        }
+
+        _value = next;
+        Invalidate();
+        ValueChanged?.Invoke(this, EventArgs.Empty);
     }
 }
 
@@ -2991,14 +3129,18 @@ internal sealed class SettingsPageDefinition
 internal sealed class SettingsForm : Form
 {
     private const int WM_SETREDRAW = 0x000B;
+    private const int WM_ERASEBKGND = 0x0014;
     private readonly Dictionary<Type, UserControl> _pageCache = new();
     private readonly Dictionary<Type, SettingsSidebarItem> _navItems = new();
     private readonly Dictionary<Type, Func<UserControl>> _pageFactories = new();
+    private readonly ThemePalette _palette;
+    private readonly bool _useDarkTheme;
     private readonly SettingsContentHost _contentHost;
     private readonly Size _minimumClientSize;
     private readonly Queue<Type> _preloadQueue = new();
     private Type? _currentPageType;
     private bool _preloadingPages;
+    private DateTime _lastPageSwitchUtc = DateTime.MinValue;
 
     [DllImport("user32.dll")]
     private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
@@ -3010,9 +3152,17 @@ internal sealed class SettingsForm : Form
         Size clientSize,
         string appName,
         string doneText,
+        bool colourblindMode,
         ModernButton resetButton,
         IReadOnlyList<SettingsPageDefinition> pages)
     {
+        _palette = palette;
+        _useDarkTheme = useDarkTheme;
+        SetStyle(
+            ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.OptimizedDoubleBuffer |
+            ControlStyles.ResizeRedraw,
+            true);
         Text = title;
         StartPosition = FormStartPosition.Manual;
         ClientSize = clientSize;
@@ -3142,7 +3292,7 @@ internal sealed class SettingsForm : Form
             Text = doneText,
             DialogResult = DialogResult.OK
         };
-        closeButton.ApplySuccessOutlineTheme(palette);
+        closeButton.ApplySuccessOutlineTheme(palette, colourblindMode);
         closeButton.Click += (_, _) => Close();
         footer.Controls.Add(closeButton);
         footer.Controls.Add(resetButton);
@@ -3176,7 +3326,7 @@ internal sealed class SettingsForm : Form
         Shown += (_, _) =>
         {
             UpdateSidebarItemWidths();
-            QueuePagePreload();
+            QueuePagePreload(delayMs: _useDarkTheme ? 500 : 250);
         };
     }
 
@@ -3192,6 +3342,7 @@ internal sealed class SettingsForm : Form
         }
 
         Type? previousPageType = _currentPageType;
+        _lastPageSwitchUtc = DateTime.UtcNow;
         SuspendRedraw();
         SuspendLayout();
         _contentHost.SuspendLayout();
@@ -3298,7 +3449,7 @@ internal sealed class SettingsForm : Form
         return page;
     }
 
-    private void QueuePagePreload()
+    private void QueuePagePreload(int delayMs = 0)
     {
         if (_preloadingPages)
         {
@@ -3344,13 +3495,37 @@ internal sealed class SettingsForm : Form
         }
 
         _preloadingPages = true;
-        BeginInvoke((MethodInvoker)PreloadNextPage);
+        SchedulePreloadNextPage(delayMs);
+    }
+
+    private void SchedulePreloadNextPage(int delayMs)
+    {
+        if (delayMs <= 0)
+        {
+            BeginInvoke((MethodInvoker)PreloadNextPage);
+            return;
+        }
+
+        var timer = new System.Windows.Forms.Timer { Interval = delayMs };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            timer.Dispose();
+            PreloadNextPage();
+        };
+        timer.Start();
     }
 
     private void PreloadNextPage()
     {
         if (IsDisposed)
         {
+            return;
+        }
+
+        if ((DateTime.UtcNow - _lastPageSwitchUtc).TotalMilliseconds < 250)
+        {
+            SchedulePreloadNextPage(250);
             return;
         }
 
@@ -3373,14 +3548,7 @@ internal sealed class SettingsForm : Form
             ResumeRedraw();
         }
 
-        var timer = new System.Windows.Forms.Timer { Interval = 15 };
-        timer.Tick += (_, _) =>
-        {
-            timer.Stop();
-            timer.Dispose();
-            PreloadNextPage();
-        };
-        timer.Start();
+        SchedulePreloadNextPage(75);
     }
 
     private void SuspendRedraw()
@@ -3401,6 +3569,26 @@ internal sealed class SettingsForm : Form
         _ = SendMessage(_contentHost.Handle, WM_SETREDRAW, new IntPtr(1), IntPtr.Zero);
         _contentHost.Invalidate(true);
         _contentHost.Update();
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        using SolidBrush brush = new(_palette.MenuBackground);
+        e.Graphics.FillRectangle(brush, ClientRectangle);
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WM_ERASEBKGND && m.WParam != IntPtr.Zero)
+        {
+            using Graphics graphics = Graphics.FromHdc(m.WParam);
+            using SolidBrush brush = new(_palette.MenuBackground);
+            graphics.FillRectangle(brush, ClientRectangle);
+            m.Result = new IntPtr(1);
+            return;
+        }
+
+        base.WndProc(ref m);
     }
 }
 

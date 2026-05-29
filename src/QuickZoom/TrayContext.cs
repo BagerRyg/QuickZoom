@@ -126,6 +126,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private bool _centerCursor;
     private bool _suppressAltKeyInOfficeApps;
     private bool _debugLoggingEnabled;
+    private bool _colourblindMode;
     private bool _wiggleSpotlightEnabled = true;
     private bool _cursorEnhancementEnabled;
     private int _cursorScale = 100;

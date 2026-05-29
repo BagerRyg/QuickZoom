@@ -297,6 +297,7 @@ internal static class StartupTaskService
                combined.IndexOf("cannot find the path", StringComparison.OrdinalIgnoreCase) >= 0 ||
                combined.IndexOf("the system cannot find the path specified", StringComparison.OrdinalIgnoreCase) >= 0 ||
                combined.IndexOf("kan ikke finde", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               combined.IndexOf("den angivne fil blev ikke fundet", StringComparison.OrdinalIgnoreCase) >= 0 ||
                combined.IndexOf("sti blev ikke fundet", StringComparison.OrdinalIgnoreCase) >= 0 ||
                combined.IndexOf("opgaven findes ikke", StringComparison.OrdinalIgnoreCase) >= 0;
     }
@@ -328,15 +329,28 @@ internal static class StartupTaskService
             return true;
         }
 
+        SecurityIdentifier? taskSid = TryResolveSid(normalizedTaskUser);
+        SecurityIdentifier? expectedSid = TryResolveSid(normalizedExpectedUser) ??
+                                          GetCurrentUserSidIfMatches(normalizedExpectedUser);
+        return taskSid != null && expectedSid != null && taskSid.Equals(expectedSid);
+    }
+
+    private static SecurityIdentifier? GetCurrentUserSidIfMatches(string expectedUser)
+    {
         try
         {
-            SecurityIdentifier? taskSid = ResolveSid(normalizedTaskUser);
-            SecurityIdentifier? expectedSid = ResolveSid(normalizedExpectedUser);
-            return taskSid != null && expectedSid != null && taskSid.Equals(expectedSid);
+            using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+            string currentUser = NormalizeUserName(identity.Name);
+            if (!string.Equals(currentUser, expectedUser, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            return identity.User;
         }
         catch
         {
-            return false;
+            return null;
         }
     }
 
@@ -345,14 +359,21 @@ internal static class StartupTaskService
         return userName.Trim().Replace('/', '\\');
     }
 
-    private static SecurityIdentifier? ResolveSid(string userName)
+    private static SecurityIdentifier? TryResolveSid(string userName)
     {
-        if (userName.StartsWith("S-1-", StringComparison.OrdinalIgnoreCase))
+        try
         {
-            return new SecurityIdentifier(userName);
-        }
+            if (userName.StartsWith("S-1-", StringComparison.OrdinalIgnoreCase))
+            {
+                return new SecurityIdentifier(userName);
+            }
 
-        return new NTAccount(userName).Translate(typeof(SecurityIdentifier)) as SecurityIdentifier;
+            return new NTAccount(userName).Translate(typeof(SecurityIdentifier)) as SecurityIdentifier;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static int GetExecutableBuildNumber(string exePath)
@@ -360,7 +381,7 @@ internal static class StartupTaskService
         try
         {
             FileVersionInfo info = FileVersionInfo.GetVersionInfo(exePath);
-            return info.FileBuildPart;
+            return Math.Max(info.FileBuildPart, info.FilePrivatePart);
         }
         catch
         {

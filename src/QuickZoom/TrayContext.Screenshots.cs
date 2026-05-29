@@ -57,6 +57,7 @@ internal sealed partial class TrayContext
                 GetSettingsClientSize(),
                 L("Common.AppName"),
                 L("Settings.Done"),
+                _colourblindMode,
                 _resetDefaultsButton,
                 BuildSettingsPageDefinitions());
 

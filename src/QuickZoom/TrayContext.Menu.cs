@@ -244,19 +244,19 @@ internal sealed partial class TrayContext
 
         var quickActions = CreateTrayStack(trayContentWidth);
 
-        _magnifyToggle = new ToggleSwitchControl(palette) { IsOn = _enabled };
+        _magnifyToggle = new ToggleSwitchControl(palette) { IsOn = _enabled, ShowStateText = _colourblindMode };
         _magnifyRow = new TrayMenuRow(palette, L("Tray.ToggleMagnify"), toggle: _magnifyToggle, icon: TrayFluentIcon.Enabled);
         _magnifyRow.Width = trayContentWidth;
         _magnifyRow.ActionRequested += (_, _) => ExecuteTrayAction(() => SetEnabledState(!_enabled));
         quickActions.Controls.Add(_magnifyRow);
 
-        _invertToggle = new ToggleSwitchControl(palette) { IsOn = _invertEnabled };
+        _invertToggle = new ToggleSwitchControl(palette) { IsOn = _invertEnabled, ShowStateText = _colourblindMode };
         _invertRow = new TrayMenuRow(palette, L("Tray.ToggleInvert"), toggle: _invertToggle, icon: TrayFluentIcon.InvertColors);
         _invertRow.Width = trayContentWidth;
         _invertRow.ActionRequested += (_, _) => ExecuteTrayAction(() => SetInvertEnabledState(!_invertEnabled));
         quickActions.Controls.Add(_invertRow);
 
-        _followToggle = new ToggleSwitchControl(palette) { IsOn = _followCursor };
+        _followToggle = new ToggleSwitchControl(palette) { IsOn = _followCursor, ShowStateText = _colourblindMode };
         _followRow = new TrayMenuRow(palette, L("Tray.ToggleFollow"), toggle: _followToggle, icon: TrayFluentIcon.FollowCursor);
         _followRow.Width = trayContentWidth;
         _followRow.ActionRequested += (_, _) => ExecuteTrayAction(() => SetFollowCursor(!_followCursor));
@@ -314,6 +314,7 @@ internal sealed partial class TrayContext
 
         var resetCursorRow = new TrayMenuRow(palette, L("Tray.ResetCursor"), icon: TrayFluentIcon.ResetCursor);
         resetCursorRow.Width = trayContentWidth;
+        resetCursorRow.UseColourblindSuccessColor = _colourblindMode;
         resetCursorRow.ActionRequested += (_, _) => ExecuteTrayAction(() =>
         {
             ResetExitConfirmation();
@@ -336,6 +337,7 @@ internal sealed partial class TrayContext
         _exitRow = new TrayMenuRow(palette, L("Tray.Exit"), icon: TrayFluentIcon.Exit);
         _exitRow.Width = trayContentWidth;
         _exitRow.IsDestructive = true;
+        _exitRow.UseWarningDestructiveColor = _colourblindMode;
         _exitRow.ActionRequested += (_, _) => ExecuteTrayAction(HandleExitRequested);
         actions.Controls.Add(_exitRow);
 

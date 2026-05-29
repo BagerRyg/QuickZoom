@@ -186,6 +186,10 @@ internal sealed partial class TrayContext
         int message = wParam.ToInt32();
         var data = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
         int vk = (int)data.vkCode;
+        if (vk == (int)Keys.PrintScreen && IsQuickZoomForeground())
+        {
+            return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
+        }
 
         if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN)
         {
@@ -391,6 +395,18 @@ internal sealed partial class TrayContext
         }
     }
 
+    private static bool IsQuickZoomForeground()
+    {
+        IntPtr foreground = GetForegroundWindow();
+        if (foreground == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        GetWindowThreadProcessId(foreground, out uint processId);
+        return processId == Environment.ProcessId;
+    }
+
     private static bool IsOfficeProcessName(string processName)
     {
         return processName.Equals("OUTLOOK", StringComparison.OrdinalIgnoreCase) ||
@@ -427,10 +443,6 @@ internal sealed partial class TrayContext
     {
         ResetExitConfirmation();
         _invertColors = !_invertColors;
-        if (_trayPopup != null && !_trayPopup.IsDisposed)
-        {
-            CloseTrayPopup();
-        }
 
         if (!_invertColors && _zoomPercent <= 100 && _autoDisableAt100)
         {

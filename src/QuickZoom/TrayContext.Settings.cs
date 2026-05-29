@@ -22,7 +22,7 @@ internal sealed partial class TrayContext
     {
         public int ThemeMode { get; set; } = (int)TrayContext.ThemeMode.AutoSystem;
         public int UiFontSize { get; set; } = (int)TrayContext.UiFontSize.Large;
-        public int StepPercent { get; set; } = 25;
+        public int StepPercent { get; set; } = 30;
         public int MaxPercent { get; set; } = 400;
         public bool MagnificationEnabled { get; set; } = true;
         public bool InvertEnabled { get; set; }
@@ -41,6 +41,7 @@ internal sealed partial class TrayContext
         public bool CenterCursor { get; set; }
         public bool SuppressAltKeyInOfficeApps { get; set; }
         public bool DebugLoggingEnabled { get; set; }
+        public bool ColourblindMode { get; set; }
         public bool WiggleSpotlightEnabled { get; set; } = true;
         public bool CursorEnhancementEnabled { get; set; }
         public int CursorScale { get; set; } = 100;
@@ -57,7 +58,7 @@ internal sealed partial class TrayContext
         {
             ThemeMode = (int)ThemeMode.AutoSystem,
             UiFontSize = (int)UiFontSize.Large,
-            StepPercent = 25,
+            StepPercent = 30,
             MaxPercent = 400,
             MagnificationEnabled = true,
             InvertEnabled = false,
@@ -76,6 +77,7 @@ internal sealed partial class TrayContext
             CenterCursor = false,
             SuppressAltKeyInOfficeApps = false,
             DebugLoggingEnabled = false,
+            ColourblindMode = false,
             WiggleSpotlightEnabled = true,
             CursorEnhancementEnabled = false,
             CursorScale = 100,
@@ -89,8 +91,8 @@ internal sealed partial class TrayContext
 
     private void ApplySettingsModel(Settings s)
     {
-        _stepPercent = Math.Clamp(s.StepPercent, 5, 100);
-        _maxPercent = Math.Clamp(s.MaxPercent, 200, 500);
+        _stepPercent = Math.Clamp(s.StepPercent, 1, 200);
+        _maxPercent = Math.Clamp(s.MaxPercent, 150, 750);
         _themeMode = Enum.IsDefined(typeof(ThemeMode), s.ThemeMode)
             ? (ThemeMode)s.ThemeMode
             : ThemeMode.AutoSystem;
@@ -124,6 +126,7 @@ internal sealed partial class TrayContext
         _centerCursor = s.CenterCursor;
         _suppressAltKeyInOfficeApps = s.SuppressAltKeyInOfficeApps && IsAltEnableKey();
         _debugLoggingEnabled = s.DebugLoggingEnabled;
+        _colourblindMode = s.ColourblindMode;
         ErrorLog.Configure(_debugLoggingEnabled, AppInfo.VersionHash);
         _wiggleSpotlightEnabled = s.WiggleSpotlightEnabled;
         _cursorEnhancementEnabled = s.CursorEnhancementEnabled;
@@ -311,6 +314,7 @@ internal sealed partial class TrayContext
             CenterCursor = _centerCursor,
             SuppressAltKeyInOfficeApps = _suppressAltKeyInOfficeApps && IsAltEnableKey(),
             DebugLoggingEnabled = _debugLoggingEnabled,
+            ColourblindMode = _colourblindMode,
             WiggleSpotlightEnabled = _wiggleSpotlightEnabled,
             CursorEnhancementEnabled = _cursorEnhancementEnabled,
             CursorScale = _cursorScale,

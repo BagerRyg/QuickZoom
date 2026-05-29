@@ -167,8 +167,8 @@ internal static class StartupDialogs
 
         var spinner = new StartupSpinnerControl(palette)
         {
-            Width = ControlDrawing.ScaleLogical(form, 52),
-            Height = ControlDrawing.ScaleLogical(form, 52),
+            Width = ControlDrawing.ScaleLogical(form, 64),
+            Height = ControlDrawing.ScaleLogical(form, 48),
             Margin = new Padding(0, 2, 24, 0)
         };
 
@@ -519,17 +519,19 @@ internal static class StartupDialogs
     {
         private readonly ThemePalette _palette;
         private readonly System.Windows.Forms.Timer _timer;
-        private int _frame;
+        private float _largeAngle;
+        private float _smallAngle;
 
         public StartupSpinnerControl(ThemePalette palette)
         {
             _palette = palette;
             DoubleBuffered = true;
             BackColor = palette.MenuBackground;
-            _timer = new System.Windows.Forms.Timer { Interval = 70 };
+            _timer = new System.Windows.Forms.Timer { Interval = 16 };
             _timer.Tick += (_, _) =>
             {
-                _frame = (_frame + 1) % 12;
+                _largeAngle = (_largeAngle - 1.9f) % 360f;
+                _smallAngle = (_smallAngle + 1.45f) % 360f;
                 Invalidate();
             };
         }
@@ -547,28 +549,84 @@ internal static class StartupDialogs
             base.OnPaint(e);
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
 
-            int side = Math.Min(ClientSize.Width, ClientSize.Height);
-            if (side <= 0)
+            float scale = Math.Min(ClientSize.Width / 60f, ClientSize.Height / 40f);
+            if (scale <= 0.1f)
             {
                 return;
             }
 
-            float centerX = ClientSize.Width / 2f;
-            float centerY = ClientSize.Height / 2f;
-            float radius = Math.Max(8f, side * 0.32f);
-            float dotSize = Math.Max(3f, side * 0.105f);
-            Color activeColor = _palette.Accent;
+            float originX = (ClientSize.Width - (60f * scale)) / 2f;
+            float originY = (ClientSize.Height - (40f * scale)) / 2f;
+            Color gearColor = _palette.MenuBackground.GetBrightness() < 0.5f
+                ? Color.White
+                : Color.FromArgb(37, 99, 235);
+            using SolidBrush gearBrush = new(gearColor);
+            using SolidBrush baseBrush = new(_palette.MenuBackground);
 
-            for (int i = 0; i < 12; i++)
-            {
-                int age = (i - _frame + 12) % 12;
-                int alpha = Math.Max(28, 220 - (age * 16));
-                double angle = (Math.PI * 2 * i / 12) - (Math.PI / 2);
-                float x = centerX + (float)Math.Cos(angle) * radius - dotSize / 2f;
-                float y = centerY + (float)Math.Sin(angle) * radius - dotSize / 2f;
-                using var brush = new SolidBrush(Color.FromArgb(alpha, activeColor));
-                e.Graphics.FillEllipse(brush, x, y, dotSize, dotSize);
-            }
+            DrawGear(
+                e.Graphics,
+                gearBrush,
+                baseBrush,
+                new RectangleF(originX, originY, 36f * scale, 36f * scale),
+                _largeAngle,
+                8f * scale,
+                4f * scale,
+                scale);
+            DrawGear(
+                e.Graphics,
+                gearBrush,
+                baseBrush,
+                new RectangleF(originX + (35f * scale), originY + (15f * scale), 24f * scale, 24f * scale),
+                _smallAngle,
+                5f * scale,
+                2.5f * scale,
+                scale);
+        }
+
+        private static void DrawGear(
+            Graphics graphics,
+            Brush gearBrush,
+            Brush baseBrush,
+            RectangleF bounds,
+            float angle,
+            float centerHoleRadius,
+            float outerHoleRadius,
+            float scale)
+        {
+            float centerX = bounds.X + (bounds.Width / 2f);
+            float centerY = bounds.Y + (bounds.Height / 2f);
+            System.Drawing.Drawing2D.GraphicsState state = graphics.Save();
+            graphics.TranslateTransform(centerX, centerY);
+            graphics.RotateTransform(angle);
+            graphics.TranslateTransform(-centerX, -centerY);
+
+            graphics.FillEllipse(gearBrush, bounds);
+            FillHole(graphics, baseBrush, centerX, centerY, centerHoleRadius);
+
+            float left = bounds.Left;
+            float top = bounds.Top;
+            float right = bounds.Right;
+            float bottom = bounds.Bottom;
+            float nearRight = bounds.X + (bounds.Width * 0.83f);
+            float nearLeft = bounds.X + (bounds.Width * 0.14f);
+            float nearTop = bounds.Y + (bounds.Height * 0.14f);
+            float nearBottom = bounds.Y + (bounds.Height * 0.83f);
+
+            FillHole(graphics, baseBrush, centerX, top, outerHoleRadius);
+            FillHole(graphics, baseBrush, left, centerY, outerHoleRadius);
+            FillHole(graphics, baseBrush, right, centerY, outerHoleRadius);
+            FillHole(graphics, baseBrush, centerX, bottom, outerHoleRadius);
+            FillHole(graphics, baseBrush, nearRight, nearTop, outerHoleRadius);
+            FillHole(graphics, baseBrush, nearRight, nearBottom, outerHoleRadius);
+            FillHole(graphics, baseBrush, nearLeft, nearBottom, outerHoleRadius);
+            FillHole(graphics, baseBrush, nearLeft, nearTop, outerHoleRadius);
+
+            graphics.Restore(state);
+        }
+
+        private static void FillHole(Graphics graphics, Brush brush, float centerX, float centerY, float radius)
+        {
+            graphics.FillEllipse(brush, centerX - radius, centerY - radius, radius * 2f, radius * 2f);
         }
     }
 

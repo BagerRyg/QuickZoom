@@ -34,7 +34,7 @@ internal sealed partial class TrayContext
     private static extern int GetSystemMetrics(int nIndex);
 
     private const int CursorScaleMinimum = 100;
-    private const int CursorScaleMaximum = 300;
+    private const int CursorScaleMaximum = 500;
 
     private void ApplyCursorEnhancementIfNeeded()
     {
