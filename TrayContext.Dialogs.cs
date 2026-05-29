@@ -400,11 +400,36 @@ internal sealed partial class TrayContext
         ApplyDialogTheme(form);
 
         Keys? chosen = null;
+        bool pendingControlKey = false;
+        form.PreviewKeyDown += (_, e) =>
+        {
+            if (e.KeyCode is Keys.Enter or Keys.Tab)
+            {
+                e.IsInputKey = true;
+            }
+        };
         form.KeyDown += (_, e) =>
         {
-            chosen = e.KeyCode;
+            if (e.KeyCode == Keys.ControlKey && !e.Alt)
+            {
+                pendingControlKey = true;
+                return;
+            }
+
+            chosen = e.KeyValue == FnVirtualKey
+                ? (Keys)FnVirtualKey
+                : e.KeyCode == Keys.Menu && (e.Control || pendingControlKey) ? Keys.RMenu : e.KeyCode;
             form.DialogResult = DialogResult.OK;
             form.Close();
+        };
+        form.KeyUp += (_, e) =>
+        {
+            if (pendingControlKey && e.KeyCode == Keys.ControlKey)
+            {
+                chosen = Keys.ControlKey;
+                form.DialogResult = DialogResult.OK;
+                form.Close();
+            }
         };
 
         return form.ShowDialog() == DialogResult.OK ? chosen : null;

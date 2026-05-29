@@ -87,13 +87,13 @@ internal static class InstalledAppService
     {
         try
         {
-            string? currentPointerTarget = ReadInstalledExecutablePointer(CurrentInstallPointerPath);
+            string? currentPointerTarget = ReadInstalledExecutablePointer(CurrentInstallPointerPath, VersionsRoot);
             if (!string.IsNullOrWhiteSpace(currentPointerTarget))
             {
                 return currentPointerTarget;
             }
 
-            string? legacyPointerTarget = ReadInstalledExecutablePointer(LegacyCurrentInstallPointerPath);
+            string? legacyPointerTarget = ReadInstalledExecutablePointer(LegacyCurrentInstallPointerPath, LegacyVersionsRoot);
             if (!string.IsNullOrWhiteSpace(legacyPointerTarget))
             {
                 return legacyPointerTarget;
@@ -150,12 +150,22 @@ internal static class InstalledAppService
 
             string payloadId = GetPayloadId(sourceExePath);
             string targetDirectory = Path.Combine(VersionsRoot, payloadId);
+            if (!IsUnderRoot(Path.GetFullPath(targetDirectory), VersionsRoot))
+            {
+                throw new InvalidOperationException("The managed install target resolved outside the QuickZoom install root.");
+            }
+
             Directory.CreateDirectory(targetDirectory);
             HardenInstallDirectory(targetDirectory);
 
             foreach ((string sourcePath, string relativePath) in EnumeratePayloadFiles(sourceExePath, sourceDirectory))
             {
                 string destinationFile = Path.Combine(targetDirectory, NormalizeRelativePath(relativePath));
+                if (!IsUnderRoot(Path.GetFullPath(destinationFile), targetDirectory))
+                {
+                    throw new InvalidOperationException("A payload file resolved outside the managed install target.");
+                }
+
                 string? destinationDirectory = Path.GetDirectoryName(destinationFile);
                 if (!string.IsNullOrWhiteSpace(destinationDirectory))
                 {
@@ -186,7 +196,7 @@ internal static class InstalledAppService
         }
     }
 
-    private static string? ReadInstalledExecutablePointer(string pointerPath)
+    private static string? ReadInstalledExecutablePointer(string pointerPath, string expectedRoot)
     {
         if (!File.Exists(pointerPath))
         {
@@ -194,9 +204,15 @@ internal static class InstalledAppService
         }
 
         string? pointer = File.ReadAllText(pointerPath).Trim();
-        if (!string.IsNullOrWhiteSpace(pointer) && File.Exists(pointer))
+        if (string.IsNullOrWhiteSpace(pointer))
         {
-            return Path.GetFullPath(pointer);
+            return null;
+        }
+
+        string fullPointer = Path.GetFullPath(pointer);
+        if (IsUnderRoot(fullPointer, expectedRoot) && LooksLikeQuickZoomExecutable(fullPointer) && File.Exists(fullPointer))
+        {
+            return fullPointer;
         }
 
         return null;
@@ -322,7 +338,7 @@ internal static class InstalledAppService
             }
 
             string currentFullPath = Path.GetFullPath(currentVersionDirectory);
-            string? pointerExePath = ReadInstalledExecutablePointer(CurrentInstallPointerPath);
+            string? pointerExePath = ReadInstalledExecutablePointer(CurrentInstallPointerPath, VersionsRoot);
             string? pointerDirectory = string.IsNullOrWhiteSpace(pointerExePath)
                 ? null
                 : Path.GetDirectoryName(pointerExePath);
@@ -417,6 +433,18 @@ internal static class InstalledAppService
             Path.GetFullPath(left),
             Path.GetFullPath(right),
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikeQuickZoomExecutable(string path)
+    {
+        try
+        {
+            return string.Equals(Path.GetFileName(path), "QuickZoom.exe", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static string EnsureTrailingSeparator(string path)

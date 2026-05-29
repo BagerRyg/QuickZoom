@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Windows.Forms;
 
@@ -10,6 +12,12 @@ namespace QuickZoom;
 
 internal sealed partial class TrayContext
 {
+    [DllImport("user32.dll")]
+    private static extern uint MapVirtualKey(uint uCode, uint uMapType);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetKeyNameText(int lParam, StringBuilder lpString, int nSize);
+
     private sealed class Settings
     {
         public int ThemeMode { get; set; } = (int)TrayContext.ThemeMode.AutoSystem;
@@ -32,6 +40,7 @@ internal sealed partial class TrayContext
         public int Fps { get; set; } = 120;
         public bool CenterCursor { get; set; }
         public bool SuppressAltKeyInOfficeApps { get; set; }
+        public bool DebugLoggingEnabled { get; set; }
         public bool WiggleSpotlightEnabled { get; set; } = true;
         public bool CursorEnhancementEnabled { get; set; }
         public int CursorScale { get; set; } = 100;
@@ -66,6 +75,7 @@ internal sealed partial class TrayContext
             Fps = 120,
             CenterCursor = false,
             SuppressAltKeyInOfficeApps = false,
+            DebugLoggingEnabled = false,
             WiggleSpotlightEnabled = true,
             CursorEnhancementEnabled = false,
             CursorScale = 100,
@@ -110,9 +120,11 @@ internal sealed partial class TrayContext
             : InvertTriggerKind.EnableKeyPlusMiddleClick;
         _smoothZoom = s.SmoothZoom;
         _autoDisableAt100 = s.AutoDisableAt100;
-        _fps = Math.Clamp(s.Fps, 60, 360);
+        _fps = NormalizeFpsSetting(s.Fps);
         _centerCursor = s.CenterCursor;
         _suppressAltKeyInOfficeApps = s.SuppressAltKeyInOfficeApps && IsAltEnableKey();
+        _debugLoggingEnabled = s.DebugLoggingEnabled;
+        ErrorLog.Configure(_debugLoggingEnabled, AppInfo.VersionHash);
         _wiggleSpotlightEnabled = s.WiggleSpotlightEnabled;
         _cursorEnhancementEnabled = s.CursorEnhancementEnabled;
         _cursorScale = NormalizeCursorScale(s.CursorScale);
@@ -298,6 +310,7 @@ internal sealed partial class TrayContext
             Fps = _fps,
             CenterCursor = _centerCursor,
             SuppressAltKeyInOfficeApps = _suppressAltKeyInOfficeApps && IsAltEnableKey(),
+            DebugLoggingEnabled = _debugLoggingEnabled,
             WiggleSpotlightEnabled = _wiggleSpotlightEnabled,
             CursorEnhancementEnabled = _cursorEnhancementEnabled,
             CursorScale = _cursorScale,
@@ -306,6 +319,16 @@ internal sealed partial class TrayContext
             UseCursorMonitorSelection = _useCursorMonitorSelection,
             SelectedMonitorDeviceNames = _selectedMonitorDeviceNames.ToList()
         };
+    }
+
+    private static int NormalizeFpsSetting(int fps)
+    {
+        if (fps == UnlimitedFps || fps > _fpsOptions[^1])
+        {
+            return UnlimitedFps;
+        }
+
+        return _fpsOptions.Contains(fps) ? fps : _fpsOptions[0];
     }
 
     private void WriteSettingsSnapshot(Settings s)
@@ -367,14 +390,47 @@ internal sealed partial class TrayContext
         return Math.Clamp(scale, CursorScaleMinimum, CursorScaleMaximum);
     }
 
-    private string KeyLabel(Keys key) => key switch
+    private string KeyLabel(Keys key)
     {
-        Keys.ControlKey => L("Common.KeyCtrl"),
-        Keys.Menu => L("Common.KeyAlt"),
-        Keys.ShiftKey => L("Common.KeyShift"),
-        Keys.LWin or Keys.RWin => L("Common.KeyWin"),
-        _ => key.ToString()
-    };
+        return key switch
+        {
+            Keys.ControlKey => L("Common.KeyCtrl"),
+            Keys.Menu => L("Common.KeyAlt"),
+            Keys.RMenu => L("Common.KeyAltGr"),
+            Keys.ShiftKey => L("Common.KeyShift"),
+            Keys.LWin or Keys.RWin => L("Common.KeyWin"),
+            (Keys)FnVirtualKey => L("Common.KeyFn"),
+            Keys.Enter or Keys.Return => L("Common.KeyEnter"),
+            Keys.Oemcomma => ",",
+            Keys.OemPeriod => ".",
+            Keys.OemMinus or Keys.Subtract => "-",
+            _ => TryGetNativeKeyLabel(key) ?? key.ToString()
+        };
+    }
+
+    private static string? TryGetNativeKeyLabel(Keys key)
+    {
+        if (!IsOemKey(key))
+        {
+            return null;
+        }
+
+        uint scanCode = MapVirtualKey((uint)key, 0);
+        if (scanCode == 0)
+        {
+            return null;
+        }
+
+        var buffer = new StringBuilder(32);
+        int length = GetKeyNameText((int)(scanCode << 16), buffer, buffer.Capacity);
+        string label = length > 0 ? buffer.ToString() : string.Empty;
+        return string.IsNullOrWhiteSpace(label) ? null : label;
+    }
+
+    private static bool IsOemKey(Keys key)
+    {
+        return key is Keys.Oem1 or Keys.Oem3 or Keys.Oem4 or Keys.Oem5 or Keys.Oem6 or Keys.Oem7 or Keys.Oem8 or Keys.Oem102;
+    }
 
     private string ShortcutInputModeLabel(ShortcutInputMode mode) => mode switch
     {
@@ -457,6 +513,21 @@ internal sealed partial class TrayContext
         Keys.A,
         Keys.Q,
         Keys.Z,
+        Keys.F1,
+        Keys.F2,
+        Keys.F3,
+        Keys.F4,
+        Keys.F5,
+        Keys.F6,
+        Keys.F7,
+        Keys.F8,
+        Keys.F9,
+        Keys.F10,
+        Keys.F11,
+        Keys.F12,
+        Keys.Oem1,
+        Keys.Oem7,
+        Keys.Oem4,
         Keys.Space
     }, _enableKey);
 
@@ -483,7 +554,10 @@ internal sealed partial class TrayContext
         Keys.F9,
         Keys.F10,
         Keys.F11,
-        Keys.F12
+        Keys.F12,
+        Keys.Oem1,
+        Keys.Oem7,
+        Keys.Oem4
     }, current);
 
     private string[] BuildKeyItemLabels(IEnumerable<Keys> defaults, Keys current)

@@ -123,6 +123,29 @@ internal interface IChildSurfaceBackgroundRenderer
     void PaintChildSurfaceBackground(Graphics graphics, Rectangle childBounds);
 }
 
+internal static class ControlContrast
+{
+    internal static Color FieldBackground(ThemePalette palette) => palette.MenuBackground.GetBrightness() < 0.5f
+        ? palette.ButtonBackground
+        : Color.FromArgb(232, 238, 246);
+
+    internal static Color FieldHover(ThemePalette palette) => palette.MenuBackground.GetBrightness() < 0.5f
+        ? Color.FromArgb(38, 46, 58)
+        : Color.FromArgb(220, 230, 242);
+
+    internal static Color FieldPressed(ThemePalette palette) => palette.MenuBackground.GetBrightness() < 0.5f
+        ? Color.FromArgb(45, 54, 68)
+        : Color.FromArgb(208, 222, 238);
+
+    internal static Color FieldBorder(ThemePalette palette) => palette.MenuBackground.GetBrightness() < 0.5f
+        ? Color.FromArgb(82, 94, 112)
+        : Color.FromArgb(142, 156, 174);
+
+    internal static Color SubtleTrack(ThemePalette palette) => palette.MenuBackground.GetBrightness() < 0.5f
+        ? Color.FromArgb(28, 33, 42)
+        : Color.FromArgb(218, 227, 238);
+}
+
 internal class ModernSurfacePanel : Panel
 {
     private int _cornerRadius = 16;
@@ -299,18 +322,18 @@ internal sealed class ToggleSwitchControl : Control
         using GraphicsPath trackPath = ControlDrawing.RoundedRect(trackRect, trackRect.Height / 2);
 
         Color trackColor = !Enabled
-            ? Color.FromArgb(100, _palette.Border)
+            ? ControlContrast.FieldBackground(_palette)
             : _isOn
             ? (_hovered ? _palette.AccentHover : _palette.Accent)
-            : (_hovered ? _palette.ButtonHover : _palette.ButtonBackground);
+            : (_hovered ? ControlContrast.FieldHover(_palette) : ControlContrast.FieldBackground(_palette));
 
         if (Enabled && _pressed)
         {
-            trackColor = _isOn ? _palette.AccentPressed : _palette.ButtonPressed;
+            trackColor = _isOn ? _palette.AccentPressed : ControlContrast.FieldPressed(_palette);
         }
 
         using SolidBrush trackBrush = new(trackColor);
-        using Pen borderPen = new(_palette.Border);
+        using Pen borderPen = new(ControlContrast.FieldBorder(_palette));
         e.Graphics.FillPath(trackBrush, trackPath);
         e.Graphics.DrawPath(borderPen, trackPath);
 
@@ -932,7 +955,7 @@ internal sealed class KeyBadgeControl : Control, ISurfaceBackgroundProvider
             ControlStyles.Selectable,
             true);
         BackColor = Color.Transparent;
-        Size = new Size(94, 34);
+        Size = new Size(180, 74);
         Margin = new Padding(0);
         Cursor = Cursors.Hand;
         TabStop = true;
@@ -951,8 +974,8 @@ internal sealed class KeyBadgeControl : Control, ISurfaceBackgroundProvider
     }
 
     public Color SurfaceBackgroundColor => _pressed
-        ? _palette.ButtonPressed
-        : (_hovered ? _palette.ButtonHover : _palette.ButtonBackground);
+        ? ControlContrast.FieldPressed(_palette)
+        : (_hovered ? ControlContrast.FieldHover(_palette) : ControlContrast.FieldBackground(_palette));
 
     protected override void OnMouseEnter(EventArgs e)
     {
@@ -1004,23 +1027,37 @@ internal sealed class KeyBadgeControl : Control, ISurfaceBackgroundProvider
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
         Rectangle rect = new(0, 0, Width - 1, Height - 1);
-        using GraphicsPath path = ControlDrawing.RoundedRect(rect, 10);
+        using GraphicsPath path = ControlDrawing.RoundedRect(rect, 12);
         using SolidBrush fill = new(SurfaceBackgroundColor);
-        using Pen border = new(Color.FromArgb(50, _palette.Border));
+        using Pen border = new(ControlContrast.FieldBorder(_palette));
         e.Graphics.FillPath(fill, path);
         e.Graphics.DrawPath(border, path);
 
-        Rectangle iconRect = new(10, 9, 16, 16);
-        using Pen iconPen = new(_palette.SecondaryText, 1.25f);
-        e.Graphics.DrawRectangle(iconPen, iconRect);
-        e.Graphics.DrawLine(iconPen, iconRect.Left + 4, iconRect.Top + 5, iconRect.Right - 4, iconRect.Top + 5);
-        e.Graphics.DrawLine(iconPen, iconRect.Left + 4, iconRect.Top + 9, iconRect.Right - 4, iconRect.Top + 9);
+        Rectangle innerRect = new(5, 5, Width - 11, Height - 11);
+        using GraphicsPath innerPath = ControlDrawing.RoundedRect(innerRect, 10);
+        using Pen innerPen = new(Color.FromArgb(55, Color.White));
+        e.Graphics.DrawPath(innerPen, innerPath);
 
-        Rectangle textRect = new(iconRect.Right + 8, 0, Width - iconRect.Right - 18, Height);
+        int iconSize = 24;
+        Rectangle iconRect = new(12, (Height - iconSize) / 2, iconSize, iconSize);
+        using Pen iconPen = new(_palette.Text, 1.8f);
+        if (Text.Equals("Win", StringComparison.OrdinalIgnoreCase) ||
+            Text.Contains("Windows", StringComparison.OrdinalIgnoreCase))
+        {
+            DrawWindowsLogo(e.Graphics, iconPen, iconRect);
+        }
+        else
+        {
+            e.Graphics.DrawRectangle(iconPen, iconRect);
+            e.Graphics.DrawLine(iconPen, iconRect.Left + 5, iconRect.Top + 7, iconRect.Right - 5, iconRect.Top + 7);
+            e.Graphics.DrawLine(iconPen, iconRect.Left + 5, iconRect.Top + 13, iconRect.Right - 5, iconRect.Top + 13);
+        }
+
+        Rectangle textRect = new(iconRect.Right + 10, 0, Width - iconRect.Right - 22, Height);
         TextRenderer.DrawText(
             e.Graphics,
             Text,
-            ControlDrawing.UiFont("Segoe UI Semibold", 9f, FontStyle.Bold),
+            ControlDrawing.UiFont("Segoe UI Semibold", 11f, FontStyle.Bold),
             textRect,
             _palette.Text,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
@@ -1039,6 +1076,44 @@ internal sealed class KeyBadgeControl : Control, ISurfaceBackgroundProvider
             : ControlDrawing.EffectiveBackColor(this);
         using SolidBrush brush = new(backColor);
         pevent.Graphics.FillRectangle(brush, ClientRectangle);
+    }
+
+    private static void DrawWindowsLogo(Graphics graphics, Pen pen, Rectangle rect)
+    {
+        Point[] topLeft =
+        [
+            new(rect.Left + 2, rect.Top + 3),
+            new(rect.Left + rect.Width / 2 - 1, rect.Top + 2),
+            new(rect.Left + rect.Width / 2 - 1, rect.Top + rect.Height / 2 - 1),
+            new(rect.Left + 2, rect.Top + rect.Height / 2 - 2)
+        ];
+        Point[] topRight =
+        [
+            new(rect.Left + rect.Width / 2 + 2, rect.Top + 2),
+            new(rect.Right - 2, rect.Top),
+            new(rect.Right - 2, rect.Top + rect.Height / 2 - 1),
+            new(rect.Left + rect.Width / 2 + 2, rect.Top + rect.Height / 2 - 1)
+        ];
+        Point[] bottomLeft =
+        [
+            new(rect.Left + 2, rect.Top + rect.Height / 2 + 2),
+            new(rect.Left + rect.Width / 2 - 1, rect.Top + rect.Height / 2 + 1),
+            new(rect.Left + rect.Width / 2 - 1, rect.Bottom - 2),
+            new(rect.Left + 2, rect.Bottom - 4)
+        ];
+        Point[] bottomRight =
+        [
+            new(rect.Left + rect.Width / 2 + 2, rect.Top + rect.Height / 2 + 1),
+            new(rect.Right - 2, rect.Top + rect.Height / 2 + 1),
+            new(rect.Right - 2, rect.Bottom),
+            new(rect.Left + rect.Width / 2 + 2, rect.Bottom - 2)
+        ];
+
+        using SolidBrush brush = new(pen.Color);
+        graphics.FillPolygon(brush, topLeft);
+        graphics.FillPolygon(brush, topRight);
+        graphics.FillPolygon(brush, bottomLeft);
+        graphics.FillPolygon(brush, bottomRight);
     }
 }
 
@@ -1206,6 +1281,9 @@ internal sealed class ModernActionRow : ModernSurfacePanel
 internal sealed class ModernButton : Button
 {
     private Color _outlineColor = Color.Transparent;
+    private bool _successHoverEnabled;
+    private Color _successNormalText;
+    private Color _successHoverText;
 
     public ModernButton()
     {
@@ -1227,6 +1305,7 @@ internal sealed class ModernButton : Button
 
     public void ApplyTheme(ThemePalette palette, bool emphasis = false, bool destructive = false, bool destructiveHoverEnabled = false)
     {
+        _successHoverEnabled = false;
         bool lightPalette = palette.MenuBackground.GetBrightness() > 0.65f;
         Color destructiveBack = lightPalette ? Color.FromArgb(255, 247, 247) : Color.FromArgb(74, 24, 31);
         Color destructiveHoverColor = lightPalette ? Color.FromArgb(255, 224, 224) : Color.FromArgb(96, 28, 36);
@@ -1252,6 +1331,40 @@ internal sealed class ModernButton : Button
         Invalidate();
     }
 
+    public void ApplySuccessOutlineTheme(ThemePalette palette)
+    {
+        _successHoverEnabled = true;
+        BackColor = palette.ButtonBackground;
+        _successNormalText = palette.Text;
+        _successHoverText = Color.White;
+        ForeColor = _successNormalText;
+        FlatAppearance.BorderColor = Color.FromArgb(72, 163, 96);
+        _outlineColor = FlatAppearance.BorderColor;
+        FlatAppearance.MouseOverBackColor = Color.FromArgb(62, 145, 86);
+        FlatAppearance.MouseDownBackColor = Color.FromArgb(50, 124, 72);
+        Invalidate();
+    }
+
+    protected override void OnMouseEnter(EventArgs e)
+    {
+        if (_successHoverEnabled)
+        {
+            ForeColor = _successHoverText;
+        }
+
+        base.OnMouseEnter(e);
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        if (_successHoverEnabled)
+        {
+            ForeColor = _successNormalText;
+        }
+
+        base.OnMouseLeave(e);
+    }
+
     protected override void OnPaint(PaintEventArgs pevent)
     {
         base.OnPaint(pevent);
@@ -1272,8 +1385,7 @@ internal sealed class SettingsSidebarItem : Control, ISurfaceBackgroundProvider,
 {
     private static readonly Color SidebarBackgroundDark = Color.FromArgb(17, 20, 26);
     private static readonly Color SidebarHoverDark = Color.FromArgb(29, 34, 43);
-    private static readonly Color SidebarSelectedDark = Color.FromArgb(35, 42, 53);
-    private static readonly Color SidebarAccentDark = Color.FromArgb(124, 92, 255);
+    private static readonly Color SidebarSelectedDark = Color.FromArgb(39, 47, 60);
     private static readonly Color SidebarBackgroundLight = Color.FromArgb(248, 250, 252);
     private static readonly Color SidebarHoverLight = Color.FromArgb(226, 233, 242);
     private static readonly Color SidebarSelectedLight = Color.FromArgb(214, 226, 240);
@@ -1467,15 +1579,6 @@ internal sealed class SettingsSidebarItem : Control, ISurfaceBackgroundProvider,
         using GraphicsPath fillPath = ControlDrawing.RoundedRect(fillRect, ControlDrawing.ScaleLogical(this, 14));
         using SolidBrush fillBrush = new(SurfaceBackgroundColor);
         e.Graphics.FillPath(fillBrush, fillPath);
-
-        if (_selected)
-        {
-            int accentWidth = Math.Max(3, ControlDrawing.ScaleLogical(this, 3));
-            Rectangle accentRect = new(1, 7, accentWidth, Math.Max(1, Height - 14));
-            using GraphicsPath accentPath = ControlDrawing.RoundedRect(accentRect, accentWidth);
-            using SolidBrush accentBrush = new(_useDarkPalette ? SidebarAccentDark : _palette.Accent);
-            e.Graphics.FillPath(accentBrush, accentPath);
-        }
 
     }
 
@@ -1675,7 +1778,7 @@ internal sealed class ModernDropdown : Control, ISurfaceBackgroundProvider
         Invalidate();
     }
 
-    public Color SurfaceBackgroundColor => _pressed ? _palette.ButtonPressed : _hovered ? _palette.ButtonHover : _palette.ButtonBackground;
+    public Color SurfaceBackgroundColor => _pressed ? ControlContrast.FieldPressed(_palette) : _hovered ? ControlContrast.FieldHover(_palette) : ControlContrast.FieldBackground(_palette);
 
     protected override void OnMouseEnter(EventArgs e)
     {
@@ -1752,7 +1855,7 @@ internal sealed class ModernDropdown : Control, ISurfaceBackgroundProvider
         Rectangle rect = new(0, 0, Width - 1, Height - 1);
         using GraphicsPath path = ControlDrawing.RoundedRect(rect, 10);
         using SolidBrush fill = new(SurfaceBackgroundColor);
-        using Pen border = new(Color.FromArgb(48, _palette.Border));
+        using Pen border = new(ControlContrast.FieldBorder(_palette));
         e.Graphics.FillPath(fill, path);
         e.Graphics.DrawPath(border, path);
 
@@ -1919,7 +2022,7 @@ internal sealed class DarkMenuRenderer : ToolStripProfessionalRenderer
     protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
     {
         Rectangle rect = new(2, 1, e.Item.Width - 4, e.Item.Height - 2);
-        Color backColor = e.Item.Selected ? _palette.ButtonHover : _palette.MenuBackground;
+        Color backColor = e.Item.Selected ? ControlContrast.FieldHover(_palette) : ControlContrast.FieldBackground(_palette);
         using SolidBrush brush = new(backColor);
         e.Graphics.FillRectangle(brush, rect);
     }
@@ -1944,12 +2047,12 @@ internal sealed class DarkMenuColorTable : ProfessionalColorTable
     public override Color ToolStripDropDownBackground => _palette.MenuBackground;
     public override Color MenuBorder => _palette.Border;
     public override Color MenuItemBorder => Color.Transparent;
-    public override Color MenuItemSelected => _palette.ButtonHover;
-    public override Color MenuItemSelectedGradientBegin => _palette.ButtonHover;
-    public override Color MenuItemSelectedGradientEnd => _palette.ButtonHover;
-    public override Color MenuItemPressedGradientBegin => _palette.ButtonPressed;
-    public override Color MenuItemPressedGradientMiddle => _palette.ButtonPressed;
-    public override Color MenuItemPressedGradientEnd => _palette.ButtonPressed;
+    public override Color MenuItemSelected => ControlContrast.FieldHover(_palette);
+    public override Color MenuItemSelectedGradientBegin => ControlContrast.FieldHover(_palette);
+    public override Color MenuItemSelectedGradientEnd => ControlContrast.FieldHover(_palette);
+    public override Color MenuItemPressedGradientBegin => ControlContrast.FieldPressed(_palette);
+    public override Color MenuItemPressedGradientMiddle => ControlContrast.FieldPressed(_palette);
+    public override Color MenuItemPressedGradientEnd => ControlContrast.FieldPressed(_palette);
     public override Color ImageMarginGradientBegin => _palette.MenuBackground;
     public override Color ImageMarginGradientMiddle => _palette.MenuBackground;
     public override Color ImageMarginGradientEnd => _palette.MenuBackground;
@@ -2119,8 +2222,8 @@ internal sealed class ModernSlider : Control
 
         Rectangle trackRect = new(0, (Height / 2) - 3, Width - 1, 6);
         using GraphicsPath trackPath = ControlDrawing.RoundedRect(trackRect, 3);
-        using SolidBrush trackBrush = new(_palette.ButtonBackground);
-        using Pen trackBorder = new(Color.FromArgb(60, _palette.Border));
+        using SolidBrush trackBrush = new(ControlContrast.SubtleTrack(_palette));
+        using Pen trackBorder = new(ControlContrast.FieldBorder(_palette));
         e.Graphics.FillPath(trackBrush, trackPath);
         e.Graphics.DrawPath(trackBorder, trackPath);
 
@@ -2177,6 +2280,7 @@ internal sealed class SettingsRow : ModernSurfacePanel
 {
     private readonly Label _titleLabel;
     private readonly Label _descriptionLabel;
+    private readonly Label _statusLabel;
     private readonly TableLayoutPanel _grid;
     private readonly TableLayoutPanel _left;
     private readonly TableLayoutPanel _right;
@@ -2219,11 +2323,12 @@ internal sealed class SettingsRow : ModernSurfacePanel
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 1,
-            RowCount = 2,
+            RowCount = 3,
             BackColor = Color.Transparent,
             Margin = new Padding(0),
             Padding = new Padding(0, 2, 12, 2)
         };
+        _left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _left.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -2243,6 +2348,14 @@ internal sealed class SettingsRow : ModernSurfacePanel
             Font = ControlDrawing.UiFont("Segoe UI", 8.8f, FontStyle.Regular),
             Margin = new Padding(0, 4, 0, 0),
             BackColor = Color.Transparent
+        };
+        _statusLabel = new Label
+        {
+            AutoSize = true,
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 8.6f, FontStyle.Bold),
+            Margin = new Padding(0, 6, 0, 0),
+            BackColor = Color.Transparent,
+            Visible = false
         };
 
         _right = new TableLayoutPanel
@@ -2267,6 +2380,7 @@ internal sealed class SettingsRow : ModernSurfacePanel
         {
             _left.Controls.Add(_descriptionLabel, 0, 1);
         }
+        _left.Controls.Add(_statusLabel, 0, 2);
 
         _grid.Controls.Add(_left, 0, 0);
         _grid.Controls.Add(_right, 1, 0);
@@ -2286,6 +2400,14 @@ internal sealed class SettingsRow : ModernSurfacePanel
         Invalidate(true);
     }
 
+    public void SetStatus(string? text, Color color)
+    {
+        _statusLabel.Text = text ?? string.Empty;
+        _statusLabel.ForeColor = color;
+        _statusLabel.Visible = !string.IsNullOrWhiteSpace(text);
+        UpdateLayoutMetrics();
+    }
+
     private void UpdateLayoutMetrics()
     {
         int availableWidth = Math.Max(320, Width - Padding.Horizontal);
@@ -2293,6 +2415,7 @@ internal sealed class SettingsRow : ModernSurfacePanel
         _grid.ColumnStyles[1].Width = _rightColumnWidth;
         _titleLabel.MaximumSize = new Size(leftWidth, 0);
         _descriptionLabel.MaximumSize = new Size(leftWidth, 0);
+        _statusLabel.MaximumSize = new Size(leftWidth, 0);
 
         if (_valueText != null && _accessoryControl is Label valueLabel)
         {
@@ -2554,6 +2677,247 @@ internal sealed class AboutSettingsPageView : SettingsPageView
     public AboutSettingsPageView(ThemePalette palette, string title, string description) : base(palette, title, description) { }
 }
 
+internal sealed class SettingsContentHost : Panel
+{
+    private readonly ThemePalette _palette;
+    private Control? _activePage;
+    private int _scrollOffset;
+    private int _contentHeight;
+    private bool _showScrollBar;
+    private Rectangle _thumbRect;
+    private bool _draggingThumb;
+    private int _dragStartY;
+    private int _dragStartOffset;
+    private const int ScrollBarWidth = 10;
+    private const int ScrollBarInset = 2;
+
+    public SettingsContentHost(ThemePalette palette)
+    {
+        _palette = palette;
+        SetStyle(ControlStyles.Selectable, true);
+        DoubleBuffered = true;
+        BackColor = palette.MenuBackground;
+        AutoScroll = false;
+        TabStop = true;
+    }
+
+    public void SetActivePage(Control page)
+    {
+        if (_activePage != page)
+        {
+            _scrollOffset = 0;
+        }
+
+        _activePage = page;
+        AttachScrollInput(page);
+        LayoutActivePage();
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        LayoutActivePage();
+    }
+
+    protected override void OnMouseEnter(EventArgs e)
+    {
+        base.OnMouseEnter(e);
+        Focus();
+    }
+
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        base.OnMouseWheel(e);
+        if (!_showScrollBar)
+        {
+            return;
+        }
+
+        ScrollBy(-Math.Sign(e.Delta) * 72);
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        base.OnMouseDown(e);
+        if (!_showScrollBar || e.Button != MouseButtons.Left)
+        {
+            return;
+        }
+
+        if (_thumbRect.Contains(e.Location))
+        {
+            _draggingThumb = true;
+            _dragStartY = e.Y;
+            _dragStartOffset = _scrollOffset;
+            Capture = true;
+            return;
+        }
+
+        ScrollBy(e.Y < _thumbRect.Top ? -ClientSize.Height : ClientSize.Height);
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        if (!_draggingThumb || _activePage == null)
+        {
+            return;
+        }
+
+        int maxOffset = Math.Max(0, _contentHeight - ClientSize.Height);
+        int trackHeight = Math.Max(1, ClientSize.Height - (ScrollBarInset * 2));
+        int travel = Math.Max(1, trackHeight - _thumbRect.Height);
+        int deltaOffset = (int)Math.Round((e.Y - _dragStartY) * (maxOffset / (double)travel));
+        SetScrollOffset(_dragStartOffset + deltaOffset);
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        base.OnMouseUp(e);
+        if (e.Button == MouseButtons.Left)
+        {
+            _draggingThumb = false;
+            Capture = false;
+        }
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        base.OnPaintBackground(e);
+        if (!_showScrollBar)
+        {
+            return;
+        }
+
+        Rectangle track = new(ClientSize.Width - ScrollBarWidth, ScrollBarInset, ScrollBarWidth - ScrollBarInset, ClientSize.Height - (ScrollBarInset * 2));
+        using GraphicsPath trackPath = ControlDrawing.RoundedRect(track, 4);
+        using SolidBrush trackBrush = new(Color.FromArgb(70, _palette.ButtonBackground));
+        e.Graphics.FillPath(trackBrush, trackPath);
+
+        using GraphicsPath thumbPath = ControlDrawing.RoundedRect(_thumbRect, 4);
+        using SolidBrush thumbBrush = new(Color.FromArgb(180, _palette.Border));
+        e.Graphics.FillPath(thumbBrush, thumbPath);
+    }
+
+    private void ScrollBy(int delta) => SetScrollOffset(_scrollOffset + delta);
+
+    private void AttachScrollInput(Control control)
+    {
+        control.MouseWheel -= OnChildMouseWheel;
+        control.MouseWheel += OnChildMouseWheel;
+        control.MouseEnter -= OnChildMouseEnter;
+        control.MouseEnter += OnChildMouseEnter;
+
+        foreach (Control child in control.Controls)
+        {
+            AttachScrollInput(child);
+        }
+    }
+
+    private void OnChildMouseEnter(object? sender, EventArgs e) => Focus();
+
+    private void OnChildMouseWheel(object? sender, MouseEventArgs e)
+    {
+        if (_showScrollBar)
+        {
+            ScrollBy(-Math.Sign(e.Delta) * 72);
+        }
+    }
+
+    private void SetScrollOffset(int offset)
+    {
+        if (_activePage == null)
+        {
+            return;
+        }
+
+        int maxOffset = Math.Max(0, _contentHeight - ClientSize.Height);
+        int nextOffset = Math.Clamp(offset, 0, maxOffset);
+        if (nextOffset == _scrollOffset)
+        {
+            return;
+        }
+
+        _scrollOffset = nextOffset;
+        PositionActivePage();
+    }
+
+    private void LayoutActivePage()
+    {
+        if (_activePage == null || ClientSize.Width <= 0 || ClientSize.Height <= 0)
+        {
+            return;
+        }
+
+        int pageWidth = Math.Max(400, ClientSize.Width - (_showScrollBar ? ScrollBarWidth + 8 : 0));
+        _activePage.MinimumSize = new Size(pageWidth, 0);
+        _activePage.Width = pageWidth;
+        _activePage.PerformLayout();
+
+        int pageHeight = GetNaturalContentHeight(_activePage, pageWidth);
+        bool needsScrollBar = pageHeight > ClientSize.Height;
+        if (needsScrollBar != _showScrollBar)
+        {
+            _showScrollBar = needsScrollBar;
+            pageWidth = Math.Max(400, ClientSize.Width - (_showScrollBar ? ScrollBarWidth + 8 : 0));
+            _activePage.MinimumSize = new Size(pageWidth, 0);
+            _activePage.Width = pageWidth;
+            _activePage.PerformLayout();
+            pageHeight = GetNaturalContentHeight(_activePage, pageWidth);
+        }
+
+        _contentHeight = pageHeight;
+        _activePage.Height = _contentHeight;
+        _scrollOffset = Math.Clamp(_scrollOffset, 0, Math.Max(0, _contentHeight - ClientSize.Height));
+        PositionActivePage();
+    }
+
+    private void PositionActivePage()
+    {
+        if (_activePage == null)
+        {
+            return;
+        }
+
+        _activePage.Location = new Point(0, -_scrollOffset);
+        UpdateThumb(_contentHeight);
+        Invalidate();
+    }
+
+    private void UpdateThumb(int pageHeight)
+    {
+        if (!_showScrollBar)
+        {
+            _thumbRect = Rectangle.Empty;
+            return;
+        }
+
+        int trackHeight = Math.Max(1, ClientSize.Height - (ScrollBarInset * 2));
+        int thumbHeight = Math.Max(32, (int)Math.Round(trackHeight * (ClientSize.Height / (double)Math.Max(ClientSize.Height, pageHeight))));
+        int maxOffset = Math.Max(1, pageHeight - ClientSize.Height);
+        int travel = Math.Max(0, trackHeight - thumbHeight);
+        int thumbY = ScrollBarInset + (int)Math.Round(travel * (_scrollOffset / (double)maxOffset));
+        _thumbRect = new Rectangle(ClientSize.Width - ScrollBarWidth, thumbY, ScrollBarWidth - ScrollBarInset, thumbHeight);
+    }
+
+    private static int GetNaturalContentHeight(Control control, int width)
+    {
+        int preferredHeight = control.GetPreferredSize(new Size(width, 0)).Height;
+        int childBottom = 0;
+        foreach (Control child in control.Controls)
+        {
+            childBottom = Math.Max(childBottom, child.Bottom + child.Margin.Bottom);
+        }
+
+        return Math.Max(preferredHeight, childBottom);
+    }
+}
+
 internal sealed class SettingsPageDefinition
 {
     public SettingsPageDefinition(Type pageType, string title, TrayFluentIcon icon, Func<UserControl> createPage)
@@ -2575,7 +2939,7 @@ internal sealed class SettingsForm : Form
     private readonly Dictionary<Type, UserControl> _pageCache = new();
     private readonly Dictionary<Type, SettingsSidebarItem> _navItems = new();
     private readonly Dictionary<Type, Func<UserControl>> _pageFactories = new();
-    private readonly Panel _contentHost;
+    private readonly SettingsContentHost _contentHost;
     private readonly Size _minimumClientSize;
     private Type? _currentPageType;
 
@@ -2611,7 +2975,7 @@ internal sealed class SettingsForm : Form
             Margin = new Padding(0),
             BackColor = palette.MenuBackground
         };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 270));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 300));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -2682,7 +3046,7 @@ internal sealed class SettingsForm : Form
 
         void UpdateSidebarItemWidths()
         {
-            int itemWidth = Math.Max(ControlDrawing.ScaleLogical(this, 216), navHost.ClientSize.Width - 8);
+            int itemWidth = Math.Max(ControlDrawing.ScaleLogical(this, 246), navHost.ClientSize.Width - 8);
             foreach (SettingsSidebarItem item in _navItems.Values)
             {
                 item.Width = itemWidth;
@@ -2694,13 +3058,12 @@ internal sealed class SettingsForm : Form
         sidebarLayout.Controls.Add(navHost, 0, 1);
         sidebarSurface.Controls.Add(sidebarLayout);
 
-        _contentHost = new Panel
+        _contentHost = new SettingsContentHost(palette)
         {
             Dock = DockStyle.Fill,
             Margin = new Padding(0),
             Padding = new Padding(0),
-            BackColor = palette.MenuBackground,
-            AutoScroll = false
+            BackColor = palette.MenuBackground
         };
 
         var footer = new FlowLayoutPanel
@@ -2719,8 +3082,7 @@ internal sealed class SettingsForm : Form
             Text = doneText,
             DialogResult = DialogResult.OK
         };
-        closeButton.ApplyTheme(palette, emphasis: false);
-        closeButton.SetOutlineColor(useDarkTheme ? Color.FromArgb(96, 165, 250) : Color.FromArgb(65, 105, 170));
+        closeButton.ApplySuccessOutlineTheme(palette);
         closeButton.Click += (_, _) => Close();
         footer.Controls.Add(closeButton);
         footer.Controls.Add(resetButton);
@@ -2793,6 +3155,7 @@ internal sealed class SettingsForm : Form
 
             page.Visible = true;
             page.BringToFront();
+            _contentHost.SetActivePage(page);
         }
         finally
         {

@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
+using System.IO;
+using System.Text;
 using System.Windows.Forms;
 
 namespace QuickZoom;
@@ -17,6 +20,22 @@ internal sealed partial class TrayContext
         Input,
         About
     }
+
+    private enum ShortcutKeyRole
+    {
+        Enable,
+        Invert,
+        FollowCursor
+    }
+
+    private enum ShortcutValidationLevel
+    {
+        None,
+        Warning,
+        Error
+    }
+
+    private readonly record struct ShortcutValidation(ShortcutValidationLevel Level, string Text);
 
     private void ShowSettingsWindow(SettingsPage initialPage = SettingsPage.General, Point? restoreLocation = null)
     {
@@ -94,11 +113,11 @@ internal sealed partial class TrayContext
     private IReadOnlyList<SettingsPageDefinition> BuildSettingsPageDefinitions() =>
     [
         new(typeof(GeneralSettingsPageView), L("Settings.General"), TrayFluentIcon.Settings, BuildGeneralSettingsPage),
-        new(typeof(DisplaySettingsPageView), L("Settings.Display"), TrayFluentIcon.MagnifiedDisplays, BuildDisplaySettingsPage),
-        new(typeof(AppearanceSettingsPageView), L("Settings.Appearance"), TrayFluentIcon.Appearance, BuildAppearanceSettingsPage),
-        new(typeof(CursorSettingsPageView), L("Settings.Cursor"), TrayFluentIcon.Cursor, BuildCursorSettingsPage),
         new(typeof(ZoomSettingsPageView), L("Settings.Zoom"), TrayFluentIcon.Zoom, BuildZoomSettingsPage),
+        new(typeof(DisplaySettingsPageView), L("Settings.Display"), TrayFluentIcon.MagnifiedDisplays, BuildDisplaySettingsPage),
+        new(typeof(CursorSettingsPageView), L("Settings.Cursor"), TrayFluentIcon.Cursor, BuildCursorSettingsPage),
         new(typeof(ShortcutsSettingsPageView), L("Settings.Input"), TrayFluentIcon.KeyBinds, BuildInputSettingsPage),
+        new(typeof(AppearanceSettingsPageView), L("Settings.Appearance"), TrayFluentIcon.Appearance, BuildAppearanceSettingsPage),
         new(typeof(AboutSettingsPageView), L("Settings.About"), TrayFluentIcon.About, BuildAboutSettingsPage)
     ];
 
@@ -311,7 +330,7 @@ internal sealed partial class TrayContext
                     SetDisplaySelectionMode(nextMode);
                 }
             },
-            rightColumnWidth: 320));
+            rightColumnWidth: 420));
 
         if (GetDisplaySelectionMode() != DisplaySelectionMode.CustomSelection)
         {
@@ -403,12 +422,12 @@ internal sealed partial class TrayContext
             SaveSettings();
         }, rightColumnWidth: 420));
 
-        section.AddRow(CreateSliderRow(L("Settings.RefreshRate"), L("Settings.RefreshRateHelp"), _fps, 60, 360, 10, value => value + " Hz", value =>
+        section.AddRow(CreateDropdownRow(L("Settings.RefreshRate"), L("Settings.RefreshRateHelp"), BuildFpsItems(), FpsLabel(_fps), value =>
         {
-            _fps = value;
+            _fps = ParseFpsLabel(value);
             ApplyFps();
             SaveSettings();
-        }, rightColumnWidth: 420));
+        }, rightColumnWidth: 360));
 
         page.AddSection(section);
         return page;
@@ -494,7 +513,7 @@ internal sealed partial class TrayContext
             L("Settings.CursorPreview"),
             L("Settings.CursorPreviewHelp"),
             preview,
-            rightColumnWidth: 260));
+            rightColumnWidth: 400));
 
         page.AddSection(section);
         return page;
@@ -564,6 +583,16 @@ internal sealed partial class TrayContext
         var section = new SettingsSection(palette, L("Settings.InputSection"), string.Empty);
         ToggleSwitchControl? officeAltToggle = null;
         SettingsRow? officeAltRow = null;
+        SettingsRow? enableKeyRow = null;
+        SettingsRow? invertKeyRow = null;
+        SettingsRow? followCursorKeyRow = null;
+
+        void UpdateShortcutValidationRows()
+        {
+            ApplyShortcutValidation(enableKeyRow, GetShortcutValidation(ShortcutKeyRole.Enable));
+            ApplyShortcutValidation(invertKeyRow, GetShortcutValidation(ShortcutKeyRole.Invert));
+            ApplyShortcutValidation(followCursorKeyRow, GetShortcutValidation(ShortcutKeyRole.FollowCursor));
+        }
 
         section.AddRow(CreateDropdownRow(
             L("Settings.ShortcutMode"),
@@ -579,13 +608,13 @@ internal sealed partial class TrayContext
                 SaveSettings();
                 RefreshMenuAndTrayUi(rebuildPopup: true);
             },
-            rightColumnWidth: 360,
+            rightColumnWidth: 260,
             compact: true));
 
-        section.AddRow(CreateKeybindRow(
+        enableKeyRow = CreateKeybindRow(
             L("Settings.EnableKey"),
             L("Settings.EnableKeyHelp"),
-            KeyLabel(_enableKey),
+            KeyBadgeLabel(_enableKey),
             () =>
             {
                 Keys? key = PromptForKey(_enableKey, L("Settings.EnableKeyDialogTitle"), L("Settings.EnableKeyDialogBody"));
@@ -604,6 +633,7 @@ internal sealed partial class TrayContext
                 _enableKeyPressed = false;
                 SaveSettings();
                 RefreshMenuAndTrayUi(rebuildPopup: true);
+                UpdateShortcutValidationRows();
 
                 if (officeAltToggle != null)
                 {
@@ -616,15 +646,16 @@ internal sealed partial class TrayContext
                     officeAltRow.Enabled = altEnableKey;
                 }
 
-                return KeyLabel(_enableKey);
+                return KeyBadgeLabel(_enableKey);
             },
-            rightColumnWidth: 360,
-            compact: true));
+            rightColumnWidth: 210,
+            compact: true);
+        section.AddRow(enableKeyRow);
 
-        section.AddRow(CreateKeybindRow(
+        invertKeyRow = CreateKeybindRow(
             L("Settings.InvertActivationKey"),
             L("Settings.InvertActivationKeyHelp"),
-            KeyLabel(_invertKey),
+            KeyBadgeLabel(_invertKey),
             () =>
             {
                 Keys? key = PromptForKey(_invertKey, L("Settings.InvertKeyDialogTitle"), L("Settings.InvertKeyDialogBody"));
@@ -638,15 +669,17 @@ internal sealed partial class TrayContext
                 _invertKeyPressed = false;
                 SaveSettings();
                 RefreshMenuAndTrayUi(rebuildPopup: true);
-                return KeyLabel(_invertKey);
+                UpdateShortcutValidationRows();
+                return KeyBadgeLabel(_invertKey);
             },
-            rightColumnWidth: 360,
-            compact: true));
+            rightColumnWidth: 210,
+            compact: true);
+        section.AddRow(invertKeyRow);
 
-        section.AddRow(CreateKeybindRow(
+        followCursorKeyRow = CreateKeybindRow(
             L("Settings.FollowCursorHotkey"),
             L("Settings.FollowCursorHotkeyHelp"),
-            KeyLabel(_followCursorKey),
+            KeyBadgeLabel(_followCursorKey),
             () =>
             {
                 Keys? key = PromptForKey(_followCursorKey, L("Settings.FollowCursorHotkeyDialogTitle"), L("Settings.FollowCursorHotkeyDialogBody"));
@@ -659,10 +692,13 @@ internal sealed partial class TrayContext
                 _followCursorKeyPressed = false;
                 SaveSettings();
                 RefreshMenuAndTrayUi(rebuildPopup: true);
-                return KeyLabel(_followCursorKey);
+                UpdateShortcutValidationRows();
+                return KeyBadgeLabel(_followCursorKey);
             },
-            rightColumnWidth: 360,
-            compact: true));
+            rightColumnWidth: 210,
+            compact: true);
+        section.AddRow(followCursorKeyRow);
+        UpdateShortcutValidationRows();
 
         section.AddRow(CreateToggleRow(
             L("Settings.SuppressAltKeyInOfficeApps"),
@@ -691,7 +727,7 @@ internal sealed partial class TrayContext
         ThemePalette palette = CurrentTheme;
         var page = new AboutSettingsPageView(palette, L("Settings.AboutTitle"), L("Settings.AboutDescription"));
 
-        var overviewSection = new SettingsSection(palette, L("Settings.AboutSection"), string.Empty);
+        var overviewSection = new SettingsSection(palette, string.Empty, string.Empty);
         overviewSection.AddRow(CreateInfoRow(
             L("Settings.AboutBuildStartup"),
             L("About.VersionBuild", AppInfo.MajorVersion, AppInfo.BuildNumber),
@@ -720,11 +756,13 @@ internal sealed partial class TrayContext
     {
         string notInstalled = L("About.NotInstalled");
         UiLanguage language = _language;
-        (string InstallPath, string StartupStatus) details = await Task.Run(() =>
+        (string InstallPath, string StartupStatus, StartupTaskStatus Status) details = await Task.Run(() =>
         {
             string installPath = InstalledAppService.GetCurrentInstalledExecutablePath() ?? notInstalled;
+            StartupTaskInfo startupTaskInfo = StartupTaskService.GetStatusInfo(forceRefresh: true);
+            StartupTaskStatus startupTaskStatus = startupTaskInfo.Status;
             string startupStatus = StartupTaskService.GetStatusLabel(language);
-            return (installPath, startupStatus);
+            return (installPath, startupStatus, startupTaskStatus);
         });
 
         if (owner.IsDisposed || _settingsWindow == null || _settingsWindow.IsDisposed)
@@ -744,7 +782,11 @@ internal sealed partial class TrayContext
             overviewSection.AddRow(CreateInfoRow(
                 L("Settings.AboutBuildStartup"),
                 L("About.VersionBuild", AppInfo.MajorVersion, AppInfo.BuildNumber),
-                details.StartupStatus));
+                details.StartupStatus,
+                details.Status == StartupTaskStatus.Broken
+                    ? CreateInlineActionButton(L("About.FixStartup"), RepairStartupServiceNow)
+                    : null,
+                details.Status == StartupTaskStatus.Broken ? 140 : 240));
             overviewSection.AddRow(new SettingsRow(
                 CurrentTheme,
                 L("Settings.AboutLocations"),
@@ -757,6 +799,16 @@ internal sealed partial class TrayContext
                     },
                     380),
                 rightColumnWidth: 380));
+            var debugLoggingRow = new SettingsRow(
+                CurrentTheme,
+                L("Settings.DebugLogging"),
+                L("Settings.DebugLoggingHelp"),
+                CreateDebugLoggingControls(),
+                rightColumnWidth: 300)
+            {
+                MinimumSize = new Size(0, 92)
+            };
+            overviewSection.AddRow(debugLoggingRow);
             overviewSection.AddRow(CreateTextTileRow(
                 L("Settings.UsageHelp"),
                 L("About.HowToUseDetailed")));
@@ -782,6 +834,191 @@ internal sealed partial class TrayContext
         };
         onCreated?.Invoke(toggle, row);
         return row;
+    }
+
+    private Control CreateDebugLoggingControls()
+    {
+        var host = new TableLayoutPanel
+        {
+            AutoSize = false,
+            Width = 300,
+            Height = 44,
+            ColumnCount = 2,
+            RowCount = 1,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0),
+            Padding = new Padding(0)
+        };
+        host.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+        host.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 188));
+        host.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
+
+        var openLogButton = new ModernButton
+        {
+            Text = L("About.OpenLog"),
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0, 2, 8, 2)
+        };
+        openLogButton.ApplyTheme(CurrentTheme, emphasis: false);
+        openLogButton.Click += (_, _) => OpenLogFile();
+        host.Controls.Add(openLogButton, 0, 0);
+
+        var toggle = new ToggleSwitchControl(CurrentTheme)
+        {
+            IsOn = _debugLoggingEnabled,
+            Anchor = AnchorStyles.Right,
+            Margin = new Padding(0, 2, 0, 2)
+        };
+        toggle.Click += (_, _) =>
+        {
+            _debugLoggingEnabled = toggle.IsOn;
+            ErrorLog.Configure(_debugLoggingEnabled, AppInfo.VersionHash);
+            SaveSettings();
+        };
+        host.Controls.Add(toggle, 1, 0);
+
+        return host;
+    }
+
+    private static void OpenLogFile()
+    {
+        string logPath = AppPaths.AppDataLogPath;
+        try
+        {
+            string? directory = Path.GetDirectoryName(logPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            ErrorLog.EnsureLogFileExists();
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = logPath,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("OpenLog", ex);
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "notepad.exe",
+                    Arguments = "\"" + logPath + "\"",
+                    UseShellExecute = false
+                });
+            }
+            catch
+            {
+                // Best effort.
+            }
+        }
+    }
+
+    private void RepairStartupServiceNow()
+    {
+        try
+        {
+            string? exePath = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(exePath))
+            {
+                return;
+            }
+
+            Process? process = Process.Start(new ProcessStartInfo
+            {
+                FileName = exePath,
+                UseShellExecute = true,
+                Verb = "runas",
+                Arguments = "--install-startup-task --startup-task-user " + QuoteProcessArgument(Environment.UserDomainName + "\\" + Environment.UserName)
+            });
+            ScheduleStartupStatusRefresh(3500);
+            ScheduleStartupStatusRefresh(9000);
+            if (process != null)
+            {
+                process.EnableRaisingEvents = true;
+                process.Exited += (_, _) => ScheduleStartupStatusRefresh(800);
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("StartupRepair", ex);
+        }
+    }
+
+    private static string QuoteProcessArgument(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return "\"\"";
+        }
+
+        if (value.IndexOfAny([' ', '\t', '\n', '\r', '"']) < 0)
+        {
+            return value;
+        }
+
+        var quoted = new StringBuilder();
+        quoted.Append('"');
+        int backslashCount = 0;
+        foreach (char c in value)
+        {
+            if (c == '\\')
+            {
+                backslashCount++;
+                continue;
+            }
+
+            if (c == '"')
+            {
+                quoted.Append('\\', (backslashCount * 2) + 1);
+                quoted.Append('"');
+                backslashCount = 0;
+                continue;
+            }
+
+            if (backslashCount > 0)
+            {
+                quoted.Append('\\', backslashCount);
+                backslashCount = 0;
+            }
+
+            quoted.Append(c);
+        }
+
+        if (backslashCount > 0)
+        {
+            quoted.Append('\\', backslashCount * 2);
+        }
+
+        quoted.Append('"');
+        return quoted.ToString();
+    }
+
+    private void ScheduleStartupStatusRefresh(int delayMs)
+    {
+        if (_settingsWindow == null || _settingsWindow.IsDisposed)
+        {
+            return;
+        }
+
+        var timer = new System.Windows.Forms.Timer { Interval = delayMs };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            timer.Dispose();
+            if (_settingsWindow == null || _settingsWindow.IsDisposed)
+            {
+                return;
+            }
+
+            StartupTaskService.InvalidateCache();
+            RefreshSettingsWindow(SettingsPage.About);
+        };
+        timer.Start();
     }
 
     private SettingsRow CreateSliderRow(string title, string description, int value, int min, int max, int step, Func<int, string> valueFormatter, Action<int> onChanged, int rightColumnWidth = 420)
@@ -899,8 +1136,8 @@ internal sealed partial class TrayContext
     {
         var badge = new KeyBadgeControl(CurrentTheme, currentKeyLabel)
         {
-            Width = 198,
-            Height = 34,
+            Width = 180,
+            Height = 74,
             Dock = DockStyle.Fill
         };
         badge.ApplyTheme(CurrentTheme);
@@ -913,7 +1150,173 @@ internal sealed partial class TrayContext
             }
         };
 
-        return new SettingsRow(CurrentTheme, title, description, badge, Math.Max(198, rightColumnWidth), compactDescription: compact);
+        return new SettingsRow(CurrentTheme, title, description, badge, Math.Max(180, rightColumnWidth), compactDescription: compact);
+    }
+
+    private string KeyBadgeLabel(Keys key)
+    {
+        return key is Keys.LWin or Keys.RWin ? "Win" : KeyLabel(key);
+    }
+
+    private void ApplyShortcutValidation(SettingsRow? row, ShortcutValidation validation)
+    {
+        if (row == null)
+        {
+            return;
+        }
+
+        Color color = validation.Level == ShortcutValidationLevel.Error
+            ? ShortcutErrorColor()
+            : ShortcutWarningColor();
+        row.SetStatus(validation.Text, color);
+    }
+
+    private ShortcutValidation GetShortcutValidation(ShortcutKeyRole role)
+    {
+        Keys key = GetShortcutKey(role);
+        if (!IsSupportedShortcutKey(key))
+        {
+            return new ShortcutValidation(ShortcutValidationLevel.Error, L("Settings.ShortcutErrorUnsupported"));
+        }
+
+        string conflictNames = GetShortcutConflictNames(role, key);
+        if (!string.IsNullOrWhiteSpace(conflictNames))
+        {
+            return new ShortcutValidation(ShortcutValidationLevel.Error, L("Settings.ShortcutErrorConflictWith", conflictNames));
+        }
+
+        if (role == ShortcutKeyRole.Enable && IsWindowsKey(key))
+        {
+            return new ShortcutValidation(ShortcutValidationLevel.Warning, L("Settings.ShortcutWarningWindowsKey"));
+        }
+
+        if (role == ShortcutKeyRole.Enable && IsNotRecommendedEnableKey(key))
+        {
+            return new ShortcutValidation(ShortcutValidationLevel.Warning, L("Settings.ShortcutWarningEnableKey", KeyLabel(key)));
+        }
+
+        if (!IsRecommendedShortcutKey(key))
+        {
+            return new ShortcutValidation(ShortcutValidationLevel.Warning, L("Settings.ShortcutWarningNotRecommended"));
+        }
+
+        return new ShortcutValidation(ShortcutValidationLevel.None, string.Empty);
+    }
+
+    private Keys GetShortcutKey(ShortcutKeyRole role) => role switch
+    {
+        ShortcutKeyRole.Invert => _invertKey,
+        ShortcutKeyRole.FollowCursor => _followCursorKey,
+        _ => _enableKey
+    };
+
+    private string GetShortcutConflictNames(ShortcutKeyRole role, Keys key)
+    {
+        var conflicts = new List<string>();
+        foreach (ShortcutKeyRole otherRole in Enum.GetValues<ShortcutKeyRole>())
+        {
+            if (otherRole != role && ShortcutKeyConflictId(GetShortcutKey(otherRole)) == ShortcutKeyConflictId(key))
+            {
+                conflicts.Add(GetShortcutRoleLabel(otherRole));
+            }
+        }
+
+        return string.Join(", ", conflicts);
+    }
+
+    private static string ShortcutKeyConflictId(Keys key)
+    {
+        return key switch
+        {
+            Keys.ControlKey or Keys.LControlKey or Keys.RControlKey => "Ctrl",
+            Keys.Menu or Keys.LMenu or Keys.RMenu => "Alt",
+            Keys.ShiftKey or Keys.LShiftKey or Keys.RShiftKey => "Shift",
+            Keys.LWin or Keys.RWin => "Win",
+            (Keys)FnVirtualKey => "Fn",
+            _ => ((int)key).ToString(System.Globalization.CultureInfo.InvariantCulture)
+        };
+    }
+
+    private string GetShortcutRoleLabel(ShortcutKeyRole role) => role switch
+    {
+        ShortcutKeyRole.Invert => L("Settings.InvertActivationKey"),
+        ShortcutKeyRole.FollowCursor => L("Settings.FollowCursorHotkey"),
+        _ => L("Settings.EnableKey")
+    };
+
+    private static bool IsSupportedShortcutKey(Keys key)
+    {
+        if (key == (Keys)FnVirtualKey)
+        {
+            return true;
+        }
+
+        return key != Keys.None &&
+               key != Keys.KeyCode &&
+               key != Keys.Modifiers &&
+               key != Keys.ProcessKey &&
+               key != Keys.Packet;
+    }
+
+    private static bool IsNotRecommendedEnableKey(Keys key)
+    {
+        return key is Keys.RMenu or Keys.Enter or Keys.Return ||
+               key == (Keys)FnVirtualKey;
+    }
+
+    private static bool IsWindowsKey(Keys key)
+    {
+        return key is Keys.LWin or Keys.RWin;
+    }
+
+    private static bool IsRecommendedShortcutKey(Keys key)
+    {
+        if (key is Keys.ControlKey or Keys.LControlKey or Keys.RControlKey ||
+            key is Keys.ShiftKey or Keys.LShiftKey or Keys.RShiftKey ||
+            key is Keys.Menu or Keys.LMenu ||
+            key == Keys.Tab)
+        {
+            return true;
+        }
+
+        if (key is Keys.Oemcomma or Keys.OemPeriod or Keys.OemMinus or Keys.Subtract)
+        {
+            return false;
+        }
+
+        return IsLetterKey(key) || IsNumberKey(key) || IsFunctionKey(key) || IsNonNordicPunctuationKey(key);
+    }
+
+    private static bool IsLetterKey(Keys key)
+    {
+        return (key >= Keys.A && key <= Keys.Z) ||
+               key is Keys.Oem1 or Keys.Oem3 or Keys.Oem4 or Keys.Oem6 or Keys.Oem7 or Keys.Oem102;
+    }
+
+    private static bool IsFunctionKey(Keys key)
+    {
+        return key >= Keys.F1 && key <= Keys.F12;
+    }
+
+    private static bool IsNonNordicPunctuationKey(Keys key)
+    {
+        return key is Keys.Oem1 or Keys.Oem4 or Keys.Oem7;
+    }
+
+    private static bool IsNumberKey(Keys key)
+    {
+        return (key >= Keys.D0 && key <= Keys.D9) ||
+               (key >= Keys.NumPad0 && key <= Keys.NumPad9);
+    }
+
+    private Color ShortcutWarningColor()
+    {
+        return _useDarkTheme ? Color.FromArgb(250, 204, 21) : Color.FromArgb(202, 138, 4);
+    }
+
+    private Color ShortcutErrorColor()
+    {
+        return _useDarkTheme ? Color.FromArgb(248, 113, 113) : Color.FromArgb(220, 38, 38);
     }
 
     private SettingsRow CreateInfoRow(string title, string value, string description, Control? actionButton = null, int rightColumnWidth = 240)
@@ -1011,6 +1414,36 @@ internal sealed partial class TrayContext
         return DisplaySelectionMode.AllDisplays;
     }
 
+    private string[] BuildFpsItems() =>
+    [
+        "60 Hz",
+        "90 Hz",
+        "120 Hz",
+        "180 Hz",
+        "240 Hz",
+        FpsLabel(UnlimitedFps)
+    ];
+
+    private string FpsLabel(int fps) => fps == UnlimitedFps ? $"Unlimited ({GetUnlimitedRenderingFps()} Hz)" : fps + " Hz";
+
+    private static int ParseFpsLabel(string value)
+    {
+        if (value.StartsWith("Unlimited", StringComparison.OrdinalIgnoreCase))
+        {
+            return UnlimitedFps;
+        }
+
+        foreach (int fps in _fpsOptions)
+        {
+            if (value.StartsWith(fps.ToString(), StringComparison.Ordinal))
+            {
+                return fps;
+            }
+        }
+
+        return _fpsOptions[0];
+    }
+
     private string[] BuildThemeModeItems() => [L("Settings.ThemeAuto"), L("Settings.ThemeDark"), L("Settings.ThemeLight")];
 
     private static Color[] BuildCursorColorPalette() =>
@@ -1081,13 +1514,14 @@ internal sealed partial class TrayContext
         {
             AutoSize = false,
             Width = width,
-            Height = 38,
+            Height = 44,
             ColumnCount = buttons.Length,
             RowCount = 1,
             BackColor = Color.Transparent,
             Margin = new Padding(0),
             Padding = new Padding(0)
         };
+        host.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
 
         for (int i = 0; i < buttons.Length; i++)
         {
@@ -1099,7 +1533,7 @@ internal sealed partial class TrayContext
                 Text = buttonSpec.Text,
                 Enabled = buttonSpec.Enabled,
                 Dock = DockStyle.Fill,
-                Margin = new Padding(i == 0 ? 0 : 8, 0, 0, 0)
+                Margin = new Padding(i == 0 ? 0 : 8, 2, 0, 2)
             };
             button.ApplyTheme(CurrentTheme, emphasis: false);
             button.Click += (_, _) => buttonSpec.OnClick();

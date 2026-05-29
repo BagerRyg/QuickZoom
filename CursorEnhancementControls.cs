@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.Windows.Forms;
 
 namespace QuickZoom;
@@ -263,6 +264,8 @@ internal sealed class ColorSwatchControl : Control
 internal sealed class CursorPreviewControl : Control
 {
     private ThemePalette _palette;
+    private const int PreviewSlotSize = 104;
+    private const int PreviewBaseCursorSize = 32;
 
     public CursorPreviewControl(ThemePalette palette, Color fillColor, Color borderColor, int scalePercent)
     {
@@ -277,8 +280,8 @@ internal sealed class CursorPreviewControl : Control
             ControlStyles.SupportsTransparentBackColor |
             ControlStyles.UserPaint,
             true);
-        Width = 260;
-        Height = 58;
+        Width = 380;
+        Height = 112;
         Margin = new Padding(0);
         BackColor = Color.Transparent;
     }
@@ -311,64 +314,121 @@ internal sealed class CursorPreviewControl : Control
         e.Graphics.FillPath(surfaceBrush, surfacePath);
         e.Graphics.DrawPath(surfaceBorder, surfacePath);
 
-        using SolidBrush fill = new(FillColor);
-        int scale = Math.Clamp((int)Math.Round(ScalePercent / 100d), 1, 5);
-        using Pen border = new(BorderColor, Math.Max(2f, scale));
-
-        DrawArrow(e.Graphics, fill, border, new Point(28, 8), scale);
-        DrawIBeam(e.Graphics, fill, border, new Rectangle(104, 10, 30, 34), scale);
-        DrawHand(e.Graphics, fill, border, new Point(180, 4), scale);
+        DrawCursorPreview(e.Graphics, Cursors.Default, new Rectangle(6, 4, PreviewSlotSize, PreviewSlotSize));
+        DrawCursorPreview(e.Graphics, Cursors.IBeam, new Rectangle(138, 4, PreviewSlotSize, PreviewSlotSize));
+        DrawCursorPreview(e.Graphics, Cursors.Hand, new Rectangle(270, 4, PreviewSlotSize, PreviewSlotSize));
     }
 
-    private static void DrawArrow(Graphics graphics, Brush fill, Pen border, Point origin, int scale)
+    private void DrawCursorPreview(Graphics graphics, Cursor cursor, Rectangle slot)
     {
-        using GraphicsPath path = new();
-        path.AddPolygon(
-        [
-            new Point(origin.X, origin.Y),
-            new Point(origin.X + 34, origin.Y + 25),
-            new Point(origin.X + 19, origin.Y + 27),
-            new Point(origin.X + 27, origin.Y + 43),
-            new Point(origin.X + 20, origin.Y + 47),
-            new Point(origin.X + 12, origin.Y + 31),
-            new Point(origin.X, origin.Y + 39)
-        ]);
-        graphics.DrawPath(border, path);
-        graphics.FillPath(fill, path);
+        double scale = Math.Clamp(ScalePercent, 100, 300) / 100d;
+        int cursorSize = Math.Clamp((int)Math.Round(PreviewBaseCursorSize * scale), PreviewBaseCursorSize, PreviewSlotSize);
+        Rectangle bounds = new(
+            slot.Left + ((slot.Width - cursorSize) / 2),
+            slot.Top + ((slot.Height - cursorSize) / 2),
+            cursorSize,
+            cursorSize);
+
+        using Bitmap source = new(cursorSize, cursorSize, PixelFormat.Format32bppArgb);
+        using (Graphics sourceGraphics = Graphics.FromImage(source))
+        {
+            sourceGraphics.Clear(Color.Transparent);
+            sourceGraphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            sourceGraphics.PixelOffsetMode = PixelOffsetMode.Half;
+            cursor.DrawStretched(sourceGraphics, new Rectangle(Point.Empty, source.Size));
+        }
+
+        using Bitmap recolored = RecolorCursorPreview(source);
+        Rectangle visibleBounds = GetVisibleBounds(recolored);
+        int slotCenterX = slot.Left + (slot.Width / 2);
+        int slotCenterY = slot.Top + (slot.Height / 2);
+        int drawX = slotCenterX - visibleBounds.Left - (visibleBounds.Width / 2);
+        int drawY = slotCenterY - visibleBounds.Top - (visibleBounds.Height / 2);
+        graphics.DrawImage(recolored, new Rectangle(drawX, drawY, recolored.Width, recolored.Height));
     }
 
-    private static void DrawIBeam(Graphics graphics, Brush fill, Pen border, Rectangle bounds, int scale)
+    private Bitmap RecolorCursorPreview(Bitmap source)
     {
-        using Pen fillPen = new((fill as SolidBrush)?.Color ?? Color.White, Math.Max(4f, 3f + scale));
-        using Pen borderPen = new(border.Color, fillPen.Width + Math.Max(3f, scale));
-        graphics.DrawLine(borderPen, bounds.Left + (bounds.Width / 2), bounds.Top, bounds.Left + (bounds.Width / 2), bounds.Bottom);
-        graphics.DrawLine(borderPen, bounds.Left, bounds.Top, bounds.Right, bounds.Top);
-        graphics.DrawLine(borderPen, bounds.Left, bounds.Bottom, bounds.Right, bounds.Bottom);
-        graphics.DrawLine(fillPen, bounds.Left + (bounds.Width / 2), bounds.Top, bounds.Left + (bounds.Width / 2), bounds.Bottom);
-        graphics.DrawLine(fillPen, bounds.Left, bounds.Top, bounds.Right, bounds.Top);
-        graphics.DrawLine(fillPen, bounds.Left, bounds.Bottom, bounds.Right, bounds.Bottom);
+        int outlineRadius = Math.Max(1, (int)Math.Round(ScalePercent / 100d));
+        int width = source.Width;
+        int height = source.Height;
+        bool[,] mask = new bool[width, height];
+        var output = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                mask[x, y] = source.GetPixel(x, y).A > 16;
+            }
+        }
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                if (mask[x, y])
+                {
+                    output.SetPixel(x, y, Color.FromArgb(source.GetPixel(x, y).A, FillColor));
+                    continue;
+                }
+
+                if (HasNeighbor(mask, x, y, outlineRadius))
+                {
+                    output.SetPixel(x, y, BorderColor);
+                }
+            }
+        }
+
+        return output;
     }
 
-    private static void DrawHand(Graphics graphics, Brush fill, Pen border, Point origin, int scale)
+    private static bool HasNeighbor(bool[,] mask, int x, int y, int radius)
     {
-        using GraphicsPath path = new();
-        path.AddLines(
-        [
-            new Point(origin.X + 8, origin.Y + 37),
-            new Point(origin.X + 8, origin.Y + 20),
-            new Point(origin.X + 16, origin.Y + 20),
-            new Point(origin.X + 16, origin.Y + 31),
-            new Point(origin.X + 22, origin.Y + 8),
-            new Point(origin.X + 30, origin.Y + 10),
-            new Point(origin.X + 28, origin.Y + 32),
-            new Point(origin.X + 36, origin.Y + 16),
-            new Point(origin.X + 44, origin.Y + 20),
-            new Point(origin.X + 38, origin.Y + 38),
-            new Point(origin.X + 30, origin.Y + 48),
-            new Point(origin.X + 14, origin.Y + 48)
-        ]);
-        path.CloseFigure();
-        graphics.DrawPath(border, path);
-        graphics.FillPath(fill, path);
+        int width = mask.GetLength(0);
+        int height = mask.GetLength(1);
+
+        for (int dy = -radius; dy <= radius; dy++)
+        {
+            for (int dx = -radius; dx <= radius; dx++)
+            {
+                int nx = x + dx;
+                int ny = y + dy;
+                if (nx >= 0 && ny >= 0 && nx < width && ny < height && mask[nx, ny])
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static Rectangle GetVisibleBounds(Bitmap bitmap)
+    {
+        int left = bitmap.Width;
+        int top = bitmap.Height;
+        int right = -1;
+        int bottom = -1;
+
+        for (int y = 0; y < bitmap.Height; y++)
+        {
+            for (int x = 0; x < bitmap.Width; x++)
+            {
+                if (bitmap.GetPixel(x, y).A <= 16)
+                {
+                    continue;
+                }
+
+                left = Math.Min(left, x);
+                top = Math.Min(top, y);
+                right = Math.Max(right, x);
+                bottom = Math.Max(bottom, y);
+            }
+        }
+
+        return right < left || bottom < top
+            ? new Rectangle(0, 0, bitmap.Width, bitmap.Height)
+            : Rectangle.FromLTRB(left, top, right + 1, bottom + 1);
     }
 }

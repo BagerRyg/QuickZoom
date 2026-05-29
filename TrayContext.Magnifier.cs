@@ -946,7 +946,18 @@ internal sealed partial class TrayContext
 
     private int GetEffectiveRenderingFps()
     {
-        return Math.Clamp(_fps, 30, 360);
+        return _fps == UnlimitedFps ? GetUnlimitedRenderingFps() : Math.Clamp(_fps, 60, 240);
+    }
+
+    private int GetUnlimitedRenderingFps()
+    {
+        int refreshRate = 60;
+        foreach (Screen screen in Screen.AllScreens)
+        {
+            refreshRate = Math.Max(refreshRate, GetScreenRefreshRate(screen));
+        }
+
+        return refreshRate;
     }
 
     private int GetScreenRefreshRate(Screen screen)
@@ -960,7 +971,7 @@ internal sealed partial class TrayContext
 
             if (EnumDisplaySettings(screen.DeviceName, ENUM_CURRENT_SETTINGS, ref mode) && mode.dmDisplayFrequency > 0)
             {
-                return (int)Math.Clamp(mode.dmDisplayFrequency, 30u, 360u);
+                return (int)Math.Clamp(mode.dmDisplayFrequency, 30u, 1000u);
             }
         }
         catch

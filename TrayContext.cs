@@ -125,6 +125,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private bool _useFullscreenBackend;
     private bool _centerCursor;
     private bool _suppressAltKeyInOfficeApps;
+    private bool _debugLoggingEnabled;
     private bool _wiggleSpotlightEnabled = true;
     private bool _cursorEnhancementEnabled;
     private int _cursorScale = 100;
@@ -144,6 +145,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private bool _enableKeyPressed;
     private bool _invertKeyPressed;
     private bool _followCursorKeyPressed;
+    private bool _controlKeyPressed;
     private bool _suppressEnableKeyForForeground;
     private bool _pendingExitConfirmation;
 
@@ -182,7 +184,9 @@ internal sealed partial class TrayContext : ApplicationContext
 
     // Refresh rate
     private int _fps = 120;
-    private static readonly int[] _fpsOptions = [30, 40, 50, 60, 90, 120];
+    private const int UnlimitedFps = 0;
+    private static readonly int[] _fpsOptions = [60, 90, 120, 180, 240];
+    private const int FnVirtualKey = 0xFF;
     private readonly HashSet<string> _selectedMonitorDeviceNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, MonitorMagnifierWindow> _monitorWindows = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Point> _lastAnchorByMonitor = new(StringComparer.OrdinalIgnoreCase);

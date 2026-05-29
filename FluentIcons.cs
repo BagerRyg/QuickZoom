@@ -95,85 +95,85 @@ internal static partial class FluentTrayIcons
                 switch (command)
                 {
                     case 'M':
-                    {
-                        PointF next = ReadPoint(tokens, ref index);
-                        if (hasOpenFigure)
                         {
-                            path.CloseFigure();
+                            PointF next = ReadPoint(tokens, ref index);
+                            if (hasOpenFigure)
+                            {
+                                path.CloseFigure();
+                            }
+
+                            current = next;
+                            figureStart = next;
+                            hasOpenFigure = true;
+
+                            while (HasNumericPair(tokens, index))
+                            {
+                                PointF lineEnd = ReadPoint(tokens, ref index);
+                                path.AddLine(current, lineEnd);
+                                current = lineEnd;
+                            }
+
+                            break;
                         }
-
-                        current = next;
-                        figureStart = next;
-                        hasOpenFigure = true;
-
-                        while (HasNumericPair(tokens, index))
-                        {
-                            PointF lineEnd = ReadPoint(tokens, ref index);
-                            path.AddLine(current, lineEnd);
-                            current = lineEnd;
-                        }
-
-                        break;
-                    }
                     case 'L':
-                    {
-                        while (HasNumericPair(tokens, index))
                         {
-                            PointF lineEnd = ReadPoint(tokens, ref index);
-                            path.AddLine(current, lineEnd);
-                            current = lineEnd;
-                        }
+                            while (HasNumericPair(tokens, index))
+                            {
+                                PointF lineEnd = ReadPoint(tokens, ref index);
+                                path.AddLine(current, lineEnd);
+                                current = lineEnd;
+                            }
 
-                        break;
-                    }
+                            break;
+                        }
                     case 'H':
-                    {
-                        while (HasNumeric(tokens, index))
                         {
-                            float x = ReadNumber(tokens, ref index);
-                            PointF lineEnd = new(x, current.Y);
-                            path.AddLine(current, lineEnd);
-                            current = lineEnd;
-                        }
+                            while (HasNumeric(tokens, index))
+                            {
+                                float x = ReadNumber(tokens, ref index);
+                                PointF lineEnd = new(x, current.Y);
+                                path.AddLine(current, lineEnd);
+                                current = lineEnd;
+                            }
 
-                        break;
-                    }
+                            break;
+                        }
                     case 'V':
-                    {
-                        while (HasNumeric(tokens, index))
                         {
-                            float y = ReadNumber(tokens, ref index);
-                            PointF lineEnd = new(current.X, y);
-                            path.AddLine(current, lineEnd);
-                            current = lineEnd;
-                        }
+                            while (HasNumeric(tokens, index))
+                            {
+                                float y = ReadNumber(tokens, ref index);
+                                PointF lineEnd = new(current.X, y);
+                                path.AddLine(current, lineEnd);
+                                current = lineEnd;
+                            }
 
-                        break;
-                    }
+                            break;
+                        }
                     case 'C':
-                    {
-                        while (HasNumeric(tokens, index))
                         {
-                            PointF c1 = ReadPoint(tokens, ref index);
-                            PointF c2 = ReadPoint(tokens, ref index);
-                            PointF end = ReadPoint(tokens, ref index);
-                            path.AddBezier(current, c1, c2, end);
-                            current = end;
-                        }
+                            while (HasNumeric(tokens, index))
+                            {
+                                PointF c1 = ReadPoint(tokens, ref index);
+                                PointF c2 = ReadPoint(tokens, ref index);
+                                PointF end = ReadPoint(tokens, ref index);
+                                path.AddBezier(current, c1, c2, end);
+                                current = end;
+                            }
 
-                        break;
-                    }
+                            break;
+                        }
                     case 'Z':
-                    {
-                        if (hasOpenFigure)
                         {
-                            path.CloseFigure();
-                            current = figureStart;
-                            hasOpenFigure = false;
-                        }
+                            if (hasOpenFigure)
+                            {
+                                path.CloseFigure();
+                                current = figureStart;
+                                hasOpenFigure = false;
+                            }
 
-                        break;
-                    }
+                            break;
+                        }
                     default:
                         throw new NotSupportedException($"Unsupported SVG path command '{command}'.");
                 }

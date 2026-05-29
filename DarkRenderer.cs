@@ -32,10 +32,10 @@ internal static class ThemePalettes
         DisabledText = Color.FromArgb(125, 135, 150),
         Separator = Color.FromArgb(42, 48, 58),
         ControlBackground = Color.FromArgb(24, 28, 35),
-        ButtonBackground = Color.FromArgb(27, 32, 40),
+        ButtonBackground = Color.FromArgb(19, 23, 30),
         Border = Color.FromArgb(42, 48, 58),
-        ButtonHover = Color.FromArgb(35, 42, 53),
-        ButtonPressed = Color.FromArgb(46, 54, 66),
+        ButtonHover = Color.FromArgb(31, 38, 49),
+        ButtonPressed = Color.FromArgb(40, 49, 62),
         Accent = Color.FromArgb(34, 197, 94),
         AccentHover = Color.FromArgb(45, 212, 106),
         AccentPressed = Color.FromArgb(28, 176, 84)

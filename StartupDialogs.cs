@@ -35,6 +35,93 @@ internal static class StartupDialogs
         _ = ShowDialogCore(title, heading, body, UiText.Get(language, "Common.Ok"), null);
     }
 
+    public static void ShowTrayInfo(string title, string heading, string body)
+    {
+        ApplyStartupFontScale();
+        UiLanguage language = UiText.GetStartupLanguage();
+        ThemePalette palette = GetWindowsAppsUseDarkMode() ? ThemePalettes.Dark : ThemePalettes.Light;
+
+        using var form = new Form
+        {
+            Text = title,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            StartPosition = FormStartPosition.Manual,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            AutoScaleMode = AutoScaleMode.Dpi,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            BackColor = palette.MenuBackground,
+            ForeColor = palette.Text,
+            Padding = new Padding(0),
+            MinimumSize = new Size(ControlDrawing.ScaleLogical(new Control(), 420), 0)
+        };
+        form.HandleCreated += (_, _) => TrySetDarkTitleBar(form.Handle, palette.Equals(ThemePalettes.Dark));
+
+        var root = new TableLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            RowCount = 3,
+            Padding = new Padding(18),
+            Margin = new Padding(0),
+            BackColor = palette.MenuBackground
+        };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, ControlDrawing.ScaleLogical(form, 46)));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var icon = new StartupInfoIconControl(palette)
+        {
+            Width = ControlDrawing.ScaleLogical(form, 30),
+            Height = ControlDrawing.ScaleLogical(form, 30),
+            Margin = new Padding(0, 2, 14, 0)
+        };
+        root.Controls.Add(icon, 0, 0);
+        root.SetRowSpan(icon, 2);
+
+        root.Controls.Add(new Label
+        {
+            Text = heading,
+            AutoSize = true,
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 10.5f, FontStyle.Bold),
+            ForeColor = palette.Text,
+            BackColor = Color.Transparent,
+            MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 340), 0),
+            Margin = new Padding(0, 0, 0, 5)
+        }, 1, 0);
+
+        root.Controls.Add(new Label
+        {
+            Text = body,
+            AutoSize = true,
+            Font = ControlDrawing.UiFont("Segoe UI", 9f, FontStyle.Regular),
+            ForeColor = palette.SecondaryText,
+            BackColor = Color.Transparent,
+            MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 340), 0),
+            Margin = new Padding(0)
+        }, 1, 1);
+
+        var ok = CreateButton(UiText.Get(language, "Common.Ok"), DialogResult.OK, palette, true);
+        ok.Margin = new Padding(0, 14, 0, 0);
+        root.Controls.Add(ok, 1, 2);
+
+        form.Controls.Add(root);
+        form.AcceptButton = ok;
+        form.CancelButton = ok;
+        form.Shown += (_, _) =>
+        {
+            Rectangle area = Screen.PrimaryScreen?.WorkingArea ?? SystemInformation.WorkingArea;
+            form.Location = new Point(area.Right - form.Width - 18, area.Bottom - form.Height - 18);
+        };
+
+        _ = form.ShowDialog();
+    }
+
     public static void ShowTimedSuccess(string title, string heading, string body, int secondsUntilClose)
     {
         UiLanguage language = UiText.GetStartupLanguage();
@@ -56,10 +143,10 @@ internal static class StartupDialogs
             ControlBox = false,
             ShowInTaskbar = false,
             AutoScaleMode = AutoScaleMode.Dpi,
-            ClientSize = new Size(ControlDrawing.ScaleLogical(new Control(), 520), ControlDrawing.ScaleLogical(new Control(), 174)),
+            ClientSize = new Size(ControlDrawing.ScaleLogical(new Control(), 640), ControlDrawing.ScaleLogical(new Control(), 160)),
             BackColor = palette.MenuBackground,
             ForeColor = palette.Text,
-            Padding = new Padding(22, 20, 22, 20)
+            Padding = new Padding(0)
         };
 
         form.HandleCreated += (_, _) => TrySetDarkTitleBar(form.Handle, palette.Equals(ThemePalettes.Dark));
@@ -70,29 +157,29 @@ internal static class StartupDialogs
             ColumnCount = 2,
             RowCount = 2,
             Margin = new Padding(0),
-            Padding = new Padding(0),
+            Padding = new Padding(28, 22, 28, 18),
             BackColor = palette.MenuBackground
         };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, ControlDrawing.ScaleLogical(form, 72)));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, ControlDrawing.ScaleLogical(form, 80)));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var spinner = new StartupSpinnerControl(palette)
         {
             Width = ControlDrawing.ScaleLogical(form, 52),
             Height = ControlDrawing.ScaleLogical(form, 52),
-            Margin = new Padding(0, 2, 20, 0)
+            Margin = new Padding(0, 2, 24, 0)
         };
 
         var headingLabel = new Label
         {
             AutoSize = true,
             Text = heading,
-            Font = ControlDrawing.UiFont("Segoe UI Semibold", 12f, FontStyle.Bold),
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 12.5f, FontStyle.Bold),
             ForeColor = palette.Text,
             BackColor = palette.MenuBackground,
-            MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 410), 0),
+            MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 500), 0),
             Margin = new Padding(0, 0, 0, 8)
         };
 
@@ -101,9 +188,9 @@ internal static class StartupDialogs
             AutoSize = true,
             Text = body,
             Font = ControlDrawing.UiFont("Segoe UI", 10f, FontStyle.Regular),
-            ForeColor = palette.Text,
+            ForeColor = palette.SecondaryText,
             BackColor = palette.MenuBackground,
-            MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 410), 0),
+            MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 500), 0),
             Margin = new Padding(0)
         };
 
@@ -184,7 +271,8 @@ internal static class StartupDialogs
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             BackColor = palette.MenuBackground,
             ForeColor = palette.Text,
-            Padding = new Padding(0)
+            Padding = new Padding(0),
+            MinimumSize = new Size(ControlDrawing.ScaleLogical(new Control(), 560), 0)
         };
 
         form.HandleCreated += (_, _) => TrySetDarkTitleBar(form.Handle, palette.Equals(ThemePalettes.Dark));
@@ -201,45 +289,55 @@ internal static class StartupDialogs
             BackColor = palette.MenuBackground
         };
 
-        var headerPanel = new Panel
+        var headerPanel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             AutoSize = true,
-            Padding = new Padding(22, 20, 22, 8),
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1,
+            RowCount = 1,
+            Padding = new Padding(28, 24, 28, 8),
             Margin = new Padding(0),
             BackColor = palette.MenuBackground
         };
+        headerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        headerPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var headingLabel = new Label
         {
             AutoSize = true,
             Text = heading,
-            Font = ControlDrawing.UiFont("Segoe UI Semibold", 12f, FontStyle.Bold),
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 12.2f, FontStyle.Bold),
             ForeColor = palette.Text,
             BackColor = palette.MenuBackground,
-            MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 460), 0)
+            MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 500), 0)
         };
-        headerPanel.Controls.Add(headingLabel);
+        headerPanel.Controls.Add(headingLabel, 0, 0);
 
-        var bodyPanel = new Panel
+        var bodyPanel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             AutoSize = true,
-            Padding = new Padding(22, 0, 22, 20),
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1,
+            RowCount = 1,
+            Padding = new Padding(28, 0, 28, 22),
             Margin = new Padding(0),
             BackColor = palette.MenuBackground
         };
+        bodyPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        bodyPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var bodyLabel = new Label
         {
             AutoSize = true,
             Text = body,
             Font = ControlDrawing.UiFont("Segoe UI", 10f, FontStyle.Regular),
-            ForeColor = palette.Text,
+            ForeColor = palette.SecondaryText,
             BackColor = palette.MenuBackground,
-            MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 460), 0)
+            MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 500), 0)
         };
-        bodyPanel.Controls.Add(bodyLabel);
+        bodyPanel.Controls.Add(bodyLabel, 0, 0);
 
         var buttons = new FlowLayoutPanel
         {
@@ -248,9 +346,11 @@ internal static class StartupDialogs
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             FlowDirection = FlowDirection.RightToLeft,
             WrapContents = false,
-            Padding = new Padding(16),
+            Padding = new Padding(28, 16, 28, 18),
             Margin = new Padding(0),
-            BackColor = palette.ControlBackground
+            BackColor = palette.MenuBackground.GetBrightness() < 0.5f
+                ? Color.FromArgb(18, 22, 29)
+                : Color.FromArgb(246, 248, 251)
         };
 
         var primary = CreateButton(primaryText, DialogResult.OK, palette, true);
@@ -269,7 +369,7 @@ internal static class StartupDialogs
         form.Controls.Add(root);
         form.AcceptButton = primary;
         form.CancelButton = secondary ?? primary;
-        form.MinimumSize = new Size(ControlDrawing.ScaleLogical(form, 520), 0);
+        form.MinimumSize = new Size(ControlDrawing.ScaleLogical(form, 560), 0);
 
         if (autoCloseSeconds > 0)
         {
@@ -300,8 +400,22 @@ internal static class StartupDialogs
 
     private static Button CreateButton(string text, DialogResult result, ThemePalette palette, bool primary)
     {
-        Color backColor = primary ? palette.ButtonHover : palette.ButtonBackground;
-        Color borderColor = primary ? palette.ButtonHover : palette.Border;
+        bool lightPalette = palette.MenuBackground.GetBrightness() > 0.65f;
+        Color backColor = primary
+            ? (lightPalette ? Color.FromArgb(242, 250, 245) : Color.FromArgb(24, 39, 31))
+            : (lightPalette ? Color.FromArgb(253, 247, 247) : Color.FromArgb(38, 30, 32));
+        Color borderColor = primary
+            ? (lightPalette ? Color.FromArgb(92, 166, 112) : Color.FromArgb(72, 145, 96))
+            : (lightPalette ? Color.FromArgb(190, 96, 100) : Color.FromArgb(122, 72, 76));
+        Color hoverColor = primary
+            ? (lightPalette ? Color.FromArgb(224, 244, 231) : Color.FromArgb(30, 54, 40))
+            : (lightPalette ? Color.FromArgb(252, 236, 236) : Color.FromArgb(51, 34, 38));
+        Color pressedColor = primary
+            ? (lightPalette ? Color.FromArgb(206, 235, 216) : Color.FromArgb(36, 70, 50))
+            : (lightPalette ? Color.FromArgb(247, 220, 220) : Color.FromArgb(66, 39, 44));
+        Color textColor = primary
+            ? (lightPalette ? Color.FromArgb(36, 103, 58) : Color.FromArgb(214, 244, 224))
+            : (lightPalette ? Color.FromArgb(128, 50, 56) : Color.FromArgb(244, 210, 214));
 
         return new Button
         {
@@ -313,13 +427,13 @@ internal static class StartupDialogs
             Margin = new Padding(8, 0, 0, 0),
             FlatStyle = FlatStyle.Flat,
             BackColor = backColor,
-            ForeColor = palette.Text,
+            ForeColor = textColor,
             UseVisualStyleBackColor = false,
             FlatAppearance =
             {
                 BorderColor = borderColor,
-                MouseOverBackColor = palette.ButtonHover,
-                MouseDownBackColor = palette.ButtonPressed
+                MouseOverBackColor = hoverColor,
+                MouseDownBackColor = pressedColor
             }
         };
     }
@@ -441,20 +555,65 @@ internal static class StartupDialogs
 
             float centerX = ClientSize.Width / 2f;
             float centerY = ClientSize.Height / 2f;
-            float radius = Math.Max(8f, side * 0.34f);
-            float dotSize = Math.Max(4f, side * 0.13f);
-            Color activeColor = Color.FromArgb(96, 165, 250);
+            float radius = Math.Max(8f, side * 0.32f);
+            float dotSize = Math.Max(3f, side * 0.105f);
+            Color activeColor = _palette.Accent;
 
             for (int i = 0; i < 12; i++)
             {
                 int age = (i - _frame + 12) % 12;
-                int alpha = Math.Max(45, 255 - (age * 18));
+                int alpha = Math.Max(28, 220 - (age * 16));
                 double angle = (Math.PI * 2 * i / 12) - (Math.PI / 2);
                 float x = centerX + (float)Math.Cos(angle) * radius - dotSize / 2f;
                 float y = centerY + (float)Math.Sin(angle) * radius - dotSize / 2f;
                 using var brush = new SolidBrush(Color.FromArgb(alpha, activeColor));
                 e.Graphics.FillEllipse(brush, x, y, dotSize, dotSize);
             }
+        }
+    }
+
+    private sealed class StartupInfoIconControl : Control
+    {
+        private readonly ThemePalette _palette;
+
+        public StartupInfoIconControl(ThemePalette palette)
+        {
+            _palette = palette;
+            DoubleBuffered = true;
+            BackColor = Color.Transparent;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+
+            int side = Math.Min(ClientSize.Width, ClientSize.Height) - 2;
+            if (side <= 0)
+            {
+                return;
+            }
+
+            Rectangle rect = new((ClientSize.Width - side) / 2, (ClientSize.Height - side) / 2, side, side);
+            Color fill = _palette.MenuBackground.GetBrightness() < 0.5f
+                ? Color.FromArgb(34, 62, 92)
+                : Color.FromArgb(224, 239, 255);
+            Color stroke = _palette.MenuBackground.GetBrightness() < 0.5f
+                ? Color.FromArgb(96, 165, 250)
+                : Color.FromArgb(55, 118, 190);
+
+            using SolidBrush fillBrush = new(fill);
+            using Pen strokePen = new(stroke, 1.4f);
+            e.Graphics.FillEllipse(fillBrush, rect);
+            e.Graphics.DrawEllipse(strokePen, rect);
+
+            TextRenderer.DrawText(
+                e.Graphics,
+                "i",
+                ControlDrawing.UiFont("Segoe UI Semibold", 11f, FontStyle.Bold),
+                rect,
+                stroke,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
         }
     }
 }

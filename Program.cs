@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Security.Principal;
 using System.Text;
+using System.Text.Json;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
@@ -20,6 +21,7 @@ internal static class Program
     private static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new(-4);
     private const string StartupTaskInstallFlag = "--install-startup-task";
     private const string StartupReadyEventFlag = "--startup-ready-event";
+    private const string StartupTaskUserFlag = "--startup-task-user";
     private const int StartupTaskPriority = 3;
     private static readonly string[] LegacyStartupTaskNames =
     [
@@ -77,13 +79,21 @@ internal static class Program
         bool isElevatedLaunch = HasArg(args, ElevatedFlag);
         bool shouldInstallStartupTask = HasArg(args, StartupTaskInstallFlag);
         string? startupReadyEventName = GetArgValue(args, StartupReadyEventFlag);
+        string? startupTaskUser = GetArgValue(args, StartupTaskUserFlag);
         bool acquiredMutex = false;
 
-        if (!shouldInstallStartupTask)
+        ConfigureErrorLoggingFromSettings();
+
+        if (!shouldInstallStartupTask && startupReadyEventName == null)
         {
-            if (!TryAcquireSingleInstanceMutex(clearExistingProcesses: true, currentExePath: exePath))
+            if (ReconcileOtherQuickZoomInstances(exePath) == InstanceStartupDecision.ExitCurrent)
             {
-                ErrorLog.Write("Startup", "Another QuickZoom instance still owns the single-instance mutex after cleanup. Exiting duplicate launch.");
+                return;
+            }
+
+            if (!TryAcquireSingleInstanceMutexWithRetry(exePath))
+            {
+                ShowLatestAlreadyRunningDialog();
                 return;
             }
 
@@ -123,6 +133,10 @@ internal static class Program
                 return;
             }
 
+            string setupTargetUser = !string.IsNullOrWhiteSpace(startupTaskUser)
+                ? startupTaskUser
+                : GetCurrentWindowsUserName();
+            var setupStopwatch = Stopwatch.StartNew();
             (bool installed, string installedExePath, string? installError, bool taskReady, bool launchedInstalledCopy) = StartupDialogs.ShowProgress(
                 T("Common.AppName"),
                 T("Startup.SetupProgressHeading"),
@@ -132,18 +146,22 @@ internal static class Program
                     TryCleanupLegacyUserStartupEntries(exePath);
                     TryCleanupLegacyScheduledTasks(exePath);
 
-                    if (!TryInstallElevatedScheduledTask(out string progressInstalledExePath, out string? progressInstallError))
+                    if (!TryPrepareInstalledQuickZoom(out string progressInstalledExePath, out string? progressInstallError))
                     {
                         return (false, progressInstalledExePath, progressInstallError, false, false);
                     }
 
-                    bool progressTaskReady = StartupTaskService.WaitUntilReady();
-                    bool progressLaunchedInstalledCopy = progressTaskReady &&
-                        !PathsEqual(exePath, progressInstalledExePath) &&
-                        TryLaunchInstalledCopyAndWaitUntilReady(progressInstalledExePath, timeoutMs: 30000, ElevatedFlag);
+                    if (!TryRegisterElevatedStartupTask(progressInstalledExePath, setupTargetUser, out progressInstallError))
+                    {
+                        return (false, progressInstalledExePath, progressInstallError, false, false);
+                    }
 
+                    bool progressTaskReady = StartupTaskService.WaitUntilReady(progressInstalledExePath, setupTargetUser);
+                    bool progressLaunchedInstalledCopy = !PathsEqual(exePath, progressInstalledExePath) &&
+                        TryLaunchInstalledCopyAndWaitUntilReady(progressInstalledExePath, timeoutMs: 8000, ElevatedFlag);
                     return (true, progressInstalledExePath, progressInstallError, progressTaskReady, progressLaunchedInstalledCopy);
                 });
+            ErrorLog.Write("StartupTaskInstall", $"Startup-service setup flow finished in {ErrorLog.FormatElapsed(setupStopwatch.Elapsed)}. Installed={installed}; TaskReady={taskReady}; LaunchedInstalledCopy={launchedInstalledCopy}.");
 
             if (!installed)
             {
@@ -165,11 +183,14 @@ internal static class Program
                 }
                 else
                 {
-                    StartupDialogs.ShowTimedSuccess(
-                        T("Common.AppName"),
-                        T("Startup.SetupSuccessHeading"),
-                        T("Startup.SetupSuccessBody"),
-                        15);
+                    if (!launchedInstalledCopy)
+                    {
+                        StartupDialogs.ShowTimedSuccess(
+                            T("Common.AppName"),
+                            T("Startup.SetupSuccessHeading"),
+                            T("Startup.SetupSuccessBody"),
+                            8);
+                    }
                 }
             }
 
@@ -181,7 +202,7 @@ internal static class Program
                 return;
             }
 
-            if (!PathsEqual(exePath, installedExePath) && TryLaunchInstalledCopyAndWaitUntilReady(installedExePath, timeoutMs: 30000, ElevatedFlag))
+            if (!PathsEqual(exePath, installedExePath) && TryLaunchInstalledCopyAndWaitUntilReady(installedExePath, timeoutMs: 8000, ElevatedFlag))
             {
                 return;
             }
@@ -213,6 +234,7 @@ internal static class Program
         bool shouldOfferInstallOrUpdate = !isAdmin && !isElevatedLaunch && InstalledAppService.ShouldOfferInstallOrUpdate(exePath);
         if (!shouldOfferInstallOrUpdate && ShouldYieldToNewerInstance(exePath))
         {
+            ShowLatestAlreadyRunningDialog();
             return;
         }
 
@@ -259,7 +281,7 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            ErrorLog.Write("ApplicationRun", ex);
+            ErrorLog.WriteCrash("ApplicationRun", ex);
         }
         finally
         {
@@ -299,6 +321,27 @@ internal static class Program
         }
     }
 
+    private static bool TryAcquireSingleInstanceMutexWithRetry(string? currentExePath)
+    {
+        for (int attempt = 0; attempt < 12; attempt++)
+        {
+            if (TryAcquireSingleInstanceMutex(clearExistingProcesses: false, currentExePath))
+            {
+                return true;
+            }
+
+            if (attempt == 2 &&
+                ReconcileOtherQuickZoomInstances(currentExePath, showAlreadyRunningDialog: false) == InstanceStartupDecision.ExitCurrent)
+            {
+                return false;
+            }
+
+            Thread.Sleep(250);
+        }
+
+        return false;
+    }
+
     private static void ReleaseSingleInstanceMutex()
     {
         try
@@ -312,6 +355,71 @@ internal static class Program
 
         _singleInstanceMutex?.Dispose();
         _singleInstanceMutex = null;
+    }
+
+    private enum InstanceStartupDecision
+    {
+        ContinueCurrent,
+        ExitCurrent
+    }
+
+    private static InstanceStartupDecision ReconcileOtherQuickZoomInstances(string? currentExePath, bool showAlreadyRunningDialog = true)
+    {
+        if (string.IsNullOrWhiteSpace(currentExePath))
+        {
+            return InstanceStartupDecision.ContinueCurrent;
+        }
+
+        Process currentProcess = Process.GetCurrentProcess();
+        string normalizedCurrentPath = Path.GetFullPath(currentExePath);
+        string? currentInstalledExePath = InstalledAppService.GetCurrentInstalledExecutablePath();
+        bool currentIsInstalledPreferred = InstalledAppService.IsCurrentInstalledExecutablePath(normalizedCurrentPath);
+        DateTime currentWriteTimeUtc = TryGetExecutableWriteTimeUtc(normalizedCurrentPath);
+
+        foreach (Process otherProcess in Process.GetProcessesByName(currentProcess.ProcessName))
+        {
+            using (otherProcess)
+            {
+                if (!TryGetSameSessionQuickZoomProcessPath(currentProcess, otherProcess, out string? otherExePath))
+                {
+                    continue;
+                }
+
+                bool otherIsInstalledPreferred = InstalledAppService.IsCurrentInstalledExecutablePath(otherExePath);
+                InstancePreference preference = CompareInstancePreference(
+                    normalizedCurrentPath,
+                    currentWriteTimeUtc,
+                    currentIsInstalledPreferred,
+                    currentProcess,
+                    otherExePath,
+                    otherIsInstalledPreferred,
+                    otherProcess);
+
+                if (preference != InstancePreference.CurrentWins)
+                {
+                    ErrorLog.Write("Startup", "Existing QuickZoom instance wins startup arbitration. " + DescribeProcessInstance(otherProcess, otherExePath));
+                    if (showAlreadyRunningDialog)
+                    {
+                        ShowLatestAlreadyRunningDialog();
+                    }
+
+                    return InstanceStartupDecision.ExitCurrent;
+                }
+
+                TryTerminateOlderQuickZoom(otherProcess, otherExePath, currentInstalledExePath);
+                Thread.Sleep(250);
+            }
+        }
+
+        return InstanceStartupDecision.ContinueCurrent;
+    }
+
+    private static void ShowLatestAlreadyRunningDialog()
+    {
+        StartupDialogs.ShowTrayInfo(
+            T("Common.AppName"),
+            T("Startup.LatestAlreadyRunningHeading"),
+            T("Startup.LatestAlreadyRunningBody"));
     }
 
     private static bool IsRunningAsAdministrator()
@@ -349,7 +457,17 @@ internal static class Program
             return false;
         }
 
-        string elevatedArgs = BuildArguments(args, extraFlags);
+        string[] effectiveExtraFlags = extraFlags;
+        if (ContainsArg(extraFlags, StartupTaskInstallFlag) && !HasArg(args, StartupTaskUserFlag))
+        {
+            string currentUser = GetCurrentWindowsUserName();
+            if (!string.IsNullOrWhiteSpace(currentUser))
+            {
+                effectiveExtraFlags = [.. extraFlags, StartupTaskUserFlag, currentUser];
+            }
+        }
+
+        string elevatedArgs = BuildArguments(args, effectiveExtraFlags);
         var startInfo = new ProcessStartInfo
         {
             FileName = exePath,
@@ -377,6 +495,25 @@ internal static class Program
 
     private static bool TryInstallElevatedScheduledTask(out string installedExePath, out string? errorMessage)
     {
+        if (StartupTaskService.IsReadyForCurrentBuild(out string? readyExePath) &&
+            !string.IsNullOrWhiteSpace(readyExePath))
+        {
+            installedExePath = readyExePath;
+            errorMessage = null;
+            ErrorLog.Write("StartupTaskInstall", "Startup task already targets current build: " + readyExePath);
+            return true;
+        }
+
+        if (!TryPrepareInstalledQuickZoom(out installedExePath, out errorMessage))
+        {
+            return false;
+        }
+
+        return TryRegisterElevatedStartupTask(installedExePath, targetUser: null, out errorMessage);
+    }
+
+    private static bool TryPrepareInstalledQuickZoom(out string installedExePath, out string? errorMessage)
+    {
         string? exePath = GetExecutablePath();
         if (string.IsNullOrWhiteSpace(exePath))
         {
@@ -385,24 +522,36 @@ internal static class Program
             return false;
         }
 
-        TryTerminateOtherQuickZoomProcesses("StartupTaskInstall", exePath);
-
         if (!InstalledAppService.TryPrepareInstalledPayload(exePath, out installedExePath, out errorMessage))
         {
             return false;
         }
 
-        string currentUser;
-        try
-        {
-            currentUser = WindowsIdentity.GetCurrent().Name;
-        }
-        catch (Exception ex)
+        return true;
+    }
+
+    private static bool TryRegisterElevatedStartupTask(string installedExePath, string? targetUser, out string? errorMessage)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        errorMessage = null;
+
+        string currentUser = !string.IsNullOrWhiteSpace(targetUser)
+            ? targetUser
+            : GetCurrentWindowsUserName();
+        if (string.IsNullOrWhiteSpace(currentUser))
         {
             errorMessage = T("Startup.ErrorMissingUser");
-            ErrorLog.Write("StartupTaskInstall", ex);
+            ErrorLog.Write("StartupTaskInstall", "Could not determine target startup user.");
             return false;
         }
+
+        if (StartupTaskService.IsReadyForCurrentBuild(installedExePath, currentUser, out StartupTaskInfo readyInfo))
+        {
+            ErrorLog.Write("StartupTaskInstall", $"Startup task already targets current build. Check completed in {ErrorLog.FormatElapsed(stopwatch.Elapsed)}. {DescribeStartupTask(readyInfo)}");
+            return true;
+        }
+
+        TryCleanupLegacyScheduledTasks(installedExePath);
 
         string psExe = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.System),
@@ -433,10 +582,11 @@ internal static class Program
             if (process == null)
             {
                 errorMessage = T("Startup.ErrorPowerShellLaunch");
+                ErrorLog.Write("StartupTaskInstall", $"PowerShell launch failed after {ErrorLog.FormatElapsed(stopwatch.Elapsed)}.");
                 return false;
             }
 
-            if (!process.WaitForExit(8000))
+            if (!process.WaitForExit(5000))
             {
                 try
                 {
@@ -448,7 +598,7 @@ internal static class Program
                 }
 
                 errorMessage = T("Startup.ErrorPowerShellTimeout");
-                ErrorLog.Write("StartupTaskInstall", errorMessage);
+                ErrorLog.Write("StartupTaskInstall", $"{errorMessage} Elapsed={ErrorLog.FormatElapsed(stopwatch.Elapsed)}.");
                 return false;
             }
 
@@ -460,18 +610,26 @@ internal static class Program
                 errorMessage = string.IsNullOrWhiteSpace(error)
                     ? T("Startup.ErrorPowerShellFailed")
                     : error;
-                ErrorLog.Write("StartupTaskInstall", "Task registration failed. StdOut: " + output + " StdErr: " + error);
+                ErrorLog.Write("StartupTaskInstall", $"Task registration failed after {ErrorLog.FormatElapsed(stopwatch.Elapsed)}. StdOut: {output} StdErr: {error}");
                 return false;
             }
 
             StartupTaskService.InvalidateCache();
+            if (!StartupTaskService.IsReadyForCurrentBuild(installedExePath, currentUser, out StartupTaskInfo verifiedInfo))
+            {
+                errorMessage = T("Startup.ErrorPowerShellFailed");
+                ErrorLog.Write("StartupTaskInstall", $"Task registration finished but verification failed after {ErrorLog.FormatElapsed(stopwatch.Elapsed)}. ExpectedUser={currentUser}; ExpectedPath={installedExePath}; {DescribeStartupTask(verifiedInfo)}");
+                return false;
+            }
+
             TryCleanupLegacyScheduledTasks(installedExePath);
-            return success;
+            ErrorLog.Write("StartupTaskInstall", $"Startup task registration completed and verified in {ErrorLog.FormatElapsed(stopwatch.Elapsed)}. {DescribeStartupTask(verifiedInfo)}");
+            return true;
         }
         catch (Exception ex)
         {
             errorMessage = T("Startup.ErrorUnexpected");
-            ErrorLog.Write("StartupTaskInstall", ex);
+            ErrorLog.Write("StartupTaskInstall", $"Unexpected startup task registration error after {ErrorLog.FormatElapsed(stopwatch.Elapsed)}. {ex}");
             return false;
         }
     }
@@ -533,12 +691,13 @@ internal static class Program
         ReleaseSingleInstanceMutex();
         try
         {
+            StartupTaskInfo taskInfo = StartupTaskService.GetStatusInfo(forceRefresh: true);
             if (!TryStartElevatedScheduledTask())
             {
                 return false;
             }
 
-            if (WaitForOtherQuickZoomInstance(currentExePath, timeoutMs: 5000, pollMs: 250))
+            if (WaitForOtherQuickZoomInstance(taskInfo.ExecutePath, timeoutMs: 15000, pollMs: 250))
             {
                 return true;
             }
@@ -587,6 +746,12 @@ internal static class Program
                 continue;
             }
 
+            if (string.Equals(args[i], StartupTaskUserFlag, StringComparison.OrdinalIgnoreCase))
+            {
+                i++;
+                continue;
+            }
+
             if (sb.Length > 0)
             {
                 sb.Append(' ');
@@ -607,10 +772,23 @@ internal static class Program
                 sb.Append(' ');
             }
 
-            sb.Append(flag);
+            sb.Append(QuoteArgument(flag));
         }
 
         return sb.ToString();
+    }
+
+    private static bool ContainsArg(IEnumerable<string> args, string value)
+    {
+        foreach (string arg in args)
+        {
+            if (string.Equals(arg, value, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool HasArg(string[] args, string value)
@@ -624,6 +802,19 @@ internal static class Program
         }
 
         return false;
+    }
+
+    private static string GetCurrentWindowsUserName()
+    {
+        try
+        {
+            return WindowsIdentity.GetCurrent().Name;
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("Elevation", ex);
+            return string.Empty;
+        }
     }
 
     private static string? GetArgValue(string[] args, string key)
@@ -646,12 +837,46 @@ internal static class Program
             return "\"\"";
         }
 
-        if (!value.Contains(' ') && !value.Contains('"'))
+        if (value.IndexOfAny([' ', '\t', '\n', '\r', '"']) < 0)
         {
             return value;
         }
 
-        return "\"" + value.Replace("\"", "\\\"") + "\"";
+        var quoted = new StringBuilder();
+        quoted.Append('"');
+        int backslashCount = 0;
+        foreach (char c in value)
+        {
+            if (c == '\\')
+            {
+                backslashCount++;
+                continue;
+            }
+
+            if (c == '"')
+            {
+                quoted.Append('\\', (backslashCount * 2) + 1);
+                quoted.Append('"');
+                backslashCount = 0;
+                continue;
+            }
+
+            if (backslashCount > 0)
+            {
+                quoted.Append('\\', backslashCount);
+                backslashCount = 0;
+            }
+
+            quoted.Append(c);
+        }
+
+        if (backslashCount > 0)
+        {
+            quoted.Append('\\', backslashCount * 2);
+        }
+
+        quoted.Append('"');
+        return quoted.ToString();
     }
 
     private static string ToPowerShellSingleQuoted(string value)
@@ -661,10 +886,11 @@ internal static class Program
 
     private static bool TryLaunchInstalledCopyAndWaitUntilReady(string installedExePath, int timeoutMs, params string[] extraFlags)
     {
+        var stopwatch = Stopwatch.StartNew();
         string readyEventName = @"Local\QuickZoom2.StartupReady." + Guid.NewGuid().ToString("N");
         try
         {
-            TryTerminateOtherQuickZoomProcesses("StartupInstalledLaunch", installedExePath);
+            TryTerminateOtherQuickZoomProcesses("StartupInstalledLaunch", preferredExePath: installedExePath, keepPreferredExePath: true);
 
             using var readyEvent = new EventWaitHandle(false, EventResetMode.ManualReset, readyEventName);
             string[] launchFlags = new string[extraFlags.Length + 2];
@@ -682,67 +908,63 @@ internal static class Program
             using Process? process = Process.Start(startInfo);
             if (process == null)
             {
-                ErrorLog.Write("Startup", "Could not launch the installed QuickZoom copy after startup-service setup.");
+                ErrorLog.Write("Startup", $"Could not launch the installed QuickZoom copy after startup-service setup. Elapsed={ErrorLog.FormatElapsed(stopwatch.Elapsed)}.");
                 return false;
             }
 
             bool ready = readyEvent.WaitOne(timeoutMs);
             if (!ready)
             {
-                ErrorLog.Write("Startup", "Installed QuickZoom copy launched but did not signal tray readiness before timeout. Path: " + installedExePath);
+                ErrorLog.Write("Startup", $"Installed QuickZoom copy launched but did not signal tray readiness before timeout. Elapsed={ErrorLog.FormatElapsed(stopwatch.Elapsed)}. Path: {installedExePath}");
+            }
+            else
+            {
+                ErrorLog.Write("Startup", $"Installed QuickZoom copy launched and tray was ready in {ErrorLog.FormatElapsed(stopwatch.Elapsed)}. Path: {installedExePath}");
             }
 
             return ready;
         }
         catch (Exception ex)
         {
-            ErrorLog.Write("Startup", ex);
+            ErrorLog.Write("Startup", $"Installed QuickZoom launch failed after {ErrorLog.FormatElapsed(stopwatch.Elapsed)}. {ex}");
             return false;
         }
     }
 
-    private static void TryTerminateOtherQuickZoomProcesses(string source, string? preferredExePath = null)
+    private static void TryTerminateOtherQuickZoomProcesses(string source, string? preferredExePath = null, bool keepPreferredExePath = false)
     {
         Process currentProcess = Process.GetCurrentProcess();
+        string? winningExePath = !string.IsNullOrWhiteSpace(preferredExePath)
+            ? Path.GetFullPath(preferredExePath)
+            : GetExecutablePath();
+
         foreach (Process otherProcess in Process.GetProcessesByName(currentProcess.ProcessName))
         {
             using (otherProcess)
             {
-                if (otherProcess.Id == currentProcess.Id)
+                if (!TryGetSameSessionQuickZoomProcessPath(currentProcess, otherProcess, out string? otherExePath))
                 {
+                    continue;
+                }
+
+                if (keepPreferredExePath && PathsEqual(otherExePath, preferredExePath))
+                {
+                    continue;
+                }
+
+                if (!CanReplaceProcessWithPreferredExecutable(winningExePath, otherExePath))
+                {
+                    ErrorLog.Write(source, "Leaving existing QuickZoom process alone because it is not older or less preferred. " + DescribeProcessInstance(otherProcess, otherExePath));
                     continue;
                 }
 
                 try
                 {
-                    if (otherProcess.SessionId != currentProcess.SessionId)
-                    {
-                        continue;
-                    }
-                }
-                catch
-                {
-                    continue;
-                }
-
-                string? otherExePath = TryGetProcessExecutablePath(otherProcess);
-                if (string.IsNullOrWhiteSpace(otherExePath))
-                {
-                    continue;
-                }
-
-                if (!LooksLikeQuickZoomExecutable(otherExePath))
-                {
-                    continue;
-                }
-
-                try
-                {
-                    ErrorLog.Write(source, "Stopping existing QuickZoom process before startup setup. PID: " + otherProcess.Id + " Path: " + otherExePath);
+                    ErrorLog.Write(source, "Stopping replaceable QuickZoom process. " + DescribeProcessInstance(otherProcess, otherExePath));
                     otherProcess.Kill(entireProcessTree: true);
                     if (!otherProcess.WaitForExit(3000))
                     {
-                        ErrorLog.Write(source, "Existing QuickZoom process did not exit within the timeout. PID: " + otherProcess.Id + " Path: " + otherExePath);
+                        ErrorLog.Write(source, "Existing QuickZoom process did not exit within the timeout. " + DescribeProcessInstance(otherProcess, otherExePath));
                     }
                 }
                 catch (Exception ex)
@@ -753,50 +975,37 @@ internal static class Program
         }
     }
 
-    private static bool WaitForOtherQuickZoomInstance(string? currentExePath, int timeoutMs, int pollMs)
+    private static bool WaitForOtherQuickZoomInstance(string? expectedExePath, int timeoutMs, int pollMs)
     {
-        int elapsed = 0;
-        while (elapsed <= timeoutMs)
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.ElapsedMilliseconds <= timeoutMs)
         {
-            if (HasOtherQuickZoomInstance(currentExePath))
+            if (HasOtherQuickZoomInstance(expectedExePath))
             {
                 return true;
             }
 
             Thread.Sleep(pollMs);
-            elapsed += pollMs;
         }
 
         return false;
     }
 
-    private static bool HasOtherQuickZoomInstance(string? currentExePath)
+    private static bool HasOtherQuickZoomInstance(string? expectedExePath)
     {
         Process currentProcess = Process.GetCurrentProcess();
         foreach (Process otherProcess in Process.GetProcessesByName(currentProcess.ProcessName))
         {
             using (otherProcess)
             {
-                if (otherProcess.Id == currentProcess.Id)
+                if (!TryGetSameSessionQuickZoomProcessPath(currentProcess, otherProcess, out string? otherExePath))
                 {
                     continue;
                 }
 
-                try
+                if (!string.IsNullOrWhiteSpace(expectedExePath) && !PathsEqual(otherExePath, expectedExePath))
                 {
-                    if (otherProcess.SessionId != currentProcess.SessionId || otherProcess.HasExited)
-                    {
-                        continue;
-                    }
-                }
-                catch
-                {
-                    continue;
-                }
-
-                string? otherExePath = TryGetProcessExecutablePath(otherProcess);
-                if (string.IsNullOrWhiteSpace(otherExePath) || !LooksLikeQuickZoomExecutable(otherExePath))
-                {
+                    ErrorLog.Write("StartupTaskRun", "Ignoring replacement candidate because it is not the task target. " + DescribeProcessInstance(otherProcess, otherExePath));
                     continue;
                 }
 
@@ -805,6 +1014,67 @@ internal static class Program
         }
 
         return false;
+    }
+
+    private static bool TryGetSameSessionQuickZoomProcessPath(Process currentProcess, Process otherProcess, out string otherExePath)
+    {
+        otherExePath = string.Empty;
+        if (otherProcess.Id == currentProcess.Id)
+        {
+            return false;
+        }
+
+        try
+        {
+            if (otherProcess.SessionId != currentProcess.SessionId || otherProcess.HasExited)
+            {
+                return false;
+            }
+        }
+        catch
+        {
+            return false;
+        }
+
+        string? path = TryGetProcessExecutablePath(otherProcess);
+        if (string.IsNullOrWhiteSpace(path) || !LooksLikeQuickZoomExecutable(path))
+        {
+            return false;
+        }
+
+        otherExePath = path;
+        return true;
+    }
+
+    private static bool CanReplaceProcessWithPreferredExecutable(string? preferredExePath, string otherExePath)
+    {
+        if (string.IsNullOrWhiteSpace(preferredExePath))
+        {
+            return true;
+        }
+
+        int preferredBuild = TryGetExecutableBuildNumber(preferredExePath);
+        int otherBuild = TryGetExecutableBuildNumber(otherExePath);
+        if (preferredBuild > 0 && otherBuild > 0)
+        {
+            if (preferredBuild != otherBuild)
+            {
+                return preferredBuild > otherBuild;
+            }
+
+            bool preferredIsInstalled = InstalledAppService.IsCurrentInstalledExecutablePath(preferredExePath);
+            bool otherIsInstalled = InstalledAppService.IsCurrentInstalledExecutablePath(otherExePath);
+            return preferredIsInstalled || !otherIsInstalled;
+        }
+
+        DateTime preferredWriteTime = TryGetExecutableWriteTimeUtc(preferredExePath);
+        DateTime otherWriteTime = TryGetExecutableWriteTimeUtc(otherExePath);
+        if (preferredWriteTime != DateTime.MinValue && otherWriteTime != DateTime.MinValue)
+        {
+            return preferredWriteTime >= otherWriteTime;
+        }
+
+        return true;
     }
 
     private static bool ShouldYieldToNewerInstance(string? exePath)
@@ -824,13 +1094,7 @@ internal static class Program
         {
             using (otherProcess)
             {
-                if (otherProcess.Id == currentProcess.Id || otherProcess.SessionId != currentProcess.SessionId)
-                {
-                    continue;
-                }
-
-                string? otherExePath = TryGetProcessExecutablePath(otherProcess);
-                if (string.IsNullOrWhiteSpace(otherExePath))
+                if (!TryGetSameSessionQuickZoomProcessPath(currentProcess, otherProcess, out string? otherExePath))
                 {
                     continue;
                 }
@@ -847,7 +1111,7 @@ internal static class Program
 
                 if (preference == InstancePreference.OtherWins)
                 {
-                    ErrorLog.Write("Startup", "Yielding to a newer or preferred QuickZoom instance at " + otherExePath);
+                    ErrorLog.Write("Startup", "Yielding to a newer or preferred QuickZoom instance. " + DescribeProcessInstance(otherProcess, otherExePath));
                     return true;
                 }
 
@@ -859,6 +1123,26 @@ internal static class Program
         }
 
         return false;
+    }
+
+    private static string DescribeStartupTask(StartupTaskInfo info)
+    {
+        return $"Status={info.Status}; User={info.UserId ?? "<none>"}; Path={info.ExecutePath ?? "<none>"}; Args={info.Arguments ?? "<none>"}; Details={info.Details ?? "<none>"}";
+    }
+
+    private static string DescribeProcessInstance(Process process, string exePath)
+    {
+        string started = "<unknown>";
+        try
+        {
+            started = process.StartTime.ToString("yyyy-MM-dd HH:mm:ss");
+        }
+        catch
+        {
+            // Access can fail for a process exiting during inspection.
+        }
+
+        return $"PID={process.Id}; Build={TryGetExecutableBuildNumber(exePath)}; Started={started}; Path={exePath}";
     }
 
     private enum InstancePreference
@@ -877,6 +1161,14 @@ internal static class Program
         bool otherIsInstalledPreferred,
         Process otherProcess)
     {
+        int otherBuildNumber = TryGetExecutableBuildNumber(otherExePath);
+        if (otherBuildNumber > 0 && otherBuildNumber != AppInfo.BuildNumber)
+        {
+            return AppInfo.BuildNumber > otherBuildNumber
+                ? InstancePreference.CurrentWins
+                : InstancePreference.OtherWins;
+        }
+
         if (currentIsInstalledPreferred != otherIsInstalledPreferred)
         {
             return currentIsInstalledPreferred ? InstancePreference.CurrentWins : InstancePreference.OtherWins;
@@ -920,9 +1212,12 @@ internal static class Program
                 return;
             }
 
-            ErrorLog.Write("Startup", "Attempting to stop an older QuickZoom instance at " + otherExePath);
+            ErrorLog.Write("Startup", "Attempting to stop older QuickZoom instance. " + DescribeProcessInstance(otherProcess, otherExePath));
             otherProcess.Kill(entireProcessTree: false);
-            otherProcess.WaitForExit(2000);
+            if (!otherProcess.WaitForExit(2000))
+            {
+                ErrorLog.Write("Startup", "Older QuickZoom instance did not exit within the timeout. " + DescribeProcessInstance(otherProcess, otherExePath));
+            }
         }
         catch (Exception ex)
         {
@@ -988,6 +1283,43 @@ internal static class Program
         return null;
     }
 
+    private static int TryGetExecutableBuildNumber(string exePath)
+    {
+        try
+        {
+            FileVersionInfo info = FileVersionInfo.GetVersionInfo(exePath);
+            if (info.FileBuildPart > 0)
+            {
+                return info.FileBuildPart;
+            }
+        }
+        catch
+        {
+            // Fall through to path parsing.
+        }
+
+        try
+        {
+            DirectoryInfo? directory = Directory.GetParent(exePath);
+            while (directory != null)
+            {
+                if (directory.Name.StartsWith("Build ", StringComparison.OrdinalIgnoreCase) &&
+                    int.TryParse(directory.Name["Build ".Length..], out int buildNumber))
+                {
+                    return buildNumber;
+                }
+
+                directory = directory.Parent;
+            }
+        }
+        catch
+        {
+            // Ignore path parsing failures.
+        }
+
+        return 0;
+    }
+
     private static DateTime TryGetExecutableWriteTimeUtc(string exePath)
     {
         try
@@ -1015,7 +1347,30 @@ internal static class Program
 
     private static void LogFatalException(string source, Exception? exception)
     {
-        ErrorLog.Write(source, exception);
+        ErrorLog.WriteCrash(source, exception);
+    }
+
+    private static void ConfigureErrorLoggingFromSettings()
+    {
+        bool debugLoggingEnabled = false;
+        try
+        {
+            if (File.Exists(AppPaths.SettingsPath))
+            {
+                using JsonDocument document = JsonDocument.Parse(File.ReadAllText(AppPaths.SettingsPath));
+                if (document.RootElement.TryGetProperty("DebugLoggingEnabled", out JsonElement value) &&
+                    value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                {
+                    debugLoggingEnabled = value.GetBoolean();
+                }
+            }
+        }
+        catch
+        {
+            // Crash logging still works even if settings cannot be read.
+        }
+
+        ErrorLog.Configure(debugLoggingEnabled, AppInfo.VersionHash);
     }
 
     private static void TryCleanupLegacyUserStartupEntries(string? currentExePath)
@@ -1101,6 +1456,12 @@ internal static class Program
                     continue;
                 }
 
+                if (!ScheduledTaskReferencesQuickZoom(taskName))
+                {
+                    ErrorLog.Write("StartupCleanup.Task", "Skipped scheduled task cleanup because the task does not point to QuickZoom: " + taskName);
+                    continue;
+                }
+
                 if (DeleteScheduledTask(taskName))
                 {
                     ErrorLog.Write("StartupCleanup.Task", "Removed legacy scheduled task: " + taskName);
@@ -1122,7 +1483,110 @@ internal static class Program
             names.Add(knownName);
         }
 
+        try
+        {
+            foreach (string taskName in QueryScheduledTaskNamesContainingQuickZoom())
+            {
+                names.Add(taskName);
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("StartupCleanup.Task", "Could not enumerate scheduled tasks. " + ex.Message);
+        }
+
         return names;
+    }
+
+    private static bool ScheduledTaskReferencesQuickZoom(string taskName)
+    {
+        StartupTaskInfo info = StartupTaskService.QueryTask(taskName);
+        if (info.Status is StartupTaskStatus.Missing or StartupTaskStatus.Unknown)
+        {
+            return false;
+        }
+
+        return IsQuickZoomExecutableReference(info.ExecutePath) ||
+               IsQuickZoomExecutableReference(info.Arguments) ||
+               (!string.IsNullOrWhiteSpace(info.Details) &&
+                info.Details.IndexOf("QuickZoom.exe", StringComparison.OrdinalIgnoreCase) >= 0);
+    }
+
+    private static IEnumerable<string> QueryScheduledTaskNamesContainingQuickZoom()
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "schtasks.exe",
+            Arguments = "/Query /FO CSV /NH",
+            CreateNoWindow = true,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        using Process? process = Process.Start(startInfo);
+        if (process == null)
+        {
+            yield break;
+        }
+
+        if (!process.WaitForExit(5000))
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch
+            {
+                // Best effort.
+            }
+
+            yield break;
+        }
+
+        string output = process.StandardOutput.ReadToEnd();
+        foreach (string line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            string taskName = ParseFirstCsvField(line).TrimStart('\\');
+            if (taskName.IndexOf("QuickZoom", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                yield return taskName;
+            }
+        }
+    }
+
+    private static string ParseFirstCsvField(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return string.Empty;
+        }
+
+        if (line[0] != '"')
+        {
+            int commaIndex = line.IndexOf(',');
+            return commaIndex >= 0 ? line[..commaIndex] : line;
+        }
+
+        var sb = new StringBuilder();
+        for (int i = 1; i < line.Length; i++)
+        {
+            if (line[i] == '"' && i + 1 < line.Length && line[i + 1] == '"')
+            {
+                sb.Append('"');
+                i++;
+                continue;
+            }
+
+            if (line[i] == '"')
+            {
+                break;
+            }
+
+            sb.Append(line[i]);
+        }
+
+        return sb.ToString();
     }
 
     private static bool DeleteScheduledTask(string taskName)

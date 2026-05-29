@@ -160,6 +160,7 @@ internal sealed partial class TrayContext
             _enableKeyPressed = false;
             _invertKeyPressed = false;
             _followCursorKeyPressed = false;
+            _controlKeyPressed = false;
             _wheelDeltaRemainder = 0;
             ErrorLog.WriteThrottled("KeyboardHook", ex);
             return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
@@ -173,6 +174,7 @@ internal sealed partial class TrayContext
             _enableKeyPressed = false;
             _invertKeyPressed = false;
             _followCursorKeyPressed = false;
+            _controlKeyPressed = false;
             return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
         }
 
@@ -187,11 +189,21 @@ internal sealed partial class TrayContext
 
         if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN)
         {
+            if (IsControlKey(vk))
+            {
+                _controlKeyPressed = true;
+            }
+
+            if (IsAltGrKey(vk))
+            {
+                return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
+            }
+
             if ((_enabled || _invertEnabled) && IsEnableKeyMatch(_enableKey, vk))
             {
                 _enableKeyPressed = true;
 
-                if (ShouldSuppressEnableKeyForForeground())
+                if (ShouldSuppressEnableKey())
                 {
                     _suppressEnableKeyForForeground = true;
                     return (IntPtr)1;
@@ -253,6 +265,16 @@ internal sealed partial class TrayContext
         }
         else if (message == WM_KEYUP || message == WM_SYSKEYUP)
         {
+            if (IsAltGrKey(vk))
+            {
+                return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
+            }
+
+            if (IsControlKey(vk))
+            {
+                _controlKeyPressed = false;
+            }
+
             if ((_enabled || _invertEnabled) && IsEnableKeyMatch(_enableKey, vk))
             {
                 _enableKeyPressed = false;
@@ -305,9 +327,34 @@ internal sealed partial class TrayContext
         };
     }
 
+    private static bool IsControlKey(int vk)
+    {
+        return vk == (int)Keys.ControlKey || vk == (int)Keys.LControlKey || vk == (int)Keys.RControlKey;
+    }
+
+    private bool IsAltGrKey(int vk)
+    {
+        return vk == (int)Keys.RMenu && _controlKeyPressed;
+    }
+
     private bool IsAltEnableKey()
     {
         return _enableKey == Keys.Menu || _enableKey == Keys.LMenu || _enableKey == Keys.RMenu;
+    }
+
+    private bool IsWindowsEnableKey()
+    {
+        return _enableKey == Keys.LWin || _enableKey == Keys.RWin;
+    }
+
+    private bool ShouldSuppressEnableKey()
+    {
+        if (IsWindowsEnableKey())
+        {
+            return true;
+        }
+
+        return ShouldSuppressEnableKeyForForeground();
     }
 
     private bool ShouldSuppressEnableKeyForForeground()

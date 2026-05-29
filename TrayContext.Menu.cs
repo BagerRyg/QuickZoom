@@ -322,6 +322,8 @@ internal sealed partial class TrayContext
         });
         actions.Controls.Add(resetCursorRow);
 
+        actions.Controls.Add(new TrayMenuDivider(palette) { Dock = DockStyle.Top, Width = trayContentWidth });
+
         var aboutRow = new TrayMenuRow(palette, L("Tray.About"), icon: TrayFluentIcon.About);
         aboutRow.Width = trayContentWidth;
         aboutRow.ActionRequested += (_, _) => ExecuteTrayAction(() =>

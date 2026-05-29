@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Security.Principal;
 using System.Threading;
 using System.Xml.Linq;
 
@@ -15,6 +16,15 @@ internal enum StartupTaskStatus
     Unknown
 }
 
+internal sealed class StartupTaskInfo
+{
+    public StartupTaskStatus Status { get; init; }
+    public string? ExecutePath { get; init; }
+    public string? Arguments { get; init; }
+    public string? UserId { get; init; }
+    public string? Details { get; init; }
+}
+
 internal static class StartupTaskService
 {
     private const string ElevatedLaunchFlag = "--quickzoom-elevated";
@@ -25,15 +35,49 @@ internal static class StartupTaskService
 
     internal const string ElevatedStartupTaskName = "QuickZoom Startup (Elevated)";
 
-    private sealed class StartupTaskInfo
+    internal static StartupTaskStatus GetStatus() => GetStatusInfo().Status;
+
+    internal static StartupTaskInfo GetStatusInfo(bool forceRefresh = false)
     {
-        public StartupTaskStatus Status { get; init; }
-        public string? ExecutePath { get; init; }
-        public string? Arguments { get; init; }
-        public string? Details { get; init; }
+        lock (CacheSync)
+        {
+            if (!forceRefresh &&
+                _cachedInfo != null &&
+                (DateTime.UtcNow - _cachedInfoAtUtc) < CacheDuration)
+            {
+                return _cachedInfo;
+            }
+
+            StartupTaskInfo info = QueryStatusInfo(ElevatedStartupTaskName);
+            _cachedInfo = info;
+            _cachedInfoAtUtc = DateTime.UtcNow;
+            return info;
+        }
     }
 
-    internal static StartupTaskStatus GetStatus() => GetStatusInfo().Status;
+    internal static bool IsReadyForCurrentBuild(out string? executePath)
+    {
+        StartupTaskInfo info = GetStatusInfo(forceRefresh: true);
+        executePath = info.ExecutePath;
+        return info.Status == StartupTaskStatus.Ready &&
+               !string.IsNullOrWhiteSpace(info.ExecutePath) &&
+               GetExecutableBuildNumber(info.ExecutePath) >= AppInfo.BuildNumber;
+    }
+
+    internal static bool IsReadyForCurrentBuild(string expectedExePath, string? expectedUser, out StartupTaskInfo info)
+    {
+        info = GetStatusInfo(forceRefresh: true);
+        return info.Status == StartupTaskStatus.Ready &&
+               !string.IsNullOrWhiteSpace(info.ExecutePath) &&
+               PathsEqual(info.ExecutePath, expectedExePath) &&
+               UserMatches(info.UserId, expectedUser) &&
+               GetExecutableBuildNumber(info.ExecutePath) >= AppInfo.BuildNumber;
+    }
+
+    internal static StartupTaskInfo QueryTask(string taskName)
+    {
+        return QueryStatusInfo(taskName);
+    }
 
     internal static void InvalidateCache()
     {
@@ -44,18 +88,31 @@ internal static class StartupTaskService
         }
     }
 
-    internal static bool WaitUntilReady(int timeoutMs = 10000, int pollMs = 500)
+    internal static bool WaitUntilReady(string? expectedExePath = null, string? expectedUser = null, int timeoutMs = 10000, int pollMs = 500)
     {
-        int elapsed = 0;
-        while (elapsed <= timeoutMs)
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.ElapsedMilliseconds <= timeoutMs)
         {
-            if (GetStatusInfo(forceRefresh: true).Status == StartupTaskStatus.Ready)
+            StartupTaskInfo info = GetStatusInfo(forceRefresh: true);
+            bool ready = info.Status == StartupTaskStatus.Ready;
+            if (!string.IsNullOrWhiteSpace(expectedExePath))
+            {
+                ready = ready &&
+                    !string.IsNullOrWhiteSpace(info.ExecutePath) &&
+                    PathsEqual(info.ExecutePath, expectedExePath);
+            }
+
+            if (!string.IsNullOrWhiteSpace(expectedUser))
+            {
+                ready = ready && UserMatches(info.UserId, expectedUser);
+            }
+
+            if (ready)
             {
                 return true;
             }
 
             Thread.Sleep(pollMs);
-            elapsed += pollMs;
         }
 
         return false;
@@ -72,30 +129,12 @@ internal static class StartupTaskService
         };
     }
 
-    private static StartupTaskInfo GetStatusInfo(bool forceRefresh = false)
-    {
-        lock (CacheSync)
-        {
-            if (!forceRefresh &&
-                _cachedInfo != null &&
-                (DateTime.UtcNow - _cachedInfoAtUtc) < CacheDuration)
-            {
-                return _cachedInfo;
-            }
-
-            StartupTaskInfo info = QueryStatusInfo();
-            _cachedInfo = info;
-            _cachedInfoAtUtc = DateTime.UtcNow;
-            return info;
-        }
-    }
-
-    private static StartupTaskInfo QueryStatusInfo()
+    private static StartupTaskInfo QueryStatusInfo(string taskName)
     {
         var startInfo = new ProcessStartInfo
         {
             FileName = "schtasks.exe",
-            Arguments = "/Query /TN \"" + ElevatedStartupTaskName + "\" /XML",
+            Arguments = "/Query /TN \"" + taskName + "\" /XML",
             CreateNoWindow = true,
             UseShellExecute = false,
             RedirectStandardOutput = true,
@@ -175,12 +214,14 @@ internal static class StartupTaskService
             XDocument document = XDocument.Parse(xml);
             string? executePath = document.Descendants().FirstOrDefault(node => node.Name.LocalName == "Command")?.Value?.Trim();
             string? arguments = document.Descendants().FirstOrDefault(node => node.Name.LocalName == "Arguments")?.Value?.Trim();
+            string? userId = document.Descendants().FirstOrDefault(node => node.Name.LocalName == "UserId")?.Value?.Trim();
 
             if (string.IsNullOrWhiteSpace(executePath))
             {
                 return new StartupTaskInfo
                 {
                     Status = StartupTaskStatus.Broken,
+                    UserId = userId,
                     Details = "The startup task has no executable configured."
                 };
             }
@@ -198,6 +239,7 @@ internal static class StartupTaskService
                     Status = StartupTaskStatus.Broken,
                     ExecutePath = executePath,
                     Arguments = arguments,
+                    UserId = userId,
                     Details = "The startup task points to an executable that no longer exists."
                 };
             }
@@ -211,6 +253,7 @@ internal static class StartupTaskService
                     Status = StartupTaskStatus.Broken,
                     ExecutePath = executePath,
                     Arguments = arguments,
+                    UserId = userId,
                     Details = "The startup task points to an older QuickZoom install instead of the current managed build."
                 };
             }
@@ -223,6 +266,7 @@ internal static class StartupTaskService
                     Status = StartupTaskStatus.Broken,
                     ExecutePath = executePath,
                     Arguments = arguments,
+                    UserId = userId,
                     Details = "The startup task does not launch QuickZoom with the expected elevated flag."
                 };
             }
@@ -231,7 +275,8 @@ internal static class StartupTaskService
             {
                 Status = StartupTaskStatus.Ready,
                 ExecutePath = executePath,
-                Arguments = arguments
+                Arguments = arguments,
+                UserId = userId
             };
         }
         catch (Exception ex)
@@ -253,7 +298,7 @@ internal static class StartupTaskService
                combined.IndexOf("the system cannot find the path specified", StringComparison.OrdinalIgnoreCase) >= 0 ||
                combined.IndexOf("kan ikke finde", StringComparison.OrdinalIgnoreCase) >= 0 ||
                combined.IndexOf("sti blev ikke fundet", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               combined.IndexOf("taskname", StringComparison.OrdinalIgnoreCase) >= 0;
+               combined.IndexOf("opgaven findes ikke", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     private static bool PathsEqual(string left, string right)
@@ -262,5 +307,64 @@ internal static class StartupTaskService
             Path.GetFullPath(left),
             Path.GetFullPath(right),
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool UserMatches(string? taskUser, string? expectedUser)
+    {
+        if (string.IsNullOrWhiteSpace(expectedUser))
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(taskUser))
+        {
+            return false;
+        }
+
+        string normalizedTaskUser = NormalizeUserName(taskUser);
+        string normalizedExpectedUser = NormalizeUserName(expectedUser);
+        if (string.Equals(normalizedTaskUser, normalizedExpectedUser, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        try
+        {
+            SecurityIdentifier? taskSid = ResolveSid(normalizedTaskUser);
+            SecurityIdentifier? expectedSid = ResolveSid(normalizedExpectedUser);
+            return taskSid != null && expectedSid != null && taskSid.Equals(expectedSid);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string NormalizeUserName(string userName)
+    {
+        return userName.Trim().Replace('/', '\\');
+    }
+
+    private static SecurityIdentifier? ResolveSid(string userName)
+    {
+        if (userName.StartsWith("S-1-", StringComparison.OrdinalIgnoreCase))
+        {
+            return new SecurityIdentifier(userName);
+        }
+
+        return new NTAccount(userName).Translate(typeof(SecurityIdentifier)) as SecurityIdentifier;
+    }
+
+    private static int GetExecutableBuildNumber(string exePath)
+    {
+        try
+        {
+            FileVersionInfo info = FileVersionInfo.GetVersionInfo(exePath);
+            return info.FileBuildPart;
+        }
+        catch
+        {
+            return 0;
+        }
     }
 }
