@@ -109,11 +109,16 @@ internal static class Program
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += (_, e) => LogFatalException("UI thread", e.Exception);
         AppDomain.CurrentDomain.UnhandledException += (_, e) => LogFatalException("AppDomain", e.ExceptionObject as Exception);
-        ErrorLog.Write("Startup", $"Launching {AppInfo.DisplayVersion} from {AppContext.BaseDirectory}");
+        ErrorLog.WriteAlways("Startup", $"Launching {AppInfo.DisplayVersion} from {AppContext.BaseDirectory}");
 
         if (shouldCaptureUiScreenshots)
         {
-            TrayContext.CaptureUiScreenshots(Path.Combine(Directory.GetCurrentDirectory(), "UI Screenshots", $"Build {AppInfo.BuildNumber}"));
+            string workingDirectory = Directory.GetCurrentDirectory();
+            string assetsDirectory = Path.Combine(workingDirectory, "assets");
+            string screenshotsRoot = Directory.Exists(assetsDirectory)
+                ? Path.Combine(assetsDirectory, "screenshots")
+                : Path.Combine(workingDirectory, "UI Screenshots");
+            TrayContext.CaptureUiScreenshots(Path.Combine(screenshotsRoot, $"Build {AppInfo.BuildNumber}"));
             return;
         }
 
@@ -301,7 +306,7 @@ internal static class Program
         }
         finally
         {
-            ErrorLog.Write("Shutdown", "QuickZoom process exiting.");
+            ErrorLog.WriteAlways("Shutdown", "QuickZoom process exiting.");
             ReleaseSingleInstanceMutex();
         }
     }

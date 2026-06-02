@@ -638,7 +638,7 @@ internal static class StartupDialogs
         {
             _palette = palette;
             DoubleBuffered = true;
-            BackColor = Color.Transparent;
+            BackColor = palette.MenuBackground;
         }
 
         protected override void OnPaint(PaintEventArgs e)

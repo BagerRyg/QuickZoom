@@ -101,6 +101,12 @@ internal static class ErrorLog
         WriteCore(source, message);
     }
 
+    internal static void WriteAlways(string source, string message)
+    {
+        EnsureConfigured();
+        WriteCore(source, message);
+    }
+
     internal static void WriteCrash(string source, Exception? exception)
     {
         string message = exception?.ToString() ?? "Unknown exception.";

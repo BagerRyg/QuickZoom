@@ -232,6 +232,7 @@ internal sealed partial class TrayContext : ApplicationContext
         _uiInvoker.CreateControl();
         InitializeCoreRuntime();
         InitializeShellIntegration();
+        SubscribePowerAndSessionChanges();
         StartDeferredStartupIfNeeded();
     }
 
@@ -282,6 +283,7 @@ internal sealed partial class TrayContext : ApplicationContext
                 _tray.Dispose();
             }
 
+            UnsubscribePowerAndSessionChanges();
             UnsubscribeThemeChanges();
             UnsubscribeDisplayChanges();
             _iconRef?.Dispose();
