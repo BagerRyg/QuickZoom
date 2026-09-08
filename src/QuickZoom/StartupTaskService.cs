@@ -120,7 +120,23 @@ internal static class StartupTaskService
 
     internal static string GetStatusLabel(UiLanguage language)
     {
-        return GetStatus() switch
+        return FormatStatusLabel(GetStatus(), language);
+    }
+
+    internal static string GetCachedStatusLabel(UiLanguage language)
+    {
+        StartupTaskStatus status;
+        lock (CacheSync)
+        {
+            status = _cachedInfo?.Status ?? StartupTaskStatus.Unknown;
+        }
+
+        return FormatStatusLabel(status, language);
+    }
+
+    private static string FormatStatusLabel(StartupTaskStatus status, UiLanguage language)
+    {
+        return status switch
         {
             StartupTaskStatus.Ready => UiText.Get(language, "Tray.StartupConfigured"),
             StartupTaskStatus.Missing => UiText.Get(language, "Tray.StartupMissing"),
@@ -133,7 +149,7 @@ internal static class StartupTaskService
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = "schtasks.exe",
+            FileName = Path.Combine(Environment.SystemDirectory, "schtasks.exe"),
             Arguments = "/Query /TN \"" + taskName + "\" /XML",
             CreateNoWindow = true,
             UseShellExecute = false,
@@ -212,9 +228,27 @@ internal static class StartupTaskService
         try
         {
             XDocument document = XDocument.Parse(xml);
-            string? executePath = document.Descendants().FirstOrDefault(node => node.Name.LocalName == "Command")?.Value?.Trim();
-            string? arguments = document.Descendants().FirstOrDefault(node => node.Name.LocalName == "Arguments")?.Value?.Trim();
-            string? userId = document.Descendants().FirstOrDefault(node => node.Name.LocalName == "UserId")?.Value?.Trim();
+            XNamespace ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+            XElement? root = document.Root;
+            XElement? actions = root?.Element(ns + "Actions");
+            XElement? exec = actions?.Element(ns + "Exec");
+            XElement? principals = root?.Element(ns + "Principals");
+            XElement? principal = principals?.Element(ns + "Principal");
+            XElement? triggers = root?.Element(ns + "Triggers");
+            XElement? trigger = triggers?.Element(ns + "LogonTrigger");
+            string? executePath = exec?.Element(ns + "Command")?.Value;
+            string? arguments = exec?.Element(ns + "Arguments")?.Value;
+            string? userId = principal?.Element(ns + "UserId")?.Value;
+            bool exactDefinition = root?.Name == ns + "Task" && actions?.Elements().Count() == 1 && exec != null &&
+                exec.Elements(ns + "Command").Count() == 1 && exec.Elements(ns + "Arguments").Count() == 1 &&
+                exec.Elements().Count() == 2 && principals?.Elements().Count() == 1 && principal != null &&
+                (string?)actions.Attribute("Context") == (string?)principal.Attribute("id") &&
+                principal.Element(ns + "RunLevel")?.Value == "HighestAvailable" &&
+                principal.Element(ns + "LogonType")?.Value == "InteractiveToken" &&
+                triggers?.Elements().Count() == 1 && trigger != null &&
+                trigger.Element(ns + "Enabled")?.Value == "true" &&
+                !string.IsNullOrWhiteSpace(userId) && !string.IsNullOrWhiteSpace(trigger.Element(ns + "UserId")?.Value) &&
+                UserMatches(userId, trigger.Element(ns + "UserId")?.Value);
 
             if (string.IsNullOrWhiteSpace(executePath))
             {
@@ -232,7 +266,7 @@ internal static class StartupTaskService
                 executePath = Path.GetFullPath(executePath);
             }
 
-            if (!File.Exists(executePath))
+            if (!exactDefinition || !InstalledAppService.IsSecureInstallPath(executePath))
             {
                 return new StartupTaskInfo
                 {
@@ -240,7 +274,7 @@ internal static class StartupTaskService
                     ExecutePath = executePath,
                     Arguments = arguments,
                     UserId = userId,
-                    Details = "The startup task points to an executable that no longer exists."
+                    Details = "The startup task definition or installed executable is not trusted."
                 };
             }
 
@@ -258,8 +292,7 @@ internal static class StartupTaskService
                 };
             }
 
-            if (string.IsNullOrWhiteSpace(arguments) ||
-                arguments.IndexOf(ElevatedLaunchFlag, StringComparison.OrdinalIgnoreCase) < 0)
+            if (!string.Equals(arguments, ElevatedLaunchFlag, StringComparison.Ordinal))
             {
                 return new StartupTaskInfo
                 {

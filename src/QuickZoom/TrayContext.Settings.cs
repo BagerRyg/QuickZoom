@@ -6,6 +6,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Windows.Forms;
 
 namespace QuickZoom;
@@ -21,7 +22,7 @@ internal sealed partial class TrayContext
     private sealed class Settings
     {
         public int ThemeMode { get; set; } = (int)TrayContext.ThemeMode.AutoSystem;
-        public int UiFontSize { get; set; } = (int)TrayContext.UiFontSize.Large;
+        public int UiFontSize { get; set; } = (int)TrayContext.UiFontSize.Default;
         public int StepPercent { get; set; } = 30;
         public int MaxPercent { get; set; } = 400;
         public bool MagnificationEnabled { get; set; } = true;
@@ -39,9 +40,11 @@ internal sealed partial class TrayContext
         public bool AutoDisableAt100 { get; set; } = true;
         public int Fps { get; set; } = 120;
         public bool CenterCursor { get; set; }
+        public bool SuppressShortcutKeystrokes { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public bool SuppressAltKeyInOfficeApps { get; set; }
+        [JsonIgnore]
         public bool DebugLoggingEnabled { get; set; }
-        public bool ColourblindMode { get; set; }
         public bool WiggleSpotlightEnabled { get; set; } = true;
         public bool CursorEnhancementEnabled { get; set; }
         public int CursorScale { get; set; } = 100;
@@ -50,14 +53,30 @@ internal sealed partial class TrayContext
         public bool AutoSwitchMonitor { get; set; } = true;
         public bool UseCursorMonitorSelection { get; set; }
         public List<string> SelectedMonitorDeviceNames { get; set; } = new();
+        public int ZoomMode { get; set; } = (int)TrayContext.ZoomMode.Fullscreen;
+        public int LensSize { get; set; } = 360;
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public int LensWidth { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public int LensHeight { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public int LensZoomPercent { get; set; }
+        public int LensShape { get; set; } = (int)TrayContext.LensShape.Rectangle;
+        public int DockPosition { get; set; } = (int)TrayContext.DockPosition.Top;
+        public int DockSizePercent { get; set; } = 25;
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public int DockZoomPercent { get; set; }
+        public int TrackingSource { get; set; } = (int)TrayContext.TrackingSource.MouseCursor;
     }
+
+    internal static bool IsKnownSetting(string name) => typeof(Settings).GetProperty(name) != null;
 
     private static Settings CreateDefaultSettings()
     {
         return new Settings
         {
             ThemeMode = (int)ThemeMode.AutoSystem,
-            UiFontSize = (int)UiFontSize.Large,
+            UiFontSize = (int)UiFontSize.Default,
             StepPercent = 30,
             MaxPercent = 400,
             MagnificationEnabled = true,
@@ -75,9 +94,8 @@ internal sealed partial class TrayContext
             AutoDisableAt100 = true,
             Fps = 120,
             CenterCursor = false,
-            SuppressAltKeyInOfficeApps = false,
+            SuppressShortcutKeystrokes = false,
             DebugLoggingEnabled = false,
-            ColourblindMode = false,
             WiggleSpotlightEnabled = true,
             CursorEnhancementEnabled = false,
             CursorScale = 100,
@@ -85,7 +103,13 @@ internal sealed partial class TrayContext
             CursorBorderColor = Color.Black.ToArgb(),
             AutoSwitchMonitor = true,
             UseCursorMonitorSelection = false,
-            SelectedMonitorDeviceNames = new List<string>()
+            SelectedMonitorDeviceNames = new List<string>(),
+            ZoomMode = (int)ZoomMode.Fullscreen,
+            LensSize = 360,
+            LensShape = (int)LensShape.Rectangle,
+            DockPosition = (int)DockPosition.Top,
+            DockSizePercent = 25,
+            TrackingSource = (int)TrackingSource.MouseCursor
         };
     }
 
@@ -98,7 +122,7 @@ internal sealed partial class TrayContext
             : ThemeMode.AutoSystem;
         _uiFontSize = Enum.IsDefined(typeof(UiFontSize), s.UiFontSize)
             ? (UiFontSize)s.UiFontSize
-            : UiFontSize.Large;
+            : UiFontSize.Default;
         ApplyUiFontScale();
         _enabled = s.MagnificationEnabled;
         _invertEnabled = s.InvertEnabled;
@@ -124,9 +148,8 @@ internal sealed partial class TrayContext
         _autoDisableAt100 = s.AutoDisableAt100;
         _fps = NormalizeFpsSetting(s.Fps);
         _centerCursor = s.CenterCursor;
-        _suppressAltKeyInOfficeApps = s.SuppressAltKeyInOfficeApps && IsAltEnableKey();
-        _debugLoggingEnabled = s.DebugLoggingEnabled;
-        _colourblindMode = s.ColourblindMode;
+        _suppressShortcutKeystrokes = s.SuppressShortcutKeystrokes || s.SuppressAltKeyInOfficeApps;
+        _debugLoggingEnabled = false;
         ErrorLog.Configure(_debugLoggingEnabled, AppInfo.VersionHash);
         _wiggleSpotlightEnabled = s.WiggleSpotlightEnabled;
         _cursorEnhancementEnabled = s.CursorEnhancementEnabled;
@@ -134,6 +157,12 @@ internal sealed partial class TrayContext
         _cursorFillColorArgb = NormalizeCursorColor(s.CursorFillColor, Color.White);
         _cursorBorderColorArgb = NormalizeCursorColor(s.CursorBorderColor, Color.Black);
         _useCursorMonitorSelection = s.UseCursorMonitorSelection;
+        _zoomMode = Enum.IsDefined(typeof(ZoomMode), s.ZoomMode) ? (ZoomMode)s.ZoomMode : ZoomMode.Fullscreen;
+        _lensSize = NormalizeLensSize(s.LensSize > 0 ? s.LensSize : s.LensWidth);
+        _lensShape = Enum.IsDefined(typeof(LensShape), s.LensShape) ? (LensShape)s.LensShape : LensShape.Rectangle;
+        _dockPosition = Enum.IsDefined(typeof(DockPosition), s.DockPosition) ? (DockPosition)s.DockPosition : DockPosition.Top;
+        _dockSizePercent = NormalizeDockSizePercent(s.DockSizePercent);
+        _trackingSource = Enum.IsDefined(typeof(TrackingSource), s.TrackingSource) ? (TrackingSource)s.TrackingSource : TrackingSource.MouseCursor;
         if (!_invertEnabled)
         {
             _invertColors = false;
@@ -142,6 +171,10 @@ internal sealed partial class TrayContext
         _enableKeyPressed = false;
         _invertKeyPressed = false;
         _followCursorKeyPressed = false;
+        _controlKeyPressed = false;
+        _altGrPressed = false;
+        ResetEnableKeySuppressionState();
+        _suppressedShortcutKeyUps.Clear();
         _wheelDeltaRemainder = 0;
         _pendingExitConfirmation = false;
         _lockedScreen = null;
@@ -156,33 +189,38 @@ internal sealed partial class TrayContext
         EnsureSelectedMonitorsValid();
         ApplyThemePreference(force: true);
         ApplyFps();
-        if (_followCursor)
-        {
-            _followTimer?.Start();
-        }
-        else
-        {
-            _followTimer?.Stop();
-        }
+        UpdateFollowTimerState();
     }
 
     private void LoadSettings()
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!);
-
-            if (!File.Exists(_settingsPath) && File.Exists(_legacySettingsPath))
+            if (!_screenshotMode)
             {
-                File.Copy(_legacySettingsPath, _settingsPath, overwrite: false);
+                LocalStorage.RunAsUser(() =>
+                {
+                    LocalStorage.RequireLocalPath(_settingsPath);
+                    Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!);
+                });
+
+                if (!File.Exists(_settingsPath) && File.Exists(_legacySettingsPath))
+                {
+                    File.Copy(_legacySettingsPath, _settingsPath, overwrite: false);
+                }
             }
 
-            if (!File.Exists(_settingsPath))
+            string settingsPath = File.Exists(_settingsPath)
+                ? _settingsPath
+                : _screenshotMode && File.Exists(_legacySettingsPath)
+                    ? _legacySettingsPath
+                    : _settingsPath;
+            if (!File.Exists(settingsPath))
             {
                 return;
             }
 
-            var s = JsonSerializer.Deserialize<Settings>(File.ReadAllText(_settingsPath));
+            var s = JsonSerializer.Deserialize<Settings>(File.ReadAllText(settingsPath));
             if (s == null)
             {
                 return;
@@ -192,7 +230,10 @@ internal sealed partial class TrayContext
         }
         catch (JsonException ex)
         {
-            TryQuarantineCorruptSettingsFile();
+            if (!_screenshotMode)
+            {
+                TryQuarantineCorruptSettingsFile();
+            }
             ErrorLog.Write("LoadSettings", ex);
             TryApplyDefaultSettingsAfterLoadFailure();
         }
@@ -218,6 +259,12 @@ internal sealed partial class TrayContext
 
     private void SaveSettings()
     {
+        if (_screenshotMode || _setupPracticeMode)
+        {
+            UpdateMenuLabels();
+            return;
+        }
+
         Settings snapshot = CreateSettingsSnapshot();
         lock (_settingsSaveSync)
         {
@@ -226,9 +273,12 @@ internal sealed partial class TrayContext
 
         void ScheduleSave()
         {
-            _settingsSaveTimer ??= new System.Windows.Forms.Timer { Interval = 400 };
-            _settingsSaveTimer.Tick -= OnSettingsSaveTimerTick;
-            _settingsSaveTimer.Tick += OnSettingsSaveTimerTick;
+            if (_settingsSaveTimer == null)
+            {
+                _settingsSaveTimer = new System.Windows.Forms.Timer { Interval = 400 };
+                _settingsSaveTimer.Tick += OnSettingsSaveTimerTick;
+            }
+
             _settingsSaveTimer.Stop();
             _settingsSaveTimer.Start();
         }
@@ -265,6 +315,16 @@ internal sealed partial class TrayContext
 
     private void FlushSettingsSave()
     {
+        if (_screenshotMode || _setupPracticeMode)
+        {
+            lock (_settingsSaveSync)
+            {
+                _pendingSettingsSave = null;
+            }
+            _settingsSaveTimer?.Stop();
+            return;
+        }
+
         Settings? snapshot;
         lock (_settingsSaveSync)
         {
@@ -312,16 +372,21 @@ internal sealed partial class TrayContext
             AutoDisableAt100 = _autoDisableAt100,
             Fps = _fps,
             CenterCursor = _centerCursor,
-            SuppressAltKeyInOfficeApps = _suppressAltKeyInOfficeApps && IsAltEnableKey(),
+            SuppressShortcutKeystrokes = _suppressShortcutKeystrokes,
             DebugLoggingEnabled = _debugLoggingEnabled,
-            ColourblindMode = _colourblindMode,
             WiggleSpotlightEnabled = _wiggleSpotlightEnabled,
             CursorEnhancementEnabled = _cursorEnhancementEnabled,
             CursorScale = _cursorScale,
             CursorFillColor = _cursorFillColorArgb,
             CursorBorderColor = _cursorBorderColorArgb,
             UseCursorMonitorSelection = _useCursorMonitorSelection,
-            SelectedMonitorDeviceNames = _selectedMonitorDeviceNames.ToList()
+            SelectedMonitorDeviceNames = _selectedMonitorDeviceNames.ToList(),
+            ZoomMode = (int)_zoomMode,
+            LensSize = _lensSize,
+            LensShape = (int)_lensShape,
+            DockPosition = (int)_dockPosition,
+            DockSizePercent = _dockSizePercent,
+            TrackingSource = (int)_trackingSource
         };
     }
 
@@ -335,13 +400,34 @@ internal sealed partial class TrayContext
         return _fpsOptions.Contains(fps) ? fps : _fpsOptions[0];
     }
 
+    private static int NormalizeLensSize(int size)
+    {
+        int clamped = Math.Clamp(size, 100, 1400);
+        if (clamped >= 1400)
+        {
+            return 1400;
+        }
+
+        return 100 + (int)Math.Round((clamped - 100) / 40.0, MidpointRounding.AwayFromZero) * 40;
+    }
+
+    private static int NormalizeDockSizePercent(int sizePercent)
+    {
+        int clamped = Math.Clamp(sizePercent, 10, 50);
+        return 10 + (int)Math.Round((clamped - 10) / 5.0) * 5;
+    }
+
     private void WriteSettingsSnapshot(Settings s)
     {
+        if (_screenshotMode)
+        {
+            return;
+        }
+
         try
         {
             lock (_settingsWriteSync)
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!);
                 FilePersistence.WriteAllTextAtomic(
                     _settingsPath,
                     JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true }));
@@ -602,17 +688,12 @@ internal sealed partial class TrayContext
 
     private string InvertTriggerLabel() => _invertTrigger switch
     {
-        InvertTriggerKind.EnableKeyPlusMiddleClick => InvertTriggerTextForCurrentEnableKey(L("Settings.Trigger.EnableMiddle")),
-        InvertTriggerKind.EnableKeyPlusXButton1 => InvertTriggerTextForCurrentEnableKey(L("Settings.Trigger.EnableX1")),
-        InvertTriggerKind.EnableKeyPlusXButton2 => InvertTriggerTextForCurrentEnableKey(L("Settings.Trigger.EnableX2")),
+        InvertTriggerKind.EnableKeyPlusMiddleClick => L("Settings.Trigger.EnableMiddle", KeyLabel(_enableKey)),
+        InvertTriggerKind.EnableKeyPlusXButton1 => L("Settings.Trigger.EnableX1", KeyLabel(_enableKey)),
+        InvertTriggerKind.EnableKeyPlusXButton2 => L("Settings.Trigger.EnableX2", KeyLabel(_enableKey)),
         InvertTriggerKind.CustomKey => KeyLabel(_invertKey),
         _ => L("Common.Unknown")
     };
-
-    private string InvertTriggerTextForCurrentEnableKey(string templateKey)
-    {
-        return string.Format(L(templateKey), KeyLabel(_enableKey));
-    }
 
     private void TryQuarantineCorruptSettingsFile()
     {
@@ -623,11 +704,8 @@ internal sealed partial class TrayContext
                 return;
             }
 
-            string backupPath = Path.Combine(
-                Path.GetDirectoryName(_settingsPath)!,
-                Path.GetFileNameWithoutExtension(_settingsPath) + ".corrupt-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + Path.GetExtension(_settingsPath));
-
-            File.Move(_settingsPath, backupPath);
+            // Replace invalid data without retaining an unbounded copy of its contents.
+            FilePersistence.WriteAllTextAtomic(_settingsPath, "{}");
         }
         catch (Exception ex)
         {

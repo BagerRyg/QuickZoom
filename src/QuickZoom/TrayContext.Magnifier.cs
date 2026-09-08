@@ -1,9 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Windows.Automation;
 using System.Windows.Forms;
 
 namespace QuickZoom;
@@ -73,6 +76,15 @@ internal sealed partial class TrayContext
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern bool EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
 
+    [DllImport("user32.dll")]
+    private static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO lpgui);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    private static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
+
     private const uint SPI_SETCURSORS = 0x0057;
     private const uint LWA_ALPHA = 0x00000002;
     private const int WS_CHILD = 0x40000000;
@@ -119,6 +131,20 @@ internal sealed partial class TrayContext
         public uint dmReserved2;
         public uint dmPanningWidth;
         public uint dmPanningHeight;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GUITHREADINFO
+    {
+        public int cbSize;
+        public int flags;
+        public IntPtr hwndActive;
+        public IntPtr hwndFocus;
+        public IntPtr hwndCapture;
+        public IntPtr hwndMenuOwner;
+        public IntPtr hwndMoveSize;
+        public IntPtr hwndCaret;
+        public RECT rcCaret;
     }
     private const int WS_EX_NOACTIVATE = 0x08000000;
     private const int WS_EX_TOPMOST = 0x00000008;
@@ -376,12 +402,281 @@ internal sealed partial class TrayContext
         }
     }
 
+    private sealed class OverlayMagnifierHostForm : Form
+    {
+        public OverlayMagnifierHostForm(Rectangle bounds)
+        {
+            Bounds = bounds;
+            FormBorderStyle = FormBorderStyle.None;
+            StartPosition = FormStartPosition.Manual;
+            ShowInTaskbar = false;
+            TopMost = true;
+            BackColor = Color.Black;
+        }
+
+        protected override bool ShowWithoutActivation => true;
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ExStyle |= WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_LAYERED;
+                cp.Style |= WS_CLIPCHILDREN;
+                return cp;
+            }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_NCHITTEST)
+            {
+                m.Result = (IntPtr)HTTRANSPARENT;
+                return;
+            }
+
+            if (m.Msg == WM_MOUSEACTIVATE)
+            {
+                m.Result = (IntPtr)MA_NOACTIVATE;
+                return;
+            }
+
+            base.WndProc(ref m);
+        }
+    }
+
+    private sealed class OverlayMagnifierWindow : IDisposable
+    {
+        private readonly OverlayMagnifierHostForm _host;
+        private IntPtr _magnifierHandle;
+        private bool _hasLastFrame;
+        private RECT _lastSourceRect;
+        private Rectangle _lastBounds;
+        private Size _lastSize;
+        private LensShape _lastShape = (LensShape)(-1);
+        private float _lastMagnification;
+        private MAGCOLOREFFECT _lastColorEffect;
+
+        public IntPtr HostHandle => _host.Handle;
+        public IntPtr MagnifierHandle => _magnifierHandle;
+
+        public OverlayMagnifierWindow(Rectangle bounds, bool showMagnifiedCursor, LensShape shape)
+        {
+            _host = new OverlayMagnifierHostForm(bounds);
+            _ = _host.Handle;
+            if (!SetLayeredWindowAttributes(_host.Handle, 0, 255, LWA_ALPHA))
+            {
+                ErrorLog.WriteThrottled("OverlayMagnification.SetLayeredWindowAttributes", new Win32Exception(Marshal.GetLastWin32Error()));
+            }
+
+            int style = WS_CHILD | WS_VISIBLE | WS_DISABLED;
+            if (showMagnifiedCursor)
+            {
+                style |= MS_SHOWMAGNIFIEDCURSOR;
+            }
+
+            _magnifierHandle = CreateWindowEx(
+                WS_EX_TRANSPARENT,
+                "Magnifier",
+                null,
+                style,
+                0,
+                0,
+                bounds.Width,
+                bounds.Height,
+                _host.Handle,
+                IntPtr.Zero,
+                IntPtr.Zero,
+                IntPtr.Zero);
+
+            if (_magnifierHandle == IntPtr.Zero)
+            {
+                int error = Marshal.GetLastWin32Error();
+                _host.Close();
+                _host.Dispose();
+                throw new Win32Exception(error, "Failed to create overlay magnifier child window.");
+            }
+
+            _lastBounds = bounds;
+            _lastSize = bounds.Size;
+            _lastShape = shape;
+            ApplyShape(shape);
+            _host.Show();
+        }
+
+        public void UpdateBounds(Rectangle bounds, LensShape shape)
+        {
+            bool sizeChanged = _lastSize != bounds.Size;
+            bool shapeChanged = _lastShape != shape;
+            if (_lastBounds == bounds && !sizeChanged && !shapeChanged)
+            {
+                return;
+            }
+
+            _host.Bounds = bounds;
+            _lastBounds = bounds;
+            if (sizeChanged || shapeChanged)
+            {
+                _lastSize = bounds.Size;
+                _lastShape = shape;
+                ApplyShape(shape);
+                _hasLastFrame = false;
+            }
+
+            if (sizeChanged &&
+                _magnifierHandle != IntPtr.Zero &&
+                !MoveWindow(_magnifierHandle, 0, 0, bounds.Width, bounds.Height, true))
+            {
+                ErrorLog.WriteThrottled("OverlayMagnification.MoveWindow", new Win32Exception(Marshal.GetLastWin32Error()));
+            }
+        }
+
+        public void Apply(float magnification, RECT sourceRect, MAGCOLOREFFECT colorEffect)
+        {
+            if (_magnifierHandle == IntPtr.Zero)
+            {
+                return;
+            }
+
+            bool colorEffectChanged = !_hasLastFrame || !ColorEffectEquals(_lastColorEffect, colorEffect);
+            if (_hasLastFrame &&
+                Math.Abs(_lastMagnification - magnification) < 0.0001f &&
+                RectEquals(_lastSourceRect, sourceRect) &&
+                !colorEffectChanged)
+            {
+                return;
+            }
+
+            if (colorEffectChanged)
+            {
+                if (!MagSetColorEffect(_magnifierHandle, ref colorEffect))
+                {
+                    ErrorLog.WriteThrottled("OverlayMagnification.SetColorEffect", "MagSetColorEffect failed.");
+                    return;
+                }
+            }
+
+            if (!_hasLastFrame || Math.Abs(_lastMagnification - magnification) >= 0.0001f)
+            {
+                var transform = new MAGTRANSFORM
+                {
+                    v00 = magnification,
+                    v11 = magnification,
+                    v22 = 1f
+                };
+                if (!MagSetWindowTransform(_magnifierHandle, ref transform))
+                {
+                    ErrorLog.WriteThrottled("OverlayMagnification.SetWindowTransform", "MagSetWindowTransform failed.");
+                    return;
+                }
+            }
+
+            if (colorEffectChanged || !RectEquals(_lastSourceRect, sourceRect))
+            {
+                if (!MagSetWindowSource(_magnifierHandle, sourceRect))
+                {
+                    ErrorLog.WriteThrottled("OverlayMagnification.SetWindowSource", "MagSetWindowSource failed.");
+                    return;
+                }
+            }
+
+            _lastMagnification = magnification;
+            _lastSourceRect = sourceRect;
+            _lastColorEffect = colorEffect;
+            _hasLastFrame = true;
+        }
+
+        public void ExcludeFromSource()
+        {
+            if (_magnifierHandle == IntPtr.Zero)
+            {
+                return;
+            }
+
+            IntPtr[] handles = [HostHandle];
+            if (!MagSetWindowFilterList(_magnifierHandle, MW_FILTERMODE_EXCLUDE, handles.Length, handles))
+            {
+                ErrorLog.WriteThrottled("OverlayMagnification.FilterList", "MagSetWindowFilterList failed.");
+            }
+        }
+
+        public void SetVisible(bool visible)
+        {
+            if (visible)
+            {
+                if (!_host.Visible)
+                {
+                    _host.Show();
+                }
+            }
+            else if (_host.Visible)
+            {
+                _host.Hide();
+            }
+        }
+
+        private void ApplyShape(LensShape shape)
+        {
+            _host.Region?.Dispose();
+            _host.Region = null;
+
+            if (shape == LensShape.Rectangle || shape == LensShape.Square)
+            {
+                return;
+            }
+
+            using GraphicsPath path = new();
+            Rectangle rect = new(Point.Empty, _host.Size);
+            if (shape == LensShape.Circle)
+            {
+                path.AddEllipse(rect);
+            }
+
+            _host.Region = new Region(path);
+        }
+
+        public void Dispose()
+        {
+            _host.Hide();
+            _host.Region?.Dispose();
+            _host.Region = null;
+            if (_magnifierHandle != IntPtr.Zero)
+            {
+                _ = DestroyWindow(_magnifierHandle);
+                _magnifierHandle = IntPtr.Zero;
+            }
+
+            _host.Close();
+            _host.Dispose();
+        }
+    }
+
     private static bool RectEquals(RECT a, RECT b)
     {
         return a.left == b.left &&
             a.top == b.top &&
             a.right == b.right &&
             a.bottom == b.bottom;
+    }
+
+    private static bool ColorEffectEquals(MAGCOLOREFFECT a, MAGCOLOREFFECT b)
+    {
+        return Math.Abs(a.v00 - b.v00) < 0.0001f &&
+            Math.Abs(a.v11 - b.v11) < 0.0001f &&
+            Math.Abs(a.v22 - b.v22) < 0.0001f &&
+            Math.Abs(a.v33 - b.v33) < 0.0001f &&
+            Math.Abs(a.v40 - b.v40) < 0.0001f &&
+            Math.Abs(a.v41 - b.v41) < 0.0001f &&
+            Math.Abs(a.v42 - b.v42) < 0.0001f &&
+            Math.Abs(a.v44 - b.v44) < 0.0001f;
+    }
+
+    private void ResetFullscreenFrameCache()
+    {
+        _lastFullscreenMagnification = float.NaN;
+        _lastFullscreenXOffset = int.MinValue;
+        _lastFullscreenYOffset = int.MinValue;
+        _lastFullscreenInvertColors = null;
     }
 
     private bool IsPerMonitorTrackingSuspended => _suspendPerMonitorTrackingForMenu || _suspendPerMonitorTrackingForShellUi;
@@ -406,6 +701,14 @@ internal sealed partial class TrayContext
 
             return;
         }
+
+        long now = Environment.TickCount64;
+        if (now - _lastShellUiTrackingCheckTick < 100)
+        {
+            return;
+        }
+
+        _lastShellUiTrackingCheckTick = now;
 
         bool shouldSuspend = IsShellPopupForeground();
         if (shouldSuspend == _suspendPerMonitorTrackingForShellUi)
@@ -456,6 +759,7 @@ internal sealed partial class TrayContext
             }
 
             _magInitializationFailureLogged = false;
+            ResetFullscreenFrameCache();
             _monitorLayoutDirty = true;
             if (!_autoSwitchMonitor && GetCursorPos(out var ptLock))
             {
@@ -465,6 +769,22 @@ internal sealed partial class TrayContext
 
         if (active)
         {
+            if (_zoomMode != ZoomMode.Fullscreen)
+            {
+                DestroyMonitorWindows();
+                if (_useFullscreenBackend)
+                {
+                    _ = MagSetFullscreenTransform(1.0f, 0, 0);
+                    var identity = IdentityColorEffect;
+                    _ = MagSetFullscreenColorEffect(ref identity);
+                }
+
+                _useFullscreenBackend = false;
+                ResetFullscreenFrameCache();
+                return;
+            }
+
+            DestroyOverlayWindow();
             bool shouldUseFullscreen = ShouldUseFullscreenBackend();
             if (shouldUseFullscreen != _useFullscreenBackend)
             {
@@ -481,6 +801,7 @@ internal sealed partial class TrayContext
                 }
 
                 _useFullscreenBackend = shouldUseFullscreen;
+                ResetFullscreenFrameCache();
             }
 
             if (_useFullscreenBackend)
@@ -500,6 +821,7 @@ internal sealed partial class TrayContext
         else if (_magActive)
         {
             bool wasFullscreenBackend = _useFullscreenBackend;
+            DestroyOverlayWindow();
             DestroyMonitorWindows();
             if (wasFullscreenBackend)
             {
@@ -513,6 +835,7 @@ internal sealed partial class TrayContext
             }
             _magActive = false;
             _useFullscreenBackend = false;
+            ResetFullscreenFrameCache();
             _monitorLayoutDirty = true;
 
             // Cursor reset is only needed for fullscreen magnification transitions.
@@ -526,8 +849,8 @@ internal sealed partial class TrayContext
     private bool ShouldUseFullscreenBackend()
     {
         int selectedCount = GetSelectedScreens().Count;
-        int allCount = Screen.AllScreens.Length;
-        // Fullscreen API magnifies the entire desktop; use it only for all-displays mode.
+        int allCount = GetOrderedScreens().Count;
+        // Use the native fullscreen API only when the selected area is the full desktop.
         return selectedCount == allCount;
     }
 
@@ -617,8 +940,22 @@ internal sealed partial class TrayContext
         _lastAnchorByMonitor.Clear();
     }
 
+    private void DestroyOverlayWindow()
+    {
+        _overlayWindow?.Dispose();
+        _overlayWindow = null;
+        _smoothedLensCenter = null;
+    }
+
     private void RefreshMagnifierCursorRendering()
     {
+        if (_zoomMode != ZoomMode.Fullscreen)
+        {
+            DestroyOverlayWindow();
+            ApplyTransformCurrentPoint();
+            return;
+        }
+
         if (!_magActive || _useFullscreenBackend || _monitorWindows.Count == 0)
         {
             return;
@@ -662,6 +999,7 @@ internal sealed partial class TrayContext
         _animTargetPercent = 100;
         _animAnchorValid = false;
         EnsureMag(false);
+        UpdateFollowTimerState();
     }
 
     private void ClampZoom()
@@ -674,6 +1012,12 @@ internal sealed partial class TrayContext
 
     private void ApplyTransformCurrentPoint()
     {
+        if (_zoomMode != ZoomMode.Fullscreen && _zoomPercent <= 100 && !_invertColors)
+        {
+            DisableMagAndReset();
+            return;
+        }
+
         bool needsVisualEffect = _invertColors || _zoomPercent > 100;
         if (_autoDisableAt100 && !needsVisualEffect)
         {
@@ -681,21 +1025,16 @@ internal sealed partial class TrayContext
             return;
         }
 
-        UpdateShellUiTrackingState();
         EnsureMag(true);
         if (!_magActive)
         {
-            return;
-        }
-
-        UpdateShellUiTrackingState();
-        if (IsPerMonitorTrackingSuspended && !_useFullscreenBackend)
-        {
+            UpdateFollowTimerState();
             return;
         }
 
         POINT point = GetReferencePointForTransform();
         ApplyTransformAtPoint(point, PercentToMag(_zoomPercent));
+        UpdateFollowTimerState();
     }
 
     private POINT GetReferencePoint()
@@ -715,6 +1054,11 @@ internal sealed partial class TrayContext
 
     private POINT GetReferencePointForTransform()
     {
+        if (_zoomMode != ZoomMode.Fullscreen)
+        {
+            return GetCursorPos(out var overlayPoint) ? overlayPoint : default;
+        }
+
         if (_animAnchorValid && _animTimer != null && _animTimer.Enabled && !_useFullscreenBackend)
         {
             return _animAnchorPoint;
@@ -731,6 +1075,12 @@ internal sealed partial class TrayContext
         }
 
         long frameStartTicks = Stopwatch.GetTimestamp();
+
+        if (_zoomMode != ZoomMode.Fullscreen)
+        {
+            ApplyOverlayTransform(pt);
+            return;
+        }
 
         var selectedScreens = GetSelectedScreens();
         if (selectedScreens.Count == 0)
@@ -850,6 +1200,247 @@ internal sealed partial class TrayContext
             $"Single-monitor frame took {elapsedMs:F2} ms on {GetFriendlyScreenLabel(selectedScreen, TryGetDisplayNumber(selectedScreen.DeviceName) ?? 1)} ({selectedScreen.DeviceName}), refresh={refreshRate}Hz, targetFps={GetEffectiveRenderingFps()}.");
     }
 
+    private void ApplyOverlayTransform(POINT fallbackPoint)
+    {
+        Point anchor = GetTrackingPoint(new Point(fallbackPoint.X, fallbackPoint.Y));
+        Screen screen = Screen.FromPoint(anchor);
+        Rectangle bounds = _zoomMode == ZoomMode.Docked
+            ? BuildDockBounds(screen.Bounds, anchor)
+            : BuildLensBounds(anchor, screen.Bounds);
+
+        float mag = PercentToMag(_zoomPercent);
+        RECT sourceRect = BuildOverlaySourceRect(screen.Bounds, anchor, bounds.Size, mag);
+        MAGCOLOREFFECT colorEffect = _invertColors ? InvertColorEffect : IdentityColorEffect;
+        LensShape shape = _zoomMode == ZoomMode.Docked ? LensShape.Rectangle : _lensShape;
+
+        try
+        {
+            bool showMagnifiedCursor = false;
+            if (_overlayWindow == null)
+            {
+                KeepTrayPopupOpenForOverlayActivation();
+            }
+
+            if (_overlayWindow == null)
+            {
+                _overlayWindow = new OverlayMagnifierWindow(bounds, showMagnifiedCursor, shape);
+                _overlayWindow.ExcludeFromSource();
+            }
+
+            _overlayWindow.UpdateBounds(bounds, shape);
+            _overlayWindow.SetVisible(true);
+            _overlayWindow.Apply(mag, sourceRect, colorEffect);
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("OverlayMagnification", ex);
+            DisableMagAndReset();
+            MessageBox.Show(
+                L("Error.MagnifierInit"),
+                L("Common.AppName"),
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+    }
+
+    private Rectangle BuildLensBounds(Point anchor, Rectangle screenBounds)
+    {
+        PointF target = new(anchor.X, anchor.Y);
+        PointF center = _smoothedLensCenter.HasValue
+            ? new PointF(
+                (_smoothedLensCenter.Value.X * 0.68f) + (target.X * 0.32f),
+                (_smoothedLensCenter.Value.Y * 0.68f) + (target.Y * 0.32f))
+            : target;
+        _smoothedLensCenter = center;
+
+        int width = Math.Clamp(_lensSize, 100, Math.Max(100, screenBounds.Width));
+        int height = _lensShape == LensShape.Rectangle
+            ? Math.Clamp((int)Math.Round(width * 9.0 / 16.0), 56, Math.Max(56, screenBounds.Height))
+            : width;
+        int x = (int)Math.Round(center.X - (width / 2.0));
+        int y = (int)Math.Round(center.Y - (height / 2.0));
+
+        x = Math.Clamp(x, screenBounds.Left, Math.Max(screenBounds.Left, screenBounds.Right - width));
+        y = Math.Clamp(y, screenBounds.Top, Math.Max(screenBounds.Top, screenBounds.Bottom - height));
+        return new Rectangle(x, y, width, height);
+    }
+
+    private Rectangle BuildDockBounds(Rectangle screenBounds, Point anchor)
+    {
+        DockPosition position = _dockPosition;
+        Rectangle preferredBounds = BuildDockBoundsForPosition(screenBounds, position);
+        if (preferredBounds.Contains(anchor))
+        {
+            position = OppositeDockPosition(position);
+        }
+
+        return BuildDockBoundsForPosition(screenBounds, position);
+    }
+
+    private Rectangle BuildDockBoundsForPosition(Rectangle screenBounds, DockPosition position)
+    {
+        int sizePercent = Math.Clamp(_dockSizePercent, 10, 50);
+        return position switch
+        {
+            DockPosition.Bottom => new Rectangle(
+                screenBounds.Left,
+                screenBounds.Bottom - Math.Max(80, (int)Math.Round(screenBounds.Height * sizePercent / 100.0)),
+                screenBounds.Width,
+                Math.Max(80, (int)Math.Round(screenBounds.Height * sizePercent / 100.0))),
+            DockPosition.Left => new Rectangle(
+                screenBounds.Left,
+                screenBounds.Top,
+                Math.Max(120, (int)Math.Round(screenBounds.Width * sizePercent / 100.0)),
+                screenBounds.Height),
+            DockPosition.Right => new Rectangle(
+                screenBounds.Right - Math.Max(120, (int)Math.Round(screenBounds.Width * sizePercent / 100.0)),
+                screenBounds.Top,
+                Math.Max(120, (int)Math.Round(screenBounds.Width * sizePercent / 100.0)),
+                screenBounds.Height),
+            _ => new Rectangle(
+                screenBounds.Left,
+                screenBounds.Top,
+                screenBounds.Width,
+                Math.Max(80, (int)Math.Round(screenBounds.Height * sizePercent / 100.0)))
+        };
+    }
+
+    private static DockPosition OppositeDockPosition(DockPosition position) => position switch
+    {
+        DockPosition.Bottom => DockPosition.Top,
+        DockPosition.Left => DockPosition.Right,
+        DockPosition.Right => DockPosition.Left,
+        _ => DockPosition.Bottom
+    };
+
+    private static RECT BuildOverlaySourceRect(Rectangle sourceBounds, Point anchorPoint, Size viewportSize, float mag)
+    {
+        int viewW = Math.Max(1, (int)Math.Round(viewportSize.Width / mag));
+        int viewH = Math.Max(1, (int)Math.Round(viewportSize.Height / mag));
+        int offsetX = (int)Math.Round(anchorPoint.X - (viewW / 2.0));
+        int offsetY = (int)Math.Round(anchorPoint.Y - (viewH / 2.0));
+
+        int maxX = sourceBounds.Right - viewW;
+        int maxY = sourceBounds.Bottom - viewH;
+        offsetX = Math.Clamp(offsetX, sourceBounds.Left, Math.Max(sourceBounds.Left, maxX));
+        offsetY = Math.Clamp(offsetY, sourceBounds.Top, Math.Max(sourceBounds.Top, maxY));
+
+        return new RECT
+        {
+            left = offsetX,
+            top = offsetY,
+            right = offsetX + viewW,
+            bottom = offsetY + viewH
+        };
+    }
+
+    private Point GetTrackingPoint(Point fallback)
+    {
+        return fallback;
+    }
+
+    private Point GetFocusTrackingPoint(Point fallback)
+    {
+        if (TryGetAutomationFocusPoint(out Point automationPoint))
+        {
+            return automationPoint;
+        }
+
+        return TryGetGuiFocusPoint(out Point focusPoint) ? focusPoint : fallback;
+    }
+
+    private static bool TryGetAutomationFocusPoint(out Point point)
+    {
+        point = default;
+        try
+        {
+            AutomationElement element = AutomationElement.FocusedElement;
+            if (element == null)
+            {
+                return false;
+            }
+
+            System.Windows.Rect rect = element.Current.BoundingRectangle;
+            if (rect.IsEmpty || rect.Width <= 0 || rect.Height <= 0)
+            {
+                return false;
+            }
+
+            point = new Point((int)Math.Round(rect.Left + (rect.Width / 2.0)), (int)Math.Round(rect.Top + (rect.Height / 2.0)));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetGuiFocusPoint(out Point point)
+    {
+        point = default;
+        IntPtr foreground = GetForegroundWindow();
+        if (foreground == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        uint threadId = GetWindowThreadProcessId(foreground, out _);
+        if (threadId == 0)
+        {
+            return false;
+        }
+
+        var info = new GUITHREADINFO { cbSize = Marshal.SizeOf<GUITHREADINFO>() };
+        if (!GetGUIThreadInfo(threadId, ref info) || info.hwndFocus == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        if (!GetWindowRect(info.hwndFocus, out RECT rect))
+        {
+            return false;
+        }
+
+        point = new Point(rect.left + ((rect.right - rect.left) / 2), rect.top + ((rect.bottom - rect.top) / 2));
+        return true;
+    }
+
+    private static bool TryGetCaretPoint(out Point point)
+    {
+        point = default;
+        IntPtr foreground = GetForegroundWindow();
+        if (foreground == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        uint threadId = GetWindowThreadProcessId(foreground, out _);
+        if (threadId == 0)
+        {
+            return false;
+        }
+
+        var info = new GUITHREADINFO { cbSize = Marshal.SizeOf<GUITHREADINFO>() };
+        if (!GetGUIThreadInfo(threadId, ref info) || info.hwndCaret == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        POINT caret = new()
+        {
+            X = info.rcCaret.left + ((info.rcCaret.right - info.rcCaret.left) / 2),
+            Y = info.rcCaret.top + ((info.rcCaret.bottom - info.rcCaret.top) / 2)
+        };
+
+        if (!ClientToScreen(info.hwndCaret, ref caret))
+        {
+            return false;
+        }
+
+        point = new Point(caret.X, caret.Y);
+        return true;
+    }
+
     private void ApplyFullscreenTransform(POINT pt, float mag, List<Screen> selectedScreens)
     {
         Point anchorPoint = new(pt.X, pt.Y);
@@ -893,14 +1484,27 @@ internal sealed partial class TrayContext
         }
 
         MAGCOLOREFFECT colorEffect = _invertColors ? InvertColorEffect : IdentityColorEffect;
-        if (!MagSetFullscreenColorEffect(ref colorEffect))
+        if (_lastFullscreenInvertColors != _invertColors && !MagSetFullscreenColorEffect(ref colorEffect))
         {
             ErrorLog.WriteThrottled("Magnification.FullscreenColorEffect", "MagSetFullscreenColorEffect failed.");
         }
+        else
+        {
+            _lastFullscreenInvertColors = _invertColors;
+        }
 
-        if (!MagSetFullscreenTransform(mag, xOffset, yOffset))
+        bool transformChanged = Math.Abs(_lastFullscreenMagnification - mag) >= 0.0001f ||
+                                _lastFullscreenXOffset != xOffset ||
+                                _lastFullscreenYOffset != yOffset;
+        if (transformChanged && !MagSetFullscreenTransform(mag, xOffset, yOffset))
         {
             ErrorLog.WriteThrottled("Magnification.FullscreenTransform", "MagSetFullscreenTransform failed.");
+        }
+        else if (transformChanged)
+        {
+            _lastFullscreenMagnification = mag;
+            _lastFullscreenXOffset = xOffset;
+            _lastFullscreenYOffset = yOffset;
         }
     }
 

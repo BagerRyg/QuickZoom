@@ -44,6 +44,7 @@ internal sealed partial class TrayContext
     {
         RunOnUiThread("DisplaySettingsChanged", () =>
         {
+            InvalidateMonitorCaches(topologyChanged: true);
             EnsureSelectedMonitorsValid();
             EnsureLockedScreenStillValid();
             _monitorLayoutDirty = true;
@@ -81,6 +82,18 @@ internal sealed partial class TrayContext
         else
         {
             _useCursorMonitorSelection = false;
+        }
+
+        _cachedSelectedScreens = null;
+    }
+
+    private void InvalidateMonitorCaches(bool topologyChanged = false)
+    {
+        _cachedSelectedScreens = null;
+        _dynamicSelectedScreens.Clear();
+        if (topologyChanged)
+        {
+            _cachedOrderedScreens = null;
         }
     }
 
@@ -125,6 +138,7 @@ internal sealed partial class TrayContext
             _displaySelectionMode = DisplaySelectionMode.MonitorUnderCursor;
             _useCursorMonitorSelection = true;
             _lockedScreen = null;
+            InvalidateMonitorCaches();
             _monitorLayoutDirty = true;
             SaveSettings();
             UpdateTrayPopupState();
@@ -150,6 +164,7 @@ internal sealed partial class TrayContext
                 _selectedMonitorDeviceNames.Add(screen.DeviceName);
             }
 
+            InvalidateMonitorCaches();
             _monitorLayoutDirty = true;
             SaveSettings();
             UpdateTrayPopupState();
@@ -202,6 +217,7 @@ internal sealed partial class TrayContext
             _selectedMonitorDeviceNames.Remove(deviceName);
         }
 
+        InvalidateMonitorCaches();
         _monitorLayoutDirty = true;
         SaveSettings();
         UpdateTrayPopupState();
@@ -248,6 +264,7 @@ internal sealed partial class TrayContext
                 break;
         }
 
+        InvalidateMonitorCaches();
         _monitorLayoutDirty = true;
         SaveSettings();
         RefreshMenuAndTrayUi(rebuildPopup: true);
@@ -272,7 +289,7 @@ internal sealed partial class TrayContext
 
     private List<Screen> GetOrderedScreens()
     {
-        return Screen.AllScreens
+        return _cachedOrderedScreens ??= Screen.AllScreens
             .OrderByDescending(screen => screen.Primary)
             .ThenBy(screen => screen.DeviceName, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -309,38 +326,45 @@ internal sealed partial class TrayContext
 
     private List<Screen> GetSelectedScreens()
     {
-        EnsureSelectedMonitorsValid();
-
         if (_displaySelectionMode == DisplaySelectionMode.MonitorUnderCursor)
         {
+            Screen selectedScreen;
             if (!_autoSwitchMonitor && _lockedScreen != null)
             {
-                return [_lockedScreen];
+                selectedScreen = _lockedScreen;
             }
-
-            if (GetCursorPos(out var pt))
+            else if (GetCursorPos(out var pt))
             {
-                Screen screen = Screen.FromPoint(new Point(pt.X, pt.Y));
+                selectedScreen = Screen.FromPoint(new Point(pt.X, pt.Y));
                 if (!_autoSwitchMonitor)
                 {
-                    _lockedScreen = screen;
+                    _lockedScreen = selectedScreen;
                 }
-
-                return [screen];
             }
-
-            if (_lockedScreen != null)
+            else if (_lockedScreen != null)
             {
-                return [_lockedScreen];
+                selectedScreen = _lockedScreen;
+            }
+            else
+            {
+                selectedScreen = Screen.PrimaryScreen ?? GetOrderedScreens()[0];
             }
 
-            Screen fallback = Screen.PrimaryScreen ?? Screen.AllScreens.First();
-            return [fallback];
+            _dynamicSelectedScreens.Clear();
+            _dynamicSelectedScreens.Add(selectedScreen);
+            return _dynamicSelectedScreens;
         }
+
+        if (_cachedSelectedScreens != null)
+        {
+            return _cachedSelectedScreens;
+        }
+
+        EnsureSelectedMonitorsValid();
 
         if (_displaySelectionMode == DisplaySelectionMode.AllDisplays)
         {
-            return GetOrderedScreens();
+            return _cachedSelectedScreens = GetOrderedScreens();
         }
 
         var selectedNames = _selectedMonitorDeviceNames;
@@ -355,7 +379,8 @@ internal sealed partial class TrayContext
             chosenScreens.Add(primary);
         }
 
-        return chosenScreens;
+        _cachedSelectedScreens = chosenScreens;
+        return _cachedSelectedScreens;
     }
 
     private static Point GetMonitorRelativePoint(Point sourcePoint, Rectangle sourceBounds, Rectangle targetBounds)

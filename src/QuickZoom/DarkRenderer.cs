@@ -23,7 +23,7 @@ internal readonly struct ThemePalette
 
 internal static class ThemePalettes
 {
-    public static ThemePalette Dark => new()
+    public static ThemePalette Dark => AccessibilityPreferences.HighContrast ? HighContrast : new()
     {
         MenuBackground = Color.FromArgb(14, 16, 20),
         HoverBackground = Color.FromArgb(35, 42, 53),
@@ -41,7 +41,7 @@ internal static class ThemePalettes
         AccentPressed = Color.FromArgb(28, 176, 84)
     };
 
-    public static ThemePalette Light => new()
+    public static ThemePalette Light => AccessibilityPreferences.HighContrast ? HighContrast : new()
     {
         MenuBackground = Color.FromArgb(239, 243, 247),
         HoverBackground = Color.FromArgb(218, 226, 236),
@@ -57,6 +57,24 @@ internal static class ThemePalettes
         Accent = Color.FromArgb(72, 163, 96),
         AccentHover = Color.FromArgb(83, 175, 107),
         AccentPressed = Color.FromArgb(62, 145, 86)
+    };
+
+    public static ThemePalette HighContrast => new()
+    {
+        MenuBackground = SystemColors.Window,
+        HoverBackground = SystemColors.Highlight,
+        Text = SystemColors.WindowText,
+        SecondaryText = SystemColors.WindowText,
+        DisabledText = SystemColors.GrayText,
+        Separator = SystemColors.WindowText,
+        ControlBackground = SystemColors.Window,
+        ButtonBackground = SystemColors.Control,
+        Border = SystemColors.WindowText,
+        ButtonHover = SystemColors.Highlight,
+        ButtonPressed = SystemColors.HotTrack,
+        Accent = SystemColors.Highlight,
+        AccentHover = SystemColors.HotTrack,
+        AccentPressed = SystemColors.Highlight
     };
 }
 

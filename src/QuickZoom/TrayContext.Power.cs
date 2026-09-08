@@ -63,7 +63,9 @@ internal sealed partial class TrayContext
             _invertKeyPressed = false;
             _followCursorKeyPressed = false;
             _controlKeyPressed = false;
-            _suppressEnableKeyForForeground = false;
+            _altGrPressed = false;
+            ResetEnableKeySuppressionState();
+            _suppressedShortcutKeyUps.Clear();
             _wheelDeltaRemainder = 0;
             _animAnchorValid = false;
             _animTimer?.Stop();
@@ -81,7 +83,7 @@ internal sealed partial class TrayContext
             }
             else
             {
-                RestoreTrayIcon();
+                ScheduleTrayIconRecovery();
             }
 
             if (_magActive || _zoomPercent > 100 || _invertColors)

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
@@ -14,13 +15,56 @@ internal static class InstalledAppService
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "QuickZoom");
 
-    private static readonly string InstallRoot = Path.Combine(StateRoot, "managed-install");
+    private static readonly string InstallRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "QuickZoom");
+    private static readonly string PreviousInstallRoot = Path.Combine(StateRoot, "managed-install");
+    private static readonly string PreviousVersionsRoot = Path.Combine(PreviousInstallRoot, "versions");
     private static readonly string VersionsRoot = Path.Combine(InstallRoot, "versions");
     private static readonly string CurrentInstallPointerPath = Path.Combine(InstallRoot, "current.txt");
     private static readonly string LegacyVersionsRoot = Path.Combine(StateRoot, "versions");
     private static readonly string LegacyCurrentInstallPointerPath = Path.Combine(StateRoot, "current.txt");
     private const string LocalesFolderName = "locales";
     private const int PreviousManagedVersionRetentionCount = 1;
+
+    internal static bool IsSecureInstallPath(string path)
+    {
+        try
+        {
+            LocalStorage.RequireLocalPath(path);
+            if (!IsUnderRoot(Path.GetFullPath(path), VersionsRoot) || !File.Exists(path)) return false;
+            string? current = Path.GetFullPath(path);
+            while (current != null && (IsUnderRoot(current, InstallRoot) || PathsEqual(current, InstallRoot)))
+            {
+                RequireProtectedLocation(current);
+                current = Path.GetDirectoryName(current);
+            }
+            foreach (string entry in Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(path)!, "*", new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = 0 }))
+                RequireProtectedLocation(entry);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private static void RequireProtectedLocation(string path)
+    {
+        LocalStorage.RequireLocalPath(path);
+        if (!Directory.Exists(path) && !File.Exists(path)) return;
+        FileSystemSecurity security = Directory.Exists(path)
+            ? new DirectoryInfo(path).GetAccessControl()
+            : new FileInfo(path).GetAccessControl();
+        SecurityIdentifier admins = new(WellKnownSidType.BuiltinAdministratorsSid, null);
+        SecurityIdentifier system = new(WellKnownSidType.LocalSystemSid, null);
+        IdentityReference? owner = security.GetOwner(typeof(SecurityIdentifier));
+        if (owner == null || (!owner.Equals(admins) && !owner.Equals(system)))
+            throw new IOException("The install location has an untrusted owner.");
+        foreach (FileSystemAccessRule rule in security.GetAccessRules(true, true, typeof(SecurityIdentifier)))
+        {
+            const FileSystemRights writes = FileSystemRights.Write | FileSystemRights.Delete |
+                FileSystemRights.DeleteSubdirectoriesAndFiles | FileSystemRights.ChangePermissions | FileSystemRights.TakeOwnership;
+            if (rule.AccessControlType == AccessControlType.Allow && (rule.FileSystemRights & writes) != 0 &&
+                !rule.IdentityReference.Equals(admins) && !rule.IdentityReference.Equals(system))
+                throw new IOException("The install location permits non-administrator writes.");
+        }
+    }
 
     private static readonly string[] OptionalPayloadFileNames =
     [
@@ -40,7 +84,7 @@ internal static class InstalledAppService
         }
 
         string fullPath = Path.GetFullPath(exePath);
-        return IsUnderRoot(fullPath, VersionsRoot) || IsUnderRoot(fullPath, LegacyVersionsRoot);
+        return IsUnderRoot(fullPath, VersionsRoot) || IsUnderRoot(fullPath, PreviousVersionsRoot) || IsUnderRoot(fullPath, LegacyVersionsRoot);
     }
 
     internal static bool NeedsSecureInstallMigration(string? exePath)
@@ -51,7 +95,7 @@ internal static class InstalledAppService
         }
 
         string fullPath = Path.GetFullPath(exePath);
-        return IsUnderRoot(fullPath, LegacyVersionsRoot) && !IsUnderRoot(fullPath, VersionsRoot);
+        return IsUnderRoot(fullPath, PreviousVersionsRoot) || IsUnderRoot(fullPath, LegacyVersionsRoot);
     }
 
     internal static bool ShouldOfferInstallOrUpdate(string? currentExePath)
@@ -77,10 +121,61 @@ internal static class InstalledAppService
             return true;
         }
 
-        return !string.Equals(
-            GetPayloadId(currentExePath),
-            GetPayloadId(installedExePath),
-            StringComparison.OrdinalIgnoreCase);
+        return !PayloadMetadataMatches(currentExePath, installedExePath);
+    }
+
+    private static bool PayloadMetadataMatches(string currentExePath, string installedExePath)
+    {
+        try
+        {
+            FileVersionInfo currentVersion = FileVersionInfo.GetVersionInfo(currentExePath);
+            FileVersionInfo installedVersion = FileVersionInfo.GetVersionInfo(installedExePath);
+            string? currentVersionText = currentVersion.FileVersion ?? currentVersion.ProductVersion;
+            string? installedVersionText = installedVersion.FileVersion ?? installedVersion.ProductVersion;
+            if (string.IsNullOrWhiteSpace(currentVersionText) ||
+                string.IsNullOrWhiteSpace(installedVersionText) ||
+                !string.Equals(currentVersionText, installedVersionText, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            string currentDirectory = Path.GetDirectoryName(Path.GetFullPath(currentExePath))
+                ?? throw new InvalidOperationException("Could not determine the current payload directory.");
+            string installedDirectory = Path.GetDirectoryName(Path.GetFullPath(installedExePath))
+                ?? throw new InvalidOperationException("Could not determine the installed payload directory.");
+
+            Dictionary<string, long> currentFiles = GetPayloadFileLengths(currentExePath, currentDirectory);
+            Dictionary<string, long> installedFiles = GetPayloadFileLengths(installedExePath, installedDirectory);
+            if (currentFiles.Count != installedFiles.Count)
+            {
+                return false;
+            }
+
+            foreach ((string relativePath, long length) in currentFiles)
+            {
+                if (!installedFiles.TryGetValue(relativePath, out long installedLength) || installedLength != length)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static Dictionary<string, long> GetPayloadFileLengths(string exePath, string directory)
+    {
+        var files = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        foreach ((string sourcePath, string relativePath) in EnumeratePayloadFiles(exePath, directory))
+        {
+            files[NormalizeRelativePath(relativePath)] = new FileInfo(sourcePath).Length;
+        }
+
+        return files;
     }
 
     internal static string? GetCurrentInstalledExecutablePath()
@@ -93,7 +188,8 @@ internal static class InstalledAppService
                 return currentPointerTarget;
             }
 
-            string? legacyPointerTarget = ReadInstalledExecutablePointer(LegacyCurrentInstallPointerPath, LegacyVersionsRoot);
+            string? legacyPointerTarget = ReadInstalledExecutablePointer(Path.Combine(PreviousInstallRoot, "current.txt"), PreviousVersionsRoot)
+                ?? ReadInstalledExecutablePointer(LegacyCurrentInstallPointerPath, LegacyVersionsRoot);
             if (!string.IsNullOrWhiteSpace(legacyPointerTarget))
             {
                 return legacyPointerTarget;
@@ -105,7 +201,7 @@ internal static class InstalledAppService
                 return managedInstall;
             }
 
-            return FindNewestExecutableUnder(LegacyVersionsRoot);
+            return FindNewestExecutableUnder(PreviousVersionsRoot) ?? FindNewestExecutableUnder(LegacyVersionsRoot);
         }
         catch
         {
@@ -143,18 +239,25 @@ internal static class InstalledAppService
             string sourceDirectory = Path.GetDirectoryName(sourceExePath)
                 ?? throw new InvalidOperationException("Could not determine the source directory.");
 
+            LocalStorage.RequireLocalPath(InstallRoot);
+            RequireProtectedLocation(InstallRoot);
             Directory.CreateDirectory(InstallRoot);
-            Directory.CreateDirectory(VersionsRoot);
             HardenInstallDirectory(InstallRoot);
+            LocalStorage.RequireLocalPath(VersionsRoot);
+            RequireProtectedLocation(VersionsRoot);
+            Directory.CreateDirectory(VersionsRoot);
             HardenInstallDirectory(VersionsRoot);
 
             string payloadId = GetPayloadId(sourceExePath);
-            string targetDirectory = Path.Combine(VersionsRoot, payloadId);
+            string targetDirectory = Path.Combine(VersionsRoot, payloadId + "-" + Guid.NewGuid().ToString("N"));
             if (!IsUnderRoot(Path.GetFullPath(targetDirectory), VersionsRoot))
             {
                 throw new InvalidOperationException("The managed install target resolved outside the QuickZoom install root.");
             }
 
+            LocalStorage.RequireLocalPath(targetDirectory);
+            if (Directory.Exists(targetDirectory) || File.Exists(targetDirectory))
+                throw new IOException("The install destination already exists.");
             Directory.CreateDirectory(targetDirectory);
             HardenInstallDirectory(targetDirectory);
 
@@ -169,6 +272,7 @@ internal static class InstalledAppService
                 string? destinationDirectory = Path.GetDirectoryName(destinationFile);
                 if (!string.IsNullOrWhiteSpace(destinationDirectory))
                 {
+                    LocalStorage.RequireLocalPath(destinationDirectory);
                     Directory.CreateDirectory(destinationDirectory);
                     HardenInstallDirectory(destinationDirectory);
                 }
@@ -178,11 +282,20 @@ internal static class InstalledAppService
                     continue;
                 }
 
-                File.Copy(sourcePath, destinationFile, true);
+                LocalStorage.RequireLocalPath(sourcePath);
+                LocalStorage.RequireLocalPath(destinationFile);
+                File.Copy(sourcePath, destinationFile, false);
+                HardenInstallFile(destinationFile);
             }
 
             installedExePath = Path.Combine(targetDirectory, Path.GetFileName(sourceExePath));
-            FilePersistence.WriteAllTextAtomic(CurrentInstallPointerPath, installedExePath);
+            LocalStorage.RequireLocalPath(CurrentInstallPointerPath);
+            string pointerTemp = Path.Combine(InstallRoot, Guid.NewGuid().ToString("N") + ".tmp");
+            using (var pointerStream = new FileStream(pointerTemp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (var writer = new StreamWriter(pointerStream))
+                writer.Write(installedExePath);
+            HardenInstallFile(pointerTemp);
+            File.Move(pointerTemp, CurrentInstallPointerPath, overwrite: true);
             HardenInstallDirectory(targetDirectory);
             HardenInstallFile(CurrentInstallPointerPath);
             CleanupOldManagedVersions(targetDirectory);
@@ -377,6 +490,9 @@ internal static class InstalledAppService
                 return;
             }
 
+            LocalStorage.RequireLocalPath(directory.FullName);
+            foreach (string entry in Directory.EnumerateFileSystemEntries(directory.FullName, "*", new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = 0 }))
+                LocalStorage.RequireLocalPath(entry);
             directory.Delete(recursive: true);
             ErrorLog.Write("InstalledAppService.Cleanup", "Removed old managed install version: " + directory.FullName);
         }
@@ -388,12 +504,12 @@ internal static class InstalledAppService
 
     private static DirectorySecurity CreateInstallDirectorySecurity()
     {
-        SecurityIdentifier userSid = WindowsIdentity.GetCurrent().User
-            ?? throw new InvalidOperationException("Could not determine the current Windows user.");
+        SecurityIdentifier userSid = new(WellKnownSidType.BuiltinUsersSid, null);
         SecurityIdentifier adminsSid = new(WellKnownSidType.BuiltinAdministratorsSid, null);
         SecurityIdentifier systemSid = new(WellKnownSidType.LocalSystemSid, null);
 
         DirectorySecurity security = new();
+        security.SetOwner(adminsSid);
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
         security.AddAccessRule(new FileSystemAccessRule(systemSid, FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
         security.AddAccessRule(new FileSystemAccessRule(adminsSid, FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
@@ -403,12 +519,12 @@ internal static class InstalledAppService
 
     private static FileSecurity CreateInstallFileSecurity()
     {
-        SecurityIdentifier userSid = WindowsIdentity.GetCurrent().User
-            ?? throw new InvalidOperationException("Could not determine the current Windows user.");
+        SecurityIdentifier userSid = new(WellKnownSidType.BuiltinUsersSid, null);
         SecurityIdentifier adminsSid = new(WellKnownSidType.BuiltinAdministratorsSid, null);
         SecurityIdentifier systemSid = new(WellKnownSidType.LocalSystemSid, null);
 
         FileSecurity security = new();
+        security.SetOwner(adminsSid);
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
         security.AddAccessRule(new FileSystemAccessRule(systemSid, FileSystemRights.FullControl, AccessControlType.Allow));
         security.AddAccessRule(new FileSystemAccessRule(adminsSid, FileSystemRights.FullControl, AccessControlType.Allow));

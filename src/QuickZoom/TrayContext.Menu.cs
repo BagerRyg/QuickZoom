@@ -1,16 +1,18 @@
 using System;
 using System.ComponentModel;
 using System.Drawing;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace QuickZoom;
 
 internal sealed partial class TrayContext
 {
-    private const int TrayContentLogicalWidth = 300;
+    private const int TrayContentLogicalWidth = 320;
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
@@ -22,6 +24,11 @@ internal sealed partial class TrayContext
     {
         _taskbarCreatedMessage = unchecked((int)RegisterWindowMessage("TaskbarCreated"));
         _shellMessageWindow = new ShellMessageWindow(this, _taskbarCreatedMessage);
+        _trayRecoveryTimer = new System.Windows.Forms.Timer
+        {
+            Interval = 1000
+        };
+        _trayRecoveryTimer.Tick += (_, _) => RunGuarded("Startup.TrayRecovery", RunTrayRecoveryAttempt);
     }
 
     private void InitializeCoreRuntime()
@@ -106,7 +113,7 @@ internal sealed partial class TrayContext
             return;
         }
 
-        RestoreTrayIcon();
+        ScheduleTrayIconRecovery();
     }
 
     private static bool IsShellReady()
@@ -129,7 +136,7 @@ internal sealed partial class TrayContext
             _tray.Dispose();
         }
 
-        _iconRef ??= LoadEmbeddedIconBySuffix("magnifier_dark.ico")
+        _iconRef ??= LoadEmbeddedIconBySuffix("magnifier-dark.ico")
                     ?? Icon.ExtractAssociatedIcon(Application.ExecutablePath)
                     ?? SystemIcons.Application;
 
@@ -161,11 +168,11 @@ internal sealed partial class TrayContext
         }
     }
 
-    private void RestoreTrayIcon()
+    private bool RestoreTrayIcon()
     {
         if (!IsShellReady())
         {
-            return;
+            return false;
         }
 
         try
@@ -175,11 +182,46 @@ internal sealed partial class TrayContext
             {
                 RebuildTrayPopupIfOpen();
             }
+
+            return true;
         }
         catch (Exception ex)
         {
-            ErrorLog.WriteThrottled("Startup.TrayRestore", ex);
+            ErrorLog.WriteAlways("Startup.TrayRestore", ex.ToString());
+            return false;
         }
+    }
+
+    private void ScheduleTrayIconRecovery()
+    {
+        _trayRecoveryAttemptsRemaining = 15;
+        _trayRecoverySuccessfulPasses = 0;
+        _trayRecoveryTimer?.Stop();
+        _trayRecoveryTimer?.Start();
+    }
+
+    private void RunTrayRecoveryAttempt()
+    {
+        if (_trayRecoveryAttemptsRemaining-- <= 0)
+        {
+            _trayRecoveryTimer?.Stop();
+            ErrorLog.WriteAlways("Startup.TrayRecovery", "Tray icon recovery timed out while waiting for Explorer.");
+            return;
+        }
+
+        if (!RestoreTrayIcon())
+        {
+            return;
+        }
+
+        _trayRecoverySuccessfulPasses++;
+        if (_trayRecoverySuccessfulPasses < 3)
+        {
+            return;
+        }
+
+        _trayRecoveryTimer?.Stop();
+        ErrorLog.WriteAlways("Startup.TrayRecovery", "Tray icon registration restored.");
     }
 
     private void OnTrayMouseUp(object? sender, MouseEventArgs e)
@@ -203,16 +245,23 @@ internal sealed partial class TrayContext
         ShowTrayPopup(anchor);
     }
 
-    private void ShowTrayPopup(Point anchor)
+    private void ShowTrayPopup(Point anchor, bool showWindow = true)
     {
         CloseTrayPopup();
         _lastTrayPopupAnchor = anchor;
 
         ThemePalette palette = CurrentTheme;
         var popup = new TrayPopupWindow(palette);
-        float fontScale = ControlDrawing.UiFontScale;
-        int trayLogicalWidth = TrayContentLogicalWidth + (int)Math.Round((fontScale - 1f) * 220f);
-        int trayContentWidth = ControlDrawing.ScaleLogical(popup, trayLogicalWidth);
+        if (!showWindow)
+        {
+            popup.CaptureMode = true;
+            popup.TopMost = false;
+            popup.IgnoreDeactivateClose = true;
+        }
+        bool rightToLeft = UiText.IsRightToLeft(_language);
+        popup.RightToLeft = rightToLeft ? RightToLeft.Yes : RightToLeft.No;
+        popup.RightToLeftLayout = rightToLeft;
+        int trayContentWidth = CalculateTrayContentWidth(popup);
         popup.FormClosed += (_, _) =>
         {
             _magnifyRow = null;
@@ -223,6 +272,9 @@ internal sealed partial class TrayContext
             _invertToggle = null;
             _followToggle = null;
             _displayRow = null;
+            _fullscreenModeButton = null;
+            _lensModeButton = null;
+            _dockedModeButton = null;
             _displayOptionsHost = null;
             _startupServiceStatusLabel = null;
             _trayPopup = null;
@@ -238,25 +290,27 @@ internal sealed partial class TrayContext
         root.Width = trayContentWidth;
 
         root.Controls.Add(CreateTrayHeader(palette, trayContentWidth));
+        root.Controls.Add(CreateZoomModeTraySelector(palette, trayContentWidth));
+        root.Controls.Add(new TrayMenuDivider(palette) { Dock = DockStyle.Top, Width = trayContentWidth });
 
         var quickSection = CreateTraySectionLabel(L("Tray.SectionQuick"), palette, trayContentWidth);
         root.Controls.Add(quickSection);
 
         var quickActions = CreateTrayStack(trayContentWidth);
 
-        _magnifyToggle = new ToggleSwitchControl(palette) { IsOn = _enabled, ShowStateText = _colourblindMode };
+        _magnifyToggle = CreateLocalizedToggle(palette, _enabled, L("Tray.ToggleMagnify"));
         _magnifyRow = new TrayMenuRow(palette, L("Tray.ToggleMagnify"), toggle: _magnifyToggle, icon: TrayFluentIcon.Enabled);
         _magnifyRow.Width = trayContentWidth;
         _magnifyRow.ActionRequested += (_, _) => ExecuteTrayAction(() => SetEnabledState(!_enabled));
         quickActions.Controls.Add(_magnifyRow);
 
-        _invertToggle = new ToggleSwitchControl(palette) { IsOn = _invertEnabled, ShowStateText = _colourblindMode };
+        _invertToggle = CreateLocalizedToggle(palette, _invertEnabled, L("Tray.ToggleInvert"));
         _invertRow = new TrayMenuRow(palette, L("Tray.ToggleInvert"), toggle: _invertToggle, icon: TrayFluentIcon.InvertColors);
         _invertRow.Width = trayContentWidth;
         _invertRow.ActionRequested += (_, _) => ExecuteTrayAction(() => SetInvertEnabledState(!_invertEnabled));
         quickActions.Controls.Add(_invertRow);
 
-        _followToggle = new ToggleSwitchControl(palette) { IsOn = _followCursor, ShowStateText = _colourblindMode };
+        _followToggle = CreateLocalizedToggle(palette, _followCursor, L("Tray.ToggleFollow"));
         _followRow = new TrayMenuRow(palette, L("Tray.ToggleFollow"), toggle: _followToggle, icon: TrayFluentIcon.FollowCursor);
         _followRow.Width = trayContentWidth;
         _followRow.ActionRequested += (_, _) => ExecuteTrayAction(() => SetFollowCursor(!_followCursor));
@@ -314,7 +368,6 @@ internal sealed partial class TrayContext
 
         var resetCursorRow = new TrayMenuRow(palette, L("Tray.ResetCursor"), icon: TrayFluentIcon.ResetCursor);
         resetCursorRow.Width = trayContentWidth;
-        resetCursorRow.UseColourblindSuccessColor = _colourblindMode;
         resetCursorRow.ActionRequested += (_, _) => ExecuteTrayAction(() =>
         {
             ResetExitConfirmation();
@@ -337,7 +390,6 @@ internal sealed partial class TrayContext
         _exitRow = new TrayMenuRow(palette, L("Tray.Exit"), icon: TrayFluentIcon.Exit);
         _exitRow.Width = trayContentWidth;
         _exitRow.IsDestructive = true;
-        _exitRow.UseWarningDestructiveColor = _colourblindMode;
         _exitRow.ActionRequested += (_, _) => ExecuteTrayAction(HandleExitRequested);
         actions.Controls.Add(_exitRow);
 
@@ -360,7 +412,7 @@ internal sealed partial class TrayContext
             Font = ControlDrawing.UiFont("Segoe UI", 8.5f, FontStyle.Regular),
             ForeColor = palette.SecondaryText,
             BackColor = Color.Transparent,
-            Text = StartupTaskService.GetStatusLabel(_language)
+            Text = StartupTaskService.GetCachedStatusLabel(_language)
         };
         footer.Controls.Add(_startupServiceStatusLabel);
         root.Controls.Add(footer);
@@ -368,9 +420,18 @@ internal sealed partial class TrayContext
 
         _trayPopup = popup;
         UpdateTrayPopupState();
-        SuspendPerMonitorTracking();
-        popup.ShowAnchored(anchor);
-        popup.RefreshAnchoredLayout(anchor);
+        if (showWindow)
+        {
+            SuspendPerMonitorTracking();
+            popup.ShowAnchored(anchor);
+            popup.RefreshAnchoredLayout(anchor);
+            RefreshStartupServiceStatusLabelAsync();
+        }
+        else
+        {
+            popup.LayoutForCapture(anchor);
+            popup.ShowForCapture();
+        }
     }
 
     private Control CreateTrayHeader(ThemePalette palette, int contentWidth)
@@ -401,6 +462,125 @@ internal sealed partial class TrayContext
         };
         panel.Controls.Add(title, 0, 0);
         return panel;
+    }
+
+    private int CalculateTrayContentWidth(Control scaleOwner)
+    {
+        int baseline = ControlDrawing.ScaleLogical(
+            scaleOwner,
+            TrayContentLogicalWidth + (int)Math.Round((ControlDrawing.UiFontScale - 1f) * 220f));
+        string[] rowLabels =
+        [
+            L("Tray.ToggleMagnify"),
+            L("Tray.ToggleInvert"),
+            L("Tray.ToggleFollow"),
+            L("Tray.MagnifiedDisplays"),
+            L("Tray.KeyBinds"),
+            L("Tray.Settings"),
+            L("Tray.ResetCursor"),
+            L("Tray.About"),
+            L("Tray.Exit")
+        ];
+
+        using Font rowFont = ControlDrawing.UiFont("Segoe UI Semibold", 10f, FontStyle.Bold);
+        int widestLabel = rowLabels.Max(text => TextRenderer.MeasureText(
+            text,
+            rowFont,
+            new Size(int.MaxValue, int.MaxValue),
+            TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width);
+        int accessoryAllowance = ControlDrawing.ScaleLogical(scaleOwner, 132);
+        int requested = Math.Max(baseline, widestLabel + accessoryAllowance);
+        int available = Math.Max(
+            ControlDrawing.ScaleLogical(scaleOwner, 280),
+            Screen.FromPoint(Cursor.Position).WorkingArea.Width - ControlDrawing.ScaleLogical(scaleOwner, 32));
+        return Math.Min(requested, available);
+    }
+
+    private ToggleSwitchControl CreateLocalizedToggle(ThemePalette palette, bool value, string accessibleName)
+    {
+        return new ToggleSwitchControl(palette)
+        {
+            IsOn = value,
+            ShowStateText = true,
+            OnText = L("Common.On"),
+            OffText = L("Common.Off"),
+            AccessibleName = accessibleName,
+            AccessibleDescription = accessibleName + " " + L("Accessibility.ToggleInstruction")
+        };
+    }
+
+    private Control CreateZoomModeTraySelector(ThemePalette palette, int contentWidth)
+    {
+        Control scaleOwner = _trayPopup != null && !_trayPopup.IsDisposed ? _trayPopup : _uiInvoker;
+        var stack = CreateTrayStack(contentWidth);
+        stack.Margin = new Padding(0, 0, 0, 2);
+
+        stack.Controls.Add(CreateTraySectionLabel(L("Tray.ZoomMode"), palette, contentWidth));
+
+        _fullscreenModeButton = CreateZoomModeButton(palette, ZoomMode.Fullscreen, TrayFluentIcon.ZoomModeFullscreen, L("Tray.ZoomModeFullscreen"));
+        _lensModeButton = CreateZoomModeButton(palette, ZoomMode.Lens, TrayFluentIcon.ZoomModeLens, L("Tray.ZoomModeLens"));
+        _dockedModeButton = CreateZoomModeButton(palette, ZoomMode.Docked, TrayFluentIcon.ZoomModeDocked, L("Tray.ZoomModeDocked"));
+
+        TrayModeButton[] buttons = [_fullscreenModeButton, _lensModeButton, _dockedModeButton];
+        int horizontalPadding = ControlDrawing.ScaleLogical(scaleOwner, 4);
+        int gap = ControlDrawing.ScaleLogical(scaleOwner, 7);
+        int availableWidth = Math.Max(1, contentWidth - (horizontalPadding * 2));
+        Size[] preferredSizes = buttons.Select(button => button.GetPreferredSizeForOwner(scaleOwner)).ToArray();
+        int rowHeight = preferredSizes.Max(size => size.Height);
+        int buttonWidth = Math.Max(1, (availableWidth - (gap * (buttons.Length - 1))) / buttons.Length);
+        bool stackVertically = preferredSizes.Sum(size => size.Width) + (gap * (buttons.Length - 1)) > availableWidth;
+        int selectorHeight = stackVertically
+            ? (rowHeight * buttons.Length) + (gap * (buttons.Length - 1))
+            : rowHeight;
+
+        var selector = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            Width = contentWidth,
+            Height = selectorHeight,
+            MinimumSize = new Size(contentWidth, selectorHeight),
+            FlowDirection = stackVertically ? FlowDirection.TopDown : FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0, 0, 0, 4),
+            Padding = new Padding(
+                horizontalPadding,
+                0,
+                horizontalPadding,
+                0),
+            BackColor = Color.Transparent
+        };
+
+        for (int i = 0; i < buttons.Length; i++)
+        {
+            TrayModeButton button = buttons[i];
+            int width = stackVertically
+                ? availableWidth
+                : i == buttons.Length - 1
+                    ? Math.Max(1, availableWidth - ((buttonWidth + gap) * (buttons.Length - 1)))
+                    : buttonWidth;
+            button.Size = new Size(width, rowHeight);
+            button.Margin = stackVertically
+                ? new Padding(0, 0, 0, i == buttons.Length - 1 ? 0 : gap)
+                : new Padding(0, 0, i == buttons.Length - 1 ? 0 : gap, 0);
+            selector.Controls.Add(button);
+        }
+
+        stack.Controls.Add(selector);
+        UpdateTrayZoomModeSelector(palette);
+        return stack;
+    }
+
+    private TrayModeButton CreateZoomModeButton(ThemePalette palette, ZoomMode mode, TrayFluentIcon icon, string label)
+    {
+        Control scaleOwner = _trayPopup != null && !_trayPopup.IsDisposed ? _trayPopup : _uiInvoker;
+        var button = new TrayModeButton(palette, icon, label)
+        {
+            Margin = new Padding(0),
+            VisualHeightLogical = 38,
+            HorizontalArrowNavigationOnly = true
+        };
+        button.Click += (_, _) => ExecuteTrayAction(() => SetZoomModeFromTray(mode));
+        return button;
     }
 
     private static FlowLayoutPanel CreateTrayStack(int width)
@@ -448,9 +628,10 @@ internal sealed partial class TrayContext
 
     private void ShowTrayRowDone(TrayMenuRow row, string defaultTitle)
     {
-        row.Title = "Done.";
+        row.Title = L("Tray.ActionCompleted");
+        row.AccessibleName = row.Title;
         row.IsSuccess = true;
-        var timer = new System.Windows.Forms.Timer { Interval = 2500 };
+        var timer = new System.Windows.Forms.Timer { Interval = 5000 };
         timer.Tick += (_, _) =>
         {
             RunGuarded("TrayPopup.RowDoneTimer", () =>
@@ -463,6 +644,7 @@ internal sealed partial class TrayContext
                 }
 
                 row.Title = defaultTitle;
+                row.AccessibleName = defaultTitle;
                 row.IsSuccess = false;
             });
         };
@@ -546,8 +728,21 @@ internal sealed partial class TrayContext
     {
         if (_startupServiceStatusLabel != null)
         {
-            _startupServiceStatusLabel.Text = StartupTaskService.GetStatusLabel(_language);
+            _startupServiceStatusLabel.Text = StartupTaskService.GetCachedStatusLabel(_language);
         }
+    }
+
+    private async void RefreshStartupServiceStatusLabelAsync()
+    {
+        await Task.Run(() => StartupTaskService.GetStatusInfo(forceRefresh: true));
+        RunOnUiThread("Tray.StartupStatusRefresh", () =>
+        {
+            UpdateStartupServiceStatusLabel();
+            if (_trayPopup != null && !_trayPopup.IsDisposed)
+            {
+                _trayPopup.RefreshAnchoredLayout(_lastTrayPopupAnchor == Point.Empty ? Cursor.Position : _lastTrayPopupAnchor);
+            }
+        });
     }
 
     private void UpdateTrayPopupState()
@@ -581,6 +776,8 @@ internal sealed partial class TrayContext
             _displayRow.ApplyTheme(palette);
         }
 
+        UpdateTrayZoomModeSelector(palette);
+
         if (_exitRow != null)
         {
             _exitRow.Title = _pendingExitConfirmation ? L("Tray.ExitConfirm") : L("Tray.Exit");
@@ -591,6 +788,84 @@ internal sealed partial class TrayContext
         UpdateStartupServiceStatusLabel();
         PopulateDisplayOptionsHost();
         _trayPopup.RefreshAnchoredLayout(_lastTrayPopupAnchor == Point.Empty ? Cursor.Position : _lastTrayPopupAnchor);
+    }
+
+    private void UpdateTrayZoomModeSelector(ThemePalette palette)
+    {
+        if (_fullscreenModeButton != null)
+        {
+            _fullscreenModeButton.Selected = _zoomMode == ZoomMode.Fullscreen;
+            _fullscreenModeButton.ApplyTheme(palette);
+        }
+
+        if (_lensModeButton != null)
+        {
+            _lensModeButton.Selected = _zoomMode == ZoomMode.Lens;
+            _lensModeButton.ApplyTheme(palette);
+        }
+
+        if (_dockedModeButton != null)
+        {
+            _dockedModeButton.Selected = _zoomMode == ZoomMode.Docked;
+            _dockedModeButton.ApplyTheme(palette);
+        }
+    }
+
+    private void SetZoomModeFromTray(ZoomMode mode)
+    {
+        ResetExitConfirmation();
+        if (_zoomMode == mode)
+        {
+            UpdateTrayZoomModeSelector(CurrentTheme);
+            return;
+        }
+
+        _zoomMode = mode;
+        _monitorLayoutDirty = true;
+        KeepTrayPopupOpenForOverlayActivation();
+
+        SaveSettings();
+        ApplyTransformCurrentPoint();
+        UpdateFollowTimerState();
+        RebuildSettingsPage(SettingsPage.Zoom);
+        UpdateTrayPopupState();
+    }
+
+    private void CycleZoomModeShortcut()
+    {
+        ZoomMode nextMode = _zoomMode switch
+        {
+            ZoomMode.Fullscreen => ZoomMode.Docked,
+            ZoomMode.Docked => ZoomMode.Lens,
+            _ => ZoomMode.Fullscreen
+        };
+
+        SetZoomModeFromTray(nextMode);
+    }
+
+    private void KeepTrayPopupOpenForOverlayActivation()
+    {
+        if (_trayPopup == null || _trayPopup.IsDisposed || _zoomMode == ZoomMode.Fullscreen)
+        {
+            return;
+        }
+
+        TrayPopupWindow popup = _trayPopup;
+        popup.IgnoreDeactivateClose = true;
+        _trayOverlayActivationGuardTimer?.Stop();
+        _trayOverlayActivationGuardTimer?.Dispose();
+        _trayOverlayActivationGuardTimer = new System.Windows.Forms.Timer { Interval = 2500 };
+        _trayOverlayActivationGuardTimer.Tick += (_, _) =>
+        {
+            _trayOverlayActivationGuardTimer?.Stop();
+            _trayOverlayActivationGuardTimer?.Dispose();
+            _trayOverlayActivationGuardTimer = null;
+            if (!popup.IsDisposed && ReferenceEquals(_trayPopup, popup) && _cursorSpotlightVisibleUntilTick <= Environment.TickCount64)
+            {
+                popup.IgnoreDeactivateClose = false;
+            }
+        };
+        _trayOverlayActivationGuardTimer.Start();
     }
 
     private void UpdateTrayQuickToggleState()
@@ -628,24 +903,13 @@ internal sealed partial class TrayContext
         {
             RunGuarded("TrayContext.FollowTimer", () =>
             {
-                if (!_enabled || _zoomPercent <= 100)
+                if (!ShouldRunFollowTimer())
                 {
+                    _followTimer.Stop();
                     return;
                 }
 
-                if (!_followCursor || !_magActive)
-                {
-                    return;
-                }
-
-                UpdateShellUiTrackingState();
-
-                if (IsPerMonitorTrackingSuspended && !_useFullscreenBackend)
-                {
-                    return;
-                }
-
-                if (_animTimer != null && _animTimer.Enabled)
+                if (_zoomMode == ZoomMode.Fullscreen && _animTimer != null && _animTimer.Enabled)
                 {
                     return;
                 }
@@ -656,11 +920,6 @@ internal sealed partial class TrayContext
                 }
             });
         };
-
-        if (_followCursor)
-        {
-            _followTimer.Start();
-        }
 
         _animTimer = new System.Windows.Forms.Timer();
         ApplyFps();
@@ -694,16 +953,80 @@ internal sealed partial class TrayContext
             Interval = 20
         };
         _cursorSpotlightTimer.Tick += (_, _) => RunGuarded("TrayContext.CursorSpotlightTimer", HandleCursorSpotlightTick);
-        _cursorSpotlightTimer.Start();
+    }
+
+    private bool ShouldRunFollowTimer()
+    {
+        return _enabled &&
+               _magActive &&
+               _zoomPercent > 100 &&
+               (_followCursor || _zoomMode != ZoomMode.Fullscreen);
+    }
+
+    private void UpdateFollowTimerState()
+    {
+        if (_followTimer == null)
+        {
+            return;
+        }
+
+        if (ShouldRunFollowTimer())
+        {
+            _followTimer.Start();
+        }
+        else
+        {
+            _followTimer.Stop();
+        }
+    }
+
+    private void RecordCursorMovementForSpotlight(Point point)
+    {
+        const int sampleIntervalMs = 20;
+        const int spotlightDurationMs = 2220;
+        long now = Environment.TickCount64;
+        if (now - _lastCursorSampleTick < sampleIntervalMs)
+        {
+            return;
+        }
+
+        _lastCursorSampleTick = now;
+        PruneCursorSamples(now);
+        AddCursorSample(now, point);
+        _cursorSpotlightTimer?.Start();
+        if (_cursorSpotlightVisibleUntilTick > now ||
+            now - _lastCursorSpotlightTriggerTick < 1500 ||
+            !ShouldTriggerCursorSpotlight())
+        {
+            return;
+        }
+
+        _lastCursorSpotlightTriggerTick = now;
+        _cursorSpotlightVisibleUntilTick = now + spotlightDurationMs;
+        _cursorSpotlightTimer?.Start();
+        HandleCursorSpotlightTick();
     }
 
     private void HandleCursorSpotlightTick()
     {
-        const int spotlightHoldDurationMs = 2000;
         const int spotlightShrinkDurationMs = 220;
-        const int spotlightTotalDurationMs = spotlightHoldDurationMs + spotlightShrinkDurationMs;
         long now = Environment.TickCount64;
         bool isVisible = _cursorSpotlightVisibleUntilTick > now;
+        PruneCursorSamples(now);
+
+        if (!isVisible)
+        {
+            if (_recentCursorSamples.Count == 0)
+                _cursorSpotlightTimer?.Stop();
+            RestoreSystemCursorVisibility();
+            if (_trayPopup != null && !_trayPopup.IsDisposed)
+            {
+                _trayPopup.IgnoreDeactivateClose = false;
+            }
+
+            _cursorSpotlightOverlay?.HideSpotlight();
+            return;
+        }
 
         if (!GetCursorPos(out var pt))
         {
@@ -721,37 +1044,6 @@ internal sealed partial class TrayContext
         }
 
         Point currentPoint = new(pt.X, pt.Y);
-        PruneCursorSamples(now);
-
-        if (_wiggleSpotlightEnabled)
-        {
-            AddCursorSample(now, currentPoint);
-            if (!isVisible &&
-                now - _lastCursorSpotlightTriggerTick >= 1500 &&
-                ShouldTriggerCursorSpotlight())
-            {
-                _lastCursorSpotlightTriggerTick = now;
-                _cursorSpotlightVisibleUntilTick = now + spotlightTotalDurationMs;
-                isVisible = true;
-            }
-        }
-        else
-        {
-            _recentCursorSamples.Clear();
-            _cursorSpotlightVisibleUntilTick = 0;
-            isVisible = false;
-        }
-
-        if (!isVisible)
-        {
-            RestoreSystemCursorVisibility();
-            if (_trayPopup != null && !_trayPopup.IsDisposed)
-            {
-                _trayPopup.IgnoreDeactivateClose = false;
-            }
-            _cursorSpotlightOverlay?.HideSpotlight();
-            return;
-        }
 
         if (_trayPopup != null && !_trayPopup.IsDisposed)
         {
@@ -786,6 +1078,8 @@ internal sealed partial class TrayContext
         }
 
         _recentCursorSamples.Add((now, point));
+        if (_recentCursorSamples.Count > 51)
+            _recentCursorSamples.RemoveAt(0);
     }
 
     private void PruneCursorSamples(long now)
@@ -1015,6 +1309,11 @@ internal sealed partial class TrayContext
     {
         ResetExitConfirmation();
         _enabled = enabled;
+        if (_enabled)
+        {
+            KeepTrayPopupOpenForOverlayActivation();
+        }
+
         if (!_enabled)
         {
             _zoomPercent = 100;
@@ -1064,14 +1363,7 @@ internal sealed partial class TrayContext
     {
         ResetExitConfirmation();
         _followCursor = followCursor;
-        if (_followCursor)
-        {
-            _followTimer?.Start();
-        }
-        else
-        {
-            _followTimer?.Stop();
-        }
+        UpdateFollowTimerState();
 
         SaveSettings();
         UpdateTrayQuickToggleState();

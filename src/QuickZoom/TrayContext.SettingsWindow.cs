@@ -38,7 +38,18 @@ internal sealed partial class TrayContext
 
     private readonly record struct ShortcutValidation(ShortcutValidationLevel Level, string Text);
 
-    private void ShowSettingsWindow(SettingsPage initialPage = SettingsPage.General, Point? restoreLocation = null)
+    private TrayModeButton[] _settingsZoomModeButtons = [];
+    private SettingsSection? _settingsZoomModeSection;
+    private Control? _settingsLensSizeRow;
+    private Control? _settingsLensShapeRow;
+    private Control? _settingsDockPositionRow;
+    private Control? _settingsDockSizeRow;
+    private System.Windows.Forms.Timer? _settingsZoomModeApplyTimer;
+
+    private void ShowSettingsWindow(
+        SettingsPage initialPage = SettingsPage.General,
+        Point? restoreLocation = null,
+        SettingsUiState? restoreUiState = null)
     {
         if (_settingsWindow != null && !_settingsWindow.IsDisposed)
         {
@@ -46,6 +57,19 @@ internal sealed partial class TrayContext
             if (_settingsWindow.WindowState == FormWindowState.Minimized)
             {
                 _settingsWindow.WindowState = FormWindowState.Normal;
+            }
+
+            if (!_settingsWindow.Visible &&
+                _settingsWindow is SettingsForm existingForm &&
+                existingForm.BackColor.GetBrightness() < 0.5f)
+            {
+                ShowStagedDarkSettingsWindow(existingForm, existingForm.Location);
+                return;
+            }
+
+            if (!_settingsWindow.Visible && _settingsWindow is SettingsForm hiddenForm)
+            {
+                hiddenForm.PrepareForKeyboardEntry();
             }
 
             _settingsWindow.Show();
@@ -71,27 +95,27 @@ internal sealed partial class TrayContext
             GetSettingsClientSize(),
             L("Common.AppName"),
             L("Settings.Done"),
-            _colourblindMode,
             _resetDefaultsButton,
-            BuildSettingsPageDefinitions());
+            BuildSettingsPageDefinitions(),
+            BuildSettingsSearchEntries(),
+            L("Settings.SearchPlaceholder"),
+            L("Settings.SearchNoResults"),
+            L("Settings.SearchAccessibleDescription"));
+        bool rightToLeft = UiText.IsRightToLeft(_language);
+        form.RightToLeft = rightToLeft ? RightToLeft.Yes : RightToLeft.No;
+        form.RightToLeftLayout = rightToLeft;
         if (shouldStageDarkOpen)
         {
             form.Opacity = 0;
         }
 
-        _iconRef ??= LoadEmbeddedIconBySuffix("magnifier_dark.ico");
+        _iconRef ??= LoadEmbeddedIconBySuffix("magnifier-dark.ico");
         if (_iconRef != null)
         {
             form.Icon = (Icon)_iconRef.Clone();
         }
 
         WindowChrome.TrySetDarkTitleBar(form, shouldStageDarkOpen);
-        if (shouldStageDarkOpen)
-        {
-            _ = form.Handle;
-            WindowChrome.TrySetDarkTitleBar(form, enabled: true);
-        }
-
         _settingsWindow = form;
         form.FormClosed += (_, _) =>
         {
@@ -117,34 +141,54 @@ internal sealed partial class TrayContext
         };
         form.PageShown += (_, pageType) => _currentSettingsPage = GetSettingsPage(pageType);
         form.ShowPage(GetSettingsPageType(initialPage));
+        if (restoreUiState is SettingsUiState uiState)
+        {
+            form.RestoreUiState(uiState);
+        }
+
         CenterSettingsWindow(form, restoreLocation);
         Point finalLocation = form.Location;
         if (shouldStageDarkOpen)
         {
-            form.Location = new Point(
-                SystemInformation.VirtualScreen.Left - form.Width - 200,
-                SystemInformation.VirtualScreen.Top - form.Height - 200);
+            ShowStagedDarkSettingsWindow(form, finalLocation);
+            return;
         }
 
+        form.PrepareForKeyboardEntry();
         form.Show();
-        if (shouldStageDarkOpen)
+        form.BringToFront();
+        form.Activate();
+    }
+
+    private static void ShowStagedDarkSettingsWindow(SettingsForm form, Point finalLocation)
+    {
+        form.PrepareForKeyboardEntry();
+        form.Opacity = 0;
+        form.Location = new Point(
+            SystemInformation.VirtualScreen.Left - form.Width - 200,
+            SystemInformation.VirtualScreen.Top - form.Height - 200);
+        bool cloaked = WindowChrome.TrySetCloaked(form, cloaked: true);
+
+        form.Show();
+        form.RenderBeforeReveal();
+
+        // Remove the layered-window transparency while the fully rendered form
+        // is still off-screen (and cloaked when DWM supports it).
+        form.Opacity = 1;
+        form.RenderBeforeReveal();
+        WindowChrome.TryFlushComposition();
+
+        form.Location = finalLocation;
+        form.RenderBeforeReveal();
+        WindowChrome.TryFlushComposition();
+        if (cloaked)
         {
-            form.BeginInvoke((MethodInvoker)(() =>
-            {
-                if (!form.IsDisposed)
-                {
-                    form.Update();
-                    form.Location = finalLocation;
-                    form.Opacity = 1;
-                    form.BringToFront();
-                    form.Activate();
-                }
-            }));
-            return;
+            _ = WindowChrome.TrySetCloaked(form, cloaked: false);
         }
 
         form.BringToFront();
         form.Activate();
+        WindowChrome.TryFlushComposition();
     }
 
     private IReadOnlyList<SettingsPageDefinition> BuildSettingsPageDefinitions() =>
@@ -157,6 +201,156 @@ internal sealed partial class TrayContext
         new(typeof(AppearanceSettingsPageView), L("Settings.Appearance"), TrayFluentIcon.Appearance, BuildAppearanceSettingsPage),
         new(typeof(AboutSettingsPageView), L("Settings.About"), TrayFluentIcon.About, BuildAboutSettingsPage)
     ];
+
+    private IReadOnlyList<SettingsSearchEntry> BuildSettingsSearchEntries()
+    {
+        var entries = new List<SettingsSearchEntry>();
+
+        IEnumerable<string> LocalizedText(params string[] keys)
+        {
+            foreach (UiLanguage language in Enum.GetValues<UiLanguage>())
+            {
+                foreach (string key in keys)
+                {
+                    yield return UiText.Get(language, key);
+                }
+            }
+        }
+
+        string[] PageTextKeys(SettingsPage page) => page switch
+        {
+            SettingsPage.Display =>
+            [
+                "Settings.Display", "Settings.DisplayTitle", "Settings.DisplayDescription",
+                "Settings.DisplaySection", "Settings.DisplaySelectionSection", "Settings.DisplaySectionHint"
+            ],
+            SettingsPage.Appearance =>
+            [
+                "Settings.Appearance", "Settings.AppearanceTitle", "Settings.AppearanceDescription",
+                "Settings.AppearanceSection", "Settings.AppearanceSectionHint"
+            ],
+            SettingsPage.Cursor =>
+            [
+                "Settings.Cursor", "Settings.CursorTitle", "Settings.CursorDescription", "Settings.CursorSection"
+            ],
+            SettingsPage.Zoom =>
+            [
+                "Settings.Zoom", "Settings.ZoomTitle", "Settings.ZoomDescription",
+                "Settings.ZoomModeSection", "Settings.ZoomSection", "Settings.ZoomSectionHint"
+            ],
+            SettingsPage.Input =>
+            [
+                "Settings.Input", "Settings.InputTitle", "Settings.InputDescription",
+                "Settings.InputSection", "Settings.InputSectionHint"
+            ],
+            SettingsPage.About =>
+            [
+                "Settings.About", "Settings.AboutTitle", "Settings.AboutDescription", "Settings.AboutSection"
+            ],
+            _ =>
+            [
+                "Settings.General", "Settings.GeneralTitle", "Settings.GeneralDescription",
+                "Settings.GeneralSection", "Settings.GeneralSectionHint"
+            ]
+        };
+
+        IEnumerable<string> LocalizedFpsValues()
+        {
+            int[] values = [60, 90, 120, 180, 240];
+            foreach (UiLanguage language in Enum.GetValues<UiLanguage>())
+            {
+                foreach (int fps in values)
+                {
+                    yield return UiText.Get(language, "Common.HertzValue", fps);
+                }
+
+                yield return UiText.Get(language, "Settings.FpsUnlimited");
+            }
+        }
+
+        IEnumerable<string> LanguageNames()
+        {
+            foreach (UiLanguage language in Enum.GetValues<UiLanguage>())
+            {
+                yield return UiText.GetLanguageDisplayName(language, _language);
+            }
+        }
+
+        void Add(SettingsPage page, string titleKey, string descriptionKey, params IEnumerable<string>[] keywordGroups)
+        {
+            string title = L(titleKey);
+            string aliasKey = titleKey.Replace("Settings.", "Settings.SearchAliases.", StringComparison.Ordinal);
+            IEnumerable<string> localizedKeywords = LocalizedText(
+                PageTextKeys(page)
+                    .Append(titleKey)
+                    .Append(descriptionKey)
+                    .Append(aliasKey)
+                    .ToArray());
+            entries.Add(new SettingsSearchEntry(
+                GetSettingsPageType(page),
+                GetSettingsPageLabel(page),
+                title,
+                L(descriptionKey),
+                string.Join(" ", localizedKeywords.Concat(keywordGroups.SelectMany(group => group)))));
+        }
+
+        Add(SettingsPage.General, "Settings.SmoothZoom", "Settings.SmoothZoomHelp");
+        Add(SettingsPage.General, "Settings.AutoDisableAt100", "Settings.AutoDisableAt100Help");
+        Add(SettingsPage.General, "Settings.CenterCursor", "Settings.CenterCursorHelp");
+
+        Add(SettingsPage.Display, "Settings.AutoSwitchMonitor", "Settings.AutoSwitchMonitorHelp");
+        Add(SettingsPage.Display, "Settings.DisplaySelectionMode", "Settings.DisplaySelectionModeHelp", LocalizedText(
+            "Settings.DisplayModeAll", "Settings.DisplayModeCursor", "Settings.DisplayModeCustom"));
+
+        Add(SettingsPage.Zoom, "Settings.ZoomMode", "Settings.ZoomModeHelp", LocalizedText(
+            "Settings.ZoomModeFullscreen", "Settings.ZoomModeLens", "Settings.ZoomModeDocked"));
+        Add(SettingsPage.Zoom, "Settings.LensSize", "Settings.LensSizeHelp");
+        Add(SettingsPage.Zoom, "Settings.LensShape", "Settings.LensShapeHelp", LocalizedText(
+            "Settings.LensShapeRectangle", "Settings.LensShapeSquare", "Settings.LensShapeCircle"));
+        Add(SettingsPage.Zoom, "Settings.DockPosition", "Settings.DockPositionHelp", LocalizedText(
+            "Settings.DockTop", "Settings.DockBottom", "Settings.DockLeft", "Settings.DockRight"));
+        Add(SettingsPage.Zoom, "Settings.DockSize", "Settings.DockSizeHelp");
+        Add(SettingsPage.Zoom, "Settings.ZoomStep", "Settings.ZoomStepHelp");
+        Add(SettingsPage.Zoom, "Settings.MaxZoom", "Settings.MaxZoomHelp");
+        Add(SettingsPage.Zoom, "Settings.RefreshRate", "Settings.RefreshRateHelp", LocalizedFpsValues());
+
+        Add(SettingsPage.Cursor, "Settings.WiggleSpotlight", "Settings.WiggleSpotlightHelp");
+        Add(SettingsPage.Cursor, "Settings.CursorEnhancement", "Settings.CursorEnhancementHelp");
+        Add(SettingsPage.Cursor, "Settings.CursorSize", "Settings.CursorSizeHelp");
+        Add(SettingsPage.Cursor, "Settings.CursorFillColor", "Settings.CursorFillColorHelp", LocalizedText(CursorColorNameKeys));
+        Add(SettingsPage.Cursor, "Settings.CursorBorderColor", "Settings.CursorBorderColorHelp", LocalizedText(CursorColorNameKeys));
+        Add(SettingsPage.Cursor, "Settings.CursorPreview", "Settings.CursorPreviewHelp");
+
+        Add(SettingsPage.Appearance, "Settings.ThemeMode", "Settings.ThemeModeHelp", LocalizedText(
+            "Settings.ThemeAuto", "Settings.ThemeDark", "Settings.ThemeLight"));
+        Add(SettingsPage.Appearance, "Settings.Language", "Settings.LanguageHelp", LanguageNames());
+        Add(SettingsPage.Appearance, "Settings.FontSize", "Settings.FontSizeHelp", LocalizedText(
+            "Settings.FontSizeDefault", "Settings.FontSizeLarge", "Settings.FontSizeExtraLarge"));
+
+        Add(SettingsPage.Input, "Settings.ShortcutMode", "Settings.ShortcutModeHelp", LocalizedText(
+            "Settings.ShortcutModeBoth", "Settings.ShortcutModeKeyboardOnly", "Settings.ShortcutModeMouseOnly"));
+        Add(SettingsPage.Input, "Settings.EnableKey", "Settings.EnableKeyHelp");
+        Add(SettingsPage.Input, "Settings.InvertActivationKey", "Settings.InvertActivationKeyHelp");
+        Add(SettingsPage.Input, "Settings.FollowCursorHotkey", "Settings.FollowCursorHotkeyHelp");
+        Add(SettingsPage.Input, "Settings.SuppressShortcutKeystrokes", "Settings.SuppressShortcutKeystrokesHelp");
+
+        Add(SettingsPage.About, "Settings.AboutBuildStartup", "Settings.AboutDescription");
+        Add(SettingsPage.About, "Settings.AboutLocations", "Settings.AboutLocationsHelp");
+        Add(SettingsPage.About, "Settings.UsageHelp", "About.HowToUseDetailed");
+
+        return entries;
+    }
+
+    private string GetSettingsPageLabel(SettingsPage page) => page switch
+    {
+        SettingsPage.Display => L("Settings.Display"),
+        SettingsPage.Appearance => L("Settings.Appearance"),
+        SettingsPage.Cursor => L("Settings.Cursor"),
+        SettingsPage.Zoom => L("Settings.Zoom"),
+        SettingsPage.Input => L("Settings.Input"),
+        SettingsPage.About => L("Settings.About"),
+        _ => L("Settings.General")
+    };
 
     private static Type GetSettingsPageType(SettingsPage page) => page switch
     {
@@ -207,8 +401,19 @@ internal sealed partial class TrayContext
     private static Size GetSettingsClientSize()
     {
         Rectangle area = Screen.FromPoint(Cursor.Position).WorkingArea;
-        int width = Math.Min(1280, Math.Max(1040, area.Width - 256));
-        int height = Math.Max(640, (int)Math.Round((area.Height - 32) * 0.8));
+        double largeTextProgress = Math.Clamp(
+            (ControlDrawing.UiFontScale - 1f) / 0.28f,
+            0f,
+            1f);
+        double widthRatio = 0.68d + (0.08d * largeTextProgress);
+        double heightRatio = 0.80d + (0.05d * largeTextProgress);
+        int minimumWidth = 1040 + (int)Math.Round(120d * largeTextProgress);
+        int maximumWidth = 1520 + (int)Math.Round(240d * largeTextProgress);
+        int width = Math.Clamp(
+            (int)Math.Round(area.Width * widthRatio),
+            minimumWidth,
+            maximumWidth);
+        int height = Math.Max(640, (int)Math.Round((area.Height - 32) * heightRatio));
         width = Math.Min(width, area.Width - 32);
         height = Math.Min(height, area.Height - 16);
         return new Size(width, height);
@@ -300,7 +505,13 @@ internal sealed partial class TrayContext
             return;
         }
 
-        owner.HandleCreated += (_, _) => _ = LoadDisplaySelectionSettingsAsync(owner);
+        EventHandler? handleCreated = null;
+        handleCreated = (_, _) =>
+        {
+            owner.HandleCreated -= handleCreated;
+            _ = LoadDisplaySelectionSettingsAsync(owner);
+        };
+        owner.HandleCreated += handleCreated;
     }
 
     private async Task LoadDisplaySelectionSettingsAsync(Control owner)
@@ -318,9 +529,17 @@ internal sealed partial class TrayContext
                 return;
             }
 
-            PopulateDisplaySelectionSettingsSection(monitors);
-            _displaySelectionSettingsSection.PerformLayout();
-            if (owner.FindForm() is SettingsForm settingsForm)
+            _displaySelectionSettingsSection.BeginRowsUpdate();
+            try
+            {
+                PopulateDisplaySelectionSettingsSection(monitors);
+            }
+            finally
+            {
+                _displaySelectionSettingsSection.EndRowsUpdate();
+            }
+
+            if (_currentSettingsPage == SettingsPage.Display && owner.FindForm() is SettingsForm settingsForm)
             {
                 settingsForm.FitToCurrentPage();
             }
@@ -444,15 +663,50 @@ internal sealed partial class TrayContext
     {
         ThemePalette palette = CurrentTheme;
         var page = new ZoomSettingsPageView(palette, L("Settings.ZoomTitle"), L("Settings.ZoomDescription"));
+        var modeSection = new SettingsSection(palette, L("Settings.ZoomModeSection"), string.Empty);
+        _settingsZoomModeSection = modeSection;
+        modeSection.AddRow(CreateZoomModeButtonRow());
+
+        _settingsLensSizeRow = CreateSliderRow(L("Settings.LensSize"), L("Settings.LensSizeHelp"), _lensSize, 100, 1400, 40, value => L("Common.PixelValue", value), value =>
+        {
+            _lensSize = NormalizeLensSize(value);
+            SaveSettings();
+            ApplyTransformCurrentPoint();
+        }, rightColumnWidth: 420);
+        _settingsLensShapeRow = CreateDropdownRow(L("Settings.LensShape"), L("Settings.LensShapeHelp"), BuildLensShapeItems(), LensShapeLabel(_lensShape), value =>
+        {
+            _lensShape = ParseLensShape(value);
+            SaveSettings();
+            ApplyTransformCurrentPoint();
+        }, rightColumnWidth: 360);
+        _settingsDockPositionRow = CreateDropdownRow(L("Settings.DockPosition"), L("Settings.DockPositionHelp"), BuildDockPositionItems(), DockPositionLabel(_dockPosition), value =>
+        {
+            _dockPosition = ParseDockPosition(value);
+            SaveSettings();
+            ApplyTransformCurrentPoint();
+        }, rightColumnWidth: 360);
+        _settingsDockSizeRow = CreateSliderRow(L("Settings.DockSize"), L("Settings.DockSizeHelp"), _dockSizePercent, 10, 50, 5, value => L("Common.PercentValue", value), value =>
+        {
+            _dockSizePercent = NormalizeDockSizePercent(value);
+            SaveSettings();
+            ApplyTransformCurrentPoint();
+        }, rightColumnWidth: 420);
+
+        modeSection.AddRow(_settingsLensSizeRow);
+        modeSection.AddRow(_settingsLensShapeRow);
+        modeSection.AddRow(_settingsDockPositionRow);
+        modeSection.AddRow(_settingsDockSizeRow);
+        UpdateSettingsZoomModeUi();
+
         var section = new SettingsSection(palette, L("Settings.ZoomSection"), string.Empty);
 
-        section.AddRow(CreateSliderRow(L("Settings.ZoomStep"), L("Settings.ZoomStepHelp"), _stepPercent, 1, 200, 5, value => value + "%", value =>
+        section.AddRow(CreateSliderRow(L("Settings.ZoomStep"), L("Settings.ZoomStepHelp"), _stepPercent, 1, 200, 5, value => L("Common.PercentValue", value), value =>
         {
             _stepPercent = value;
             SaveSettings();
         }, rightColumnWidth: 420));
 
-        section.AddRow(CreateSliderRow(L("Settings.MaxZoom"), L("Settings.MaxZoomHelp"), _maxPercent, 150, 750, 10, value => value + "%", value =>
+        section.AddRow(CreateSliderRow(L("Settings.MaxZoom"), L("Settings.MaxZoomHelp"), _maxPercent, 150, 750, 10, value => L("Common.PercentValue", value), value =>
         {
             _maxPercent = value;
             ClampZoom();
@@ -466,6 +720,7 @@ internal sealed partial class TrayContext
             SaveSettings();
         }, rightColumnWidth: 360));
 
+        page.AddSection(modeSection);
         page.AddSection(section);
         return page;
     }
@@ -480,12 +735,26 @@ internal sealed partial class TrayContext
             Color.FromArgb(_cursorFillColorArgb),
             Color.FromArgb(_cursorBorderColorArgb),
             _cursorScale);
+        SettingsRow? fillColorRow = null;
+        SettingsRow? borderColorRow = null;
+
+        void UpdateCursorContrastWarning()
+        {
+            bool lowContrast = GetContrastRatio(
+                Color.FromArgb(_cursorFillColorArgb),
+                Color.FromArgb(_cursorBorderColorArgb)) < 3d;
+            string? warning = lowContrast ? L("Accessibility.CursorContrastWarning") : null;
+            Color warningColor = ShortcutWarningColor();
+            fillColorRow?.SetStatus(warning, warningColor);
+            borderColorRow?.SetStatus(warning, warningColor);
+        }
 
         section.AddRow(CreateToggleRow(L("Settings.WiggleSpotlight"), L("Settings.WiggleSpotlightHelp"), _wiggleSpotlightEnabled, value =>
         {
             _wiggleSpotlightEnabled = value;
             if (!_wiggleSpotlightEnabled)
             {
+                _cursorSpotlightTimer?.Stop();
                 _recentCursorSamples.Clear();
                 _cursorSpotlightVisibleUntilTick = 0;
                 _cursorSpotlightOverlay?.HideSpotlight();
@@ -508,18 +777,17 @@ internal sealed partial class TrayContext
             CursorScaleMinimum,
             CursorScaleMaximum,
             5,
-            value => value + "%",
+            value => L("Common.PercentValue", value),
             value =>
             {
                 _cursorScale = value;
                 preview.ScalePercent = value;
-                preview.Invalidate();
                 SaveSettings();
-                ScheduleCursorScaleApply();
+                ScheduleCursorEnhancementApply();
             },
             rightColumnWidth: 420));
 
-        section.AddRow(CreateColorPaletteRow(
+        fillColorRow = CreateColorPaletteRow(
             L("Settings.CursorFillColor"),
             L("Settings.CursorFillColorHelp"),
             Color.FromArgb(_cursorFillColorArgb),
@@ -527,12 +795,13 @@ internal sealed partial class TrayContext
             {
                 _cursorFillColorArgb = color.ToArgb();
                 preview.FillColor = color;
-                preview.Invalidate();
-                ApplyCursorEnhancementIfNeeded();
+                ScheduleCursorEnhancementApply();
                 SaveSettings();
-            }));
+                UpdateCursorContrastWarning();
+            });
+        section.AddRow(fillColorRow);
 
-        section.AddRow(CreateColorPaletteRow(
+        borderColorRow = CreateColorPaletteRow(
             L("Settings.CursorBorderColor"),
             L("Settings.CursorBorderColorHelp"),
             Color.FromArgb(_cursorBorderColorArgb),
@@ -540,10 +809,12 @@ internal sealed partial class TrayContext
             {
                 _cursorBorderColorArgb = color.ToArgb();
                 preview.BorderColor = color;
-                preview.Invalidate();
-                ApplyCursorEnhancementIfNeeded();
+                ScheduleCursorEnhancementApply();
                 SaveSettings();
-            }));
+                UpdateCursorContrastWarning();
+            });
+        section.AddRow(borderColorRow);
+        UpdateCursorContrastWarning();
 
         section.AddRow(new SettingsRow(
             palette,
@@ -609,14 +880,6 @@ internal sealed partial class TrayContext
             RefreshSettingsWindow(SettingsPage.Appearance);
         }, rightColumnWidth: 260));
 
-        themeSection.AddRow(CreateToggleRow(L("Settings.ColourblindMode"), L("Settings.ColourblindModeHelp"), _colourblindMode, value =>
-        {
-            _colourblindMode = value;
-            SaveSettings();
-            RefreshMenuAndTrayUi(rebuildPopup: true);
-            RefreshSettingsWindow(SettingsPage.Appearance);
-        }, rightColumnWidth: 106));
-
         page.AddSection(themeSection);
         return page;
     }
@@ -626,8 +889,6 @@ internal sealed partial class TrayContext
         ThemePalette palette = CurrentTheme;
         var page = new ShortcutsSettingsPageView(palette, L("Settings.InputTitle"), L("Settings.InputDescription"));
         var section = new SettingsSection(palette, L("Settings.InputSection"), string.Empty);
-        ToggleSwitchControl? officeAltToggle = null;
-        SettingsRow? officeAltRow = null;
         SettingsRow? enableKeyRow = null;
         SettingsRow? invertKeyRow = null;
         SettingsRow? followCursorKeyRow = null;
@@ -669,32 +930,18 @@ internal sealed partial class TrayContext
                 }
 
                 _enableKey = key.Value;
-                bool altEnableKey = IsAltEnableKey();
-                if (!altEnableKey)
-                {
-                    _suppressAltKeyInOfficeApps = false;
-                }
-
                 _enableKeyPressed = false;
+                ResetEnableKeySuppressionState();
+                _suppressedShortcutKeyUps.Clear();
                 SaveSettings();
                 RefreshMenuAndTrayUi(rebuildPopup: true);
                 UpdateShortcutValidationRows();
 
-                if (officeAltToggle != null)
-                {
-                    officeAltToggle.IsOn = _suppressAltKeyInOfficeApps && altEnableKey;
-                    officeAltToggle.Enabled = altEnableKey;
-                }
-
-                if (officeAltRow != null)
-                {
-                    officeAltRow.Enabled = altEnableKey;
-                }
-
                 return KeyBadgeLabel(_enableKey);
             },
-            rightColumnWidth: 210,
-            compact: true);
+            rightColumnWidth: 170,
+            compact: true,
+            showWindowsLogo: () => IsWindowsKey(_enableKey));
         section.AddRow(enableKeyRow);
 
         invertKeyRow = CreateKeybindRow(
@@ -717,8 +964,9 @@ internal sealed partial class TrayContext
                 UpdateShortcutValidationRows();
                 return KeyBadgeLabel(_invertKey);
             },
-            rightColumnWidth: 210,
-            compact: true);
+            rightColumnWidth: 170,
+            compact: true,
+            showWindowsLogo: () => IsWindowsKey(_invertKey));
         section.AddRow(invertKeyRow);
 
         followCursorKeyRow = CreateKeybindRow(
@@ -740,28 +988,25 @@ internal sealed partial class TrayContext
                 UpdateShortcutValidationRows();
                 return KeyBadgeLabel(_followCursorKey);
             },
-            rightColumnWidth: 210,
-            compact: true);
+            rightColumnWidth: 170,
+            compact: true,
+            showWindowsLogo: () => IsWindowsKey(_followCursorKey));
         section.AddRow(followCursorKeyRow);
         UpdateShortcutValidationRows();
 
         section.AddRow(CreateToggleRow(
-            L("Settings.SuppressAltKeyInOfficeApps"),
-            L("Settings.SuppressAltKeyInOfficeAppsHelp"),
-            _suppressAltKeyInOfficeApps && IsAltEnableKey(),
+            L("Settings.SuppressShortcutKeystrokes"),
+            L("Settings.SuppressShortcutKeystrokesHelp"),
+            _suppressShortcutKeystrokes,
             value =>
             {
-                _suppressAltKeyInOfficeApps = value;
+                _suppressShortcutKeystrokes = value;
+                ResetEnableKeySuppressionState();
+                _suppressedShortcutKeyUps.Clear();
                 SaveSettings();
             },
             rightColumnWidth: 96,
-            enabled: IsAltEnableKey(),
-            compact: true,
-            onCreated: (toggle, row) =>
-            {
-                officeAltToggle = toggle;
-                officeAltRow = row;
-            }));
+            compact: true));
 
         page.AddSection(section);
         return page;
@@ -777,6 +1022,13 @@ internal sealed partial class TrayContext
             L("Settings.AboutBuildStartup"),
             L("About.VersionBuild", AppInfo.ReleaseVersion, AppInfo.BuildNumber),
             L("Settings.Loading")));
+        if (_debugLoggingEnabled)
+        {
+            overviewSection.AddRow(CreateInfoRow(
+                L("About.ThemeEngine"),
+                ThemeEngineStatusText(),
+                string.Empty));
+        }
         overviewSection.AddRow(CreateTextTileRow(
             L("Settings.UsageHelp"),
             L("About.HowToUseDetailed")));
@@ -794,7 +1046,13 @@ internal sealed partial class TrayContext
             return;
         }
 
-        owner.HandleCreated += (_, _) => _ = LoadAboutSettingsAsync(owner, overviewSection);
+        EventHandler? handleCreated = null;
+        handleCreated = (_, _) =>
+        {
+            owner.HandleCreated -= handleCreated;
+            _ = LoadAboutSettingsAsync(owner, overviewSection);
+        };
+        owner.HandleCreated += handleCreated;
     }
 
     private async Task LoadAboutSettingsAsync(Control owner, SettingsSection overviewSection)
@@ -823,47 +1081,96 @@ internal sealed partial class TrayContext
             }
 
             string settingsPath = AppPaths.SettingsPath;
-            overviewSection.ClearRows();
-            overviewSection.AddRow(CreateInfoRow(
-                L("Settings.AboutBuildStartup"),
-                L("About.VersionBuild", AppInfo.ReleaseVersion, AppInfo.BuildNumber),
-                details.StartupStatus,
-                details.Status == StartupTaskStatus.Broken
-                    ? CreateInlineActionButton(L("About.FixStartup"), RepairStartupServiceNow)
-                    : null,
-                details.Status == StartupTaskStatus.Broken ? 140 : 240));
-            overviewSection.AddRow(new SettingsRow(
-                CurrentTheme,
-                L("Settings.AboutLocations"),
-                L("Settings.AboutLocationsHelp"),
-                CreateDualActionButtons(
+            overviewSection.BeginRowsUpdate();
+            try
+            {
+                overviewSection.ClearRows();
+                overviewSection.AddRow(CreateInfoRow(
+                    L("Settings.AboutBuildStartup"),
+                    L("About.VersionBuild", AppInfo.ReleaseVersion, AppInfo.BuildNumber),
+                    details.StartupStatus,
+                    details.Status != StartupTaskStatus.Ready
+                        ? CreateInlineActionButton(L("About.ConfigureStartup"), ConfigureStartupServiceNow)
+                        : null,
+                    details.Status != StartupTaskStatus.Ready ? 180 : 240));
+                if (_debugLoggingEnabled)
+                {
+                    overviewSection.AddRow(CreateInfoRow(
+                        L("About.ThemeEngine"),
+                        ThemeEngineStatusText(),
+                        string.Empty));
+                }
+                int locationActionsWidth = ControlDrawing.ScaleLogical(owner, 272);
+                Control locationActions = CreateDualActionButtons(
                     new[]
                     {
                         (L("About.OpenInstallFolder"), (Action)(() => OpenFileLocation(details.InstallPath)), !string.Equals(details.InstallPath, L("About.NotInstalled"), StringComparison.OrdinalIgnoreCase)),
                         (L("About.OpenConfigFolder"), (Action)(() => OpenFileLocation(settingsPath)), true)
                     },
-                    380),
-                rightColumnWidth: 380));
-            var debugLoggingRow = new SettingsRow(
-                CurrentTheme,
-                L("Settings.DebugLogging"),
-                L("Settings.DebugLoggingHelp"),
-                CreateDebugLoggingControls(),
-                rightColumnWidth: 300)
+                    locationActionsWidth);
+                var locationsRow = new SettingsRow(
+                    CurrentTheme,
+                    L("Settings.AboutLocations"),
+                    L("Settings.AboutLocationsHelp"),
+                    locationActions,
+                    rightColumnWidth: locationActionsWidth);
+                locationActions.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+                locationActions.Margin = new Padding(0);
+                if (locationActions.Parent is TableLayoutPanel locationActionsHost)
+                {
+                    locationActionsHost.AutoSize = false;
+                    bool aligningLocationActions = false;
+                    void AlignLocationActions()
+                    {
+                        if (aligningLocationActions)
+                        {
+                            return;
+                        }
+
+                        Point target = new(
+                            Math.Max(0, locationActionsHost.ClientSize.Width - locationActions.Width),
+                            locationActionsHost.Padding.Top);
+                        if (locationActions.Location != target)
+                        {
+                            aligningLocationActions = true;
+                            try
+                            {
+                                locationActions.Location = target;
+                            }
+                            finally
+                            {
+                                aligningLocationActions = false;
+                            }
+                        }
+                    }
+
+                    locationActionsHost.Layout += (_, _) => AlignLocationActions();
+                    locationActionsHost.SizeChanged += (_, _) => AlignLocationActions();
+                    locationActions.LocationChanged += (_, _) => AlignLocationActions();
+                    locationActions.SizeChanged += (_, _) => AlignLocationActions();
+                    locationActionsHost.PerformLayout();
+                    AlignLocationActions();
+                }
+                overviewSection.AddRow(locationsRow);
+                overviewSection.AddRow(CreateTextTileRow(
+                    L("Settings.UsageHelp"),
+                    L("About.HowToUseDetailed")));
+            }
+            finally
             {
-                MinimumSize = new Size(0, 92)
-            };
-            overviewSection.AddRow(debugLoggingRow);
-            overviewSection.AddRow(CreateTextTileRow(
-                L("Settings.UsageHelp"),
-                L("About.HowToUseDetailed")));
-            overviewSection.PerformLayout();
-            if (owner.FindForm() is SettingsForm settingsForm)
+                overviewSection.EndRowsUpdate();
+            }
+
+            if (_currentSettingsPage == SettingsPage.About && owner.FindForm() is SettingsForm settingsForm)
             {
                 settingsForm.FitToCurrentPage();
             }
         }));
     }
+
+    private string ThemeEngineStatusText() => AppThemeBootstrap.NativeColorModeActive
+        ? L("About.ThemeEngineNative")
+        : L("About.ThemeEngineFallback");
 
     private SettingsRow CreateToggleRow(string title, string description, bool initial, Action<bool> onChanged, int rightColumnWidth = 96, bool enabled = true, bool compact = false, Action<ToggleSwitchControl, SettingsRow>? onCreated = null)
     {
@@ -871,7 +1178,13 @@ internal sealed partial class TrayContext
         {
             IsOn = initial,
             Enabled = enabled,
-            ShowStateText = _colourblindMode
+            ShowStateText = true,
+            OnText = L("Common.On"),
+            OffText = L("Common.Off"),
+            AccessibleName = title,
+            AccessibleDescription = string.IsNullOrWhiteSpace(description)
+                ? L("Accessibility.ToggleInstruction")
+                : description + " " + L("Accessibility.ToggleInstruction")
         };
         toggle.Click += (_, _) => onChanged(toggle.IsOn);
         var row = new SettingsRow(CurrentTheme, title, description, toggle, rightColumnWidth, compactDescription: compact)
@@ -882,113 +1195,250 @@ internal sealed partial class TrayContext
         return row;
     }
 
-    private Control CreateDebugLoggingControls()
+    private Control CreateZoomModeButtonRow()
     {
-        var host = new TableLayoutPanel
+        ThemePalette palette = CurrentTheme;
+        Control scaleOwner = _settingsWindow != null && !_settingsWindow.IsDisposed ? _settingsWindow : _uiInvoker;
+        var surface = new ModernSurfacePanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            CornerRadius = 9,
+            BorderAlpha = 20,
+            Margin = new Padding(0, 0, 0, 8),
+            Padding = new Padding(14, 12, 14, 12),
+            BackColor = palette.ControlBackground,
+            AccessibleName = L("Settings.ZoomMode"),
+            AccessibleDescription = L("Settings.ZoomModeHelp"),
+            AccessibleRole = AccessibleRole.Grouping
+        };
+
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1,
+            RowCount = 3,
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+            BackColor = Color.Transparent
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var titleLabel = new Label
+        {
+            Text = L("Settings.ZoomMode"),
+            AutoSize = true,
+            Font = ControlDrawing.UiFont("Segoe UI Semibold", 10f, FontStyle.Bold),
+            Margin = new Padding(0),
+            BackColor = Color.Transparent,
+            ForeColor = palette.Text
+        };
+
+        var descriptionLabel = new Label
+        {
+            Text = L("Settings.ZoomModeHelp"),
+            AutoSize = true,
+            Font = ControlDrawing.UiFont("Segoe UI", 8.8f, FontStyle.Regular),
+            Margin = new Padding(0, 4, 0, 0),
+            BackColor = Color.Transparent,
+            ForeColor = palette.SecondaryText
+        };
+
+        var buttonsHost = new FlowLayoutPanel
         {
             AutoSize = false,
-            Width = 300,
-            Height = 44,
-            ColumnCount = 2,
-            RowCount = 1,
-            BackColor = Color.Transparent,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0, ControlDrawing.ScaleLogical(scaleOwner, 12), 0, 0),
+            Padding = new Padding(0),
+            BackColor = Color.Transparent
+        };
+
+        TrayModeButton[] buttons =
+        [
+            CreateSettingsZoomModeButton(palette, ZoomMode.Fullscreen, TrayFluentIcon.ZoomModeFullscreen, L("Settings.ZoomModeFullscreen"), L("Settings.ZoomModeFullscreenDescription")),
+            CreateSettingsZoomModeButton(palette, ZoomMode.Lens, TrayFluentIcon.ZoomModeLens, L("Settings.ZoomModeLens"), L("Settings.ZoomModeLensDescription")),
+            CreateSettingsZoomModeButton(palette, ZoomMode.Docked, TrayFluentIcon.ZoomModeDocked, L("Settings.ZoomModeDocked"), L("Settings.ZoomModeDockedDescription"))
+        ];
+        _settingsZoomModeButtons = buttons;
+
+        foreach (TrayModeButton button in buttons)
+        {
+            buttonsHost.Controls.Add(button);
+        }
+
+        layout.Controls.Add(titleLabel, 0, 0);
+        layout.Controls.Add(descriptionLabel, 0, 1);
+        layout.Controls.Add(buttonsHost, 0, 2);
+        surface.Controls.Add(layout);
+
+        void ArrangeButtons()
+        {
+            int innerWidth = Math.Max(ControlDrawing.ScaleLogical(surface, 360), surface.ClientSize.Width - surface.Padding.Horizontal);
+            int maxTextWidth = Math.Min(innerWidth, ControlDrawing.ScaleLogical(surface, 620));
+            titleLabel.MaximumSize = new Size(innerWidth, 0);
+            descriptionLabel.MaximumSize = new Size(maxTextWidth, 0);
+            layout.Width = innerWidth;
+            buttonsHost.Width = innerWidth;
+
+            int gap = ControlDrawing.ScaleLogical(surface, 8);
+            int rowHeight = 0;
+            int widestPreferredButton = 0;
+            foreach (TrayModeButton button in buttons)
+            {
+                Size preferred = button.GetPreferredSizeForOwner(surface);
+                rowHeight = Math.Max(rowHeight, preferred.Height);
+                widestPreferredButton = Math.Max(widestPreferredButton, preferred.Width);
+            }
+
+            int equalWidth = Math.Max(1, (innerWidth - (gap * 2)) / 3);
+            bool stackButtons = equalWidth < widestPreferredButton;
+            buttonsHost.FlowDirection = stackButtons ? FlowDirection.TopDown : FlowDirection.LeftToRight;
+            buttonsHost.Height = stackButtons
+                ? (rowHeight * buttons.Length) + (gap * (buttons.Length - 1))
+                : rowHeight;
+
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                TrayModeButton button = buttons[i];
+                button.Size = stackButtons
+                    ? new Size(innerWidth, rowHeight)
+                    : new Size(equalWidth, rowHeight);
+                button.Margin = stackButtons
+                    ? new Padding(0, 0, 0, i == buttons.Length - 1 ? 0 : gap)
+                    : new Padding(0, 0, i == buttons.Length - 1 ? 0 : gap, 0);
+            }
+
+            layout.PerformLayout();
+            surface.PerformLayout();
+        }
+
+        surface.Resize += (_, _) => ArrangeButtons();
+        surface.HandleCreated += (_, _) => ArrangeButtons();
+        ArrangeButtons();
+        return surface;
+    }
+
+    private TrayModeButton CreateSettingsZoomModeButton(ThemePalette palette, ZoomMode mode, TrayFluentIcon icon, string label, string description)
+    {
+        var button = new TrayModeButton(palette, icon, label, description)
+        {
+            Selected = _zoomMode == mode,
             Margin = new Padding(0),
-            Padding = new Padding(0)
+            Tag = mode
         };
-        host.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
-        host.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 188));
-        host.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
-
-        var openLogButton = new ModernButton
+        button.Click += (_, _) => SetZoomModeFromSettings(mode);
+        button.NavigationExitRequested += (_, _) =>
         {
-            Text = L("About.OpenLog"),
-            Dock = DockStyle.Fill,
-            Margin = new Padding(0, 2, 8, 2)
+            if (_settingsWindow is SettingsForm form)
+            {
+                _ = form.FocusSidebarFromContent();
+            }
         };
-        openLogButton.ApplyTheme(CurrentTheme, emphasis: false);
-        openLogButton.Click += (_, _) => OpenLogFile();
-        host.Controls.Add(openLogButton, 0, 0);
-
-        var toggle = new ToggleSwitchControl(CurrentTheme)
-        {
-            IsOn = _debugLoggingEnabled,
-            Anchor = AnchorStyles.Right,
-            Margin = new Padding(0, 2, 0, 2),
-            ShowStateText = _colourblindMode
-        };
-        toggle.Click += (_, _) =>
-        {
-            _debugLoggingEnabled = toggle.IsOn;
-            ErrorLog.Configure(_debugLoggingEnabled, AppInfo.VersionHash);
-            SaveSettings();
-        };
-        host.Controls.Add(toggle, 1, 0);
-
-        return host;
+        return button;
     }
 
-    private static void OpenLogFile()
+    private void SetZoomModeFromSettings(ZoomMode nextMode)
     {
-        string logPath = AppPaths.AppDataLogPath;
+        if (nextMode == _zoomMode)
+        {
+            return;
+        }
+
+        _zoomMode = nextMode;
+        _monitorLayoutDirty = true;
+
+        UpdateSettingsZoomModeUi();
+        SaveSettings();
+        ScheduleSettingsZoomModeApply();
+        UpdateTrayPopupState();
+    }
+
+    private void UpdateSettingsZoomModeUi()
+    {
+        SettingsForm? settingsForm = _settingsWindow is SettingsForm { IsDisposed: false } form ? form : null;
+        settingsForm?.BeginAtomicUpdate();
         try
         {
-            string? directory = Path.GetDirectoryName(logPath);
-            if (!string.IsNullOrWhiteSpace(directory))
+            foreach (TrayModeButton button in _settingsZoomModeButtons)
             {
-                Directory.CreateDirectory(directory);
-            }
-
-            ErrorLog.EnsureLogFileExists();
-
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = logPath,
-                UseShellExecute = true
-            });
-        }
-        catch (Exception ex)
-        {
-            ErrorLog.Write("OpenLog", ex);
-            try
-            {
-                Process.Start(new ProcessStartInfo
+                if (!button.IsDisposed && button.Tag is ZoomMode mode)
                 {
-                    FileName = "notepad.exe",
-                    Arguments = "\"" + logPath + "\"",
-                    UseShellExecute = false
-                });
+                    button.Selected = mode == _zoomMode;
+                }
             }
-            catch
-            {
-                // Best effort.
-            }
-        }
-    }
 
-    private void RepairStartupServiceNow()
-    {
-        try
-        {
-            string? exePath = Environment.ProcessPath;
-            if (string.IsNullOrWhiteSpace(exePath))
+            if (_settingsZoomModeSection is not { IsDisposed: false } modeSection)
             {
                 return;
             }
 
-            Process? process = Process.Start(new ProcessStartInfo
+            modeSection.BeginRowsUpdate();
+            try
             {
-                FileName = exePath,
-                UseShellExecute = true,
-                Verb = "runas",
-                Arguments = "--install-startup-task --startup-task-user " + QuoteProcessArgument(Environment.UserDomainName + "\\" + Environment.UserName)
-            });
-            ScheduleStartupStatusRefresh(3500);
-            ScheduleStartupStatusRefresh(9000);
-            if (process != null)
-            {
-                process.EnableRaisingEvents = true;
-                process.Exited += (_, _) => ScheduleStartupStatusRefresh(800);
+                SetSettingsRowVisible(_settingsLensSizeRow, _zoomMode == ZoomMode.Lens);
+                SetSettingsRowVisible(_settingsLensShapeRow, _zoomMode == ZoomMode.Lens);
+                SetSettingsRowVisible(_settingsDockPositionRow, _zoomMode == ZoomMode.Docked);
+                SetSettingsRowVisible(_settingsDockSizeRow, _zoomMode == ZoomMode.Docked);
             }
+            finally
+            {
+                modeSection.EndRowsUpdate();
+            }
+        }
+        finally
+        {
+            settingsForm?.EndAtomicUpdate();
+        }
+    }
+
+    private static void SetSettingsRowVisible(Control? row, bool visible)
+    {
+        if (row is { IsDisposed: false } && row.Visible != visible)
+        {
+            row.Visible = visible;
+        }
+    }
+
+    private void ScheduleSettingsZoomModeApply()
+    {
+        if (_zoomPercent <= 100 && !_invertColors)
+        {
+            return;
+        }
+
+        if (_settingsZoomModeApplyTimer == null)
+        {
+            _settingsZoomModeApplyTimer = new System.Windows.Forms.Timer { Interval = 120 };
+            _settingsZoomModeApplyTimer.Tick += (_, _) =>
+            {
+                _settingsZoomModeApplyTimer.Stop();
+                RunGuarded("Settings.ApplyZoomMode", ApplyTransformCurrentPoint);
+            };
+        }
+
+        _settingsZoomModeApplyTimer.Stop();
+        _settingsZoomModeApplyTimer.Start();
+    }
+
+
+    private void ConfigureStartupServiceNow()
+    {
+        try
+        {
+            if (_settingsWindow == null || _settingsWindow.IsDisposed)
+            {
+                return;
+            }
+
+            _ = FirstRunSetup.ShowStartupServiceOnly(_settingsWindow);
+            StartupTaskService.InvalidateCache();
+            RefreshSettingsWindow(SettingsPage.About);
         }
         catch (Exception ex)
         {
@@ -996,86 +1446,14 @@ internal sealed partial class TrayContext
         }
     }
 
-    private static string QuoteProcessArgument(string value)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            return "\"\"";
-        }
-
-        if (value.IndexOfAny([' ', '\t', '\n', '\r', '"']) < 0)
-        {
-            return value;
-        }
-
-        var quoted = new StringBuilder();
-        quoted.Append('"');
-        int backslashCount = 0;
-        foreach (char c in value)
-        {
-            if (c == '\\')
-            {
-                backslashCount++;
-                continue;
-            }
-
-            if (c == '"')
-            {
-                quoted.Append('\\', (backslashCount * 2) + 1);
-                quoted.Append('"');
-                backslashCount = 0;
-                continue;
-            }
-
-            if (backslashCount > 0)
-            {
-                quoted.Append('\\', backslashCount);
-                backslashCount = 0;
-            }
-
-            quoted.Append(c);
-        }
-
-        if (backslashCount > 0)
-        {
-            quoted.Append('\\', backslashCount * 2);
-        }
-
-        quoted.Append('"');
-        return quoted.ToString();
-    }
-
-    private void ScheduleStartupStatusRefresh(int delayMs)
-    {
-        if (_settingsWindow == null || _settingsWindow.IsDisposed)
-        {
-            return;
-        }
-
-        var timer = new System.Windows.Forms.Timer { Interval = delayMs };
-        timer.Tick += (_, _) =>
-        {
-            timer.Stop();
-            timer.Dispose();
-            if (_settingsWindow == null || _settingsWindow.IsDisposed)
-            {
-                return;
-            }
-
-            StartupTaskService.InvalidateCache();
-            RefreshSettingsWindow(SettingsPage.About);
-        };
-        timer.Start();
-    }
-
     private SettingsRow CreateSliderRow(string title, string description, int value, int min, int max, int step, Func<int, string> valueFormatter, Action<int> onChanged, int rightColumnWidth = 420)
     {
         bool updatingFromSlider = false;
         bool updatingFromInput = false;
-        bool showingPlaceholder = true;
+        bool showingPlaceholder = false;
         string placeholderText = valueFormatter(value);
         Color normalTextColor = CurrentTheme.Text;
-        Color warningTextColor = _colourblindMode ? ShortcutWarningColor() : ShortcutErrorColor();
+        Color warningTextColor = ShortcutErrorColor();
         Color placeholderTextColor = CurrentTheme.SecondaryText;
         Color inputBorderColor = ControlContrast.FieldBorder(CurrentTheme);
         Color inputBackColor = ControlContrast.FieldBackground(CurrentTheme);
@@ -1086,35 +1464,85 @@ internal sealed partial class TrayContext
             Maximum = max,
             SnapStep = step,
             Dock = DockStyle.Fill,
-            Margin = new Padding(0, 4, 12, 0)
+            Margin = new Padding(0, 4, 12, 0),
+            AccessibleName = title,
+            AccessibleDescription = string.IsNullOrWhiteSpace(description)
+                ? L("Accessibility.SliderInstruction")
+                : description + " " + L("Accessibility.SliderInstruction")
         };
         slider.SetExactValue(value);
 
-        var valueInput = new TextBox
+        Font valueInputFont = ControlDrawing.UiFont("Segoe UI Semibold", 9f, FontStyle.Bold);
+        string[] representativeValues = [valueFormatter(min), valueFormatter(max), valueFormatter(value)];
+        int widestValue = representativeValues.Max(formattedValue =>
+            TextRenderer.MeasureText(
+                formattedValue,
+                valueInputFont,
+                Size.Empty,
+                TextFormatFlags.SingleLine | TextFormatFlags.NoPadding).Width);
+        int valueInputFrameWidth = Math.Clamp(widestValue + 18, 62, 92);
+        const int valueInputFrameHeight = 34;
+        var valueInput = new CompactNumericTextBox
         {
             AutoSize = false,
-            Width = 86,
-            Height = 28,
             Text = placeholderText,
             TextAlign = HorizontalAlignment.Center,
-            Font = ControlDrawing.UiFont("Segoe UI Semibold", 9f, FontStyle.Bold),
-            ForeColor = placeholderTextColor,
+            Font = valueInputFont,
+            ForeColor = normalTextColor,
             BackColor = inputBackColor,
             BorderStyle = BorderStyle.None,
-            Dock = DockStyle.Fill,
-            Margin = new Padding(0, 3, 0, 0)
+            MinimumValue = min,
+            MaximumValue = max,
+            ValueFormatter = valueFormatter,
+            MaxLength = representativeValues.Max(formattedValue => formattedValue.Length),
+            AccessibleName = title,
+            AccessibleDescription = string.IsNullOrWhiteSpace(description)
+                ? L("Accessibility.SliderInstruction")
+                : description + " " + L("Accessibility.SliderInstruction"),
+            AccessibleRole = AccessibleRole.SpinButton
+        };
+        slider.CaptureValueChanged = captureValue =>
+        {
+            placeholderText = valueFormatter(captureValue);
+            showingPlaceholder = false;
+            valueInput.ForeColor = normalTextColor;
+            valueInput.Text = placeholderText;
         };
         var valueInputFrame = new Panel
         {
-            Width = 86,
-            Height = 32,
+            Width = valueInputFrameWidth,
+            Height = valueInputFrameHeight,
             BackColor = inputBorderColor,
             Anchor = AnchorStyles.Right | AnchorStyles.Top,
-            Margin = new Padding(0, 2, 0, 0),
+            Margin = new Padding(0, (48 - valueInputFrameHeight) / 2, 0, 0),
             Padding = new Padding(1)
         };
         valueInputFrame.Controls.Add(valueInput);
         valueInputFrame.Click += (_, _) => valueInput.Focus();
+
+        void LayoutValueInput()
+        {
+            int inputHeight = Math.Min(
+                Math.Max(valueInput.PreferredHeight, valueInput.Font.Height + 2),
+                Math.Max(1, valueInputFrame.ClientSize.Height - valueInputFrame.Padding.Vertical));
+            valueInput.Bounds = new Rectangle(
+                valueInputFrame.Padding.Left,
+                Math.Max(valueInputFrame.Padding.Top, (valueInputFrame.ClientSize.Height - inputHeight) / 2),
+                Math.Max(1, valueInputFrame.ClientSize.Width - valueInputFrame.Padding.Horizontal),
+                inputHeight);
+        }
+
+        valueInputFrame.Resize += (_, _) => LayoutValueInput();
+        LayoutValueInput();
+
+        void UpdateInputBorder(bool invalid = false)
+        {
+            valueInputFrame.BackColor = invalid
+                ? warningTextColor
+                : valueInput.Focused || ReferenceEquals(ControlDrawing.FocusCaptureTarget, valueInput)
+                    ? ControlDrawing.FocusColor(CurrentTheme)
+                    : inputBorderColor;
+        }
 
         slider.ValueChanged += (_, _) =>
         {
@@ -1126,7 +1554,7 @@ internal sealed partial class TrayContext
             updatingFromSlider = true;
             valueInput.ForeColor = normalTextColor;
             placeholderText = valueFormatter(slider.Value);
-            showingPlaceholder = true;
+            showingPlaceholder = false;
             valueInput.Text = placeholderText;
             row?.SetStatus(null, normalTextColor);
             updatingFromSlider = false;
@@ -1135,7 +1563,7 @@ internal sealed partial class TrayContext
 
         void ValidateInputText()
         {
-            if (updatingFromSlider)
+            if (updatingFromSlider || updatingFromInput)
             {
                 return;
             }
@@ -1143,19 +1571,19 @@ internal sealed partial class TrayContext
             if (showingPlaceholder || string.IsNullOrWhiteSpace(valueInput.Text))
             {
                 valueInput.ForeColor = showingPlaceholder ? placeholderTextColor : normalTextColor;
-                valueInputFrame.BackColor = inputBorderColor;
+                UpdateInputBorder();
                 row?.SetStatus(null, normalTextColor);
             }
-            else if (TryParseSliderInput(valueInput.Text, out int entered) && entered >= min && entered <= max)
+            else if (valueInput.TryGetNumericValue(out _))
             {
                 valueInput.ForeColor = normalTextColor;
-                valueInputFrame.BackColor = inputBorderColor;
+                UpdateInputBorder();
                 row?.SetStatus(null, normalTextColor);
             }
             else
             {
                 valueInput.ForeColor = warningTextColor;
-                valueInputFrame.BackColor = warningTextColor;
+                UpdateInputBorder(invalid: true);
                 row?.SetStatus(L("Settings.SliderRangeWarning", min, max), warningTextColor);
             }
         }
@@ -1168,63 +1596,72 @@ internal sealed partial class TrayContext
                 return;
             }
 
-            if (!TryParseSliderInput(valueInput.Text, out int entered) || entered < min || entered > max)
+            if (!valueInput.TryGetNumericValue(out int entered))
             {
-                ValidateInputText();
+                updatingFromInput = true;
+                valueInput.Text = placeholderText;
+                valueInput.ForeColor = normalTextColor;
+                UpdateInputBorder(invalid: true);
+                row?.SetStatus(L("Settings.SliderRangeWarning", min, max), warningTextColor);
+                updatingFromInput = false;
+                valueInput.SelectAll();
                 return;
             }
 
+            int previousValue = slider.Value;
             updatingFromInput = true;
             slider.SetExactValue(entered);
             placeholderText = valueFormatter(entered);
-            showingPlaceholder = true;
+            showingPlaceholder = false;
             valueInput.ForeColor = normalTextColor;
             valueInput.Text = placeholderText;
-            valueInputFrame.BackColor = inputBorderColor;
+            UpdateInputBorder();
             row?.SetStatus(null, normalTextColor);
             updatingFromInput = false;
-            onChanged(entered);
+            valueInput.SelectAll();
+            if (entered != previousValue)
+            {
+                onChanged(entered);
+            }
         }
 
         void ShowPlaceholder()
         {
-            showingPlaceholder = true;
-            valueInput.ForeColor = placeholderTextColor;
+            showingPlaceholder = false;
+            valueInput.ForeColor = normalTextColor;
             valueInput.Text = placeholderText;
-            valueInputFrame.BackColor = inputBorderColor;
-            valueInput.SelectionStart = 0;
-            valueInput.SelectionLength = 0;
+            UpdateInputBorder();
+            valueInput.SelectAll();
         }
 
         valueInput.Enter += (_, _) =>
         {
             showingPlaceholder = false;
             valueInput.ForeColor = normalTextColor;
-            valueInput.Text = string.Empty;
+            UpdateInputBorder();
+            valueInput.SelectAll();
             row?.SetStatus(null, normalTextColor);
         };
-        valueInput.MouseDown += (_, _) =>
-        {
-            if (showingPlaceholder)
-            {
-                valueInput.SelectionStart = 0;
-                valueInput.SelectionLength = 0;
-            }
-        };
         valueInput.TextChanged += (_, _) => ValidateInputText();
-        valueInput.Leave += (_, _) => CommitInput();
+        valueInput.CommitRequested += (_, _) => CommitInput();
+        valueInput.CancelRequested += (_, _) =>
+        {
+            ShowPlaceholder();
+            row?.SetStatus(null, normalTextColor);
+        };
+        valueInput.Leave += (_, _) =>
+        {
+            CommitInput();
+            UpdateInputBorder();
+        };
         valueInput.KeyDown += (_, e) =>
         {
-            if (e.KeyCode == Keys.Enter)
+            if (e.KeyCode is Keys.Up or Keys.Down or Keys.PageUp or Keys.PageDown)
             {
-                CommitInput();
-                e.Handled = true;
-                e.SuppressKeyPress = true;
-            }
-            else if (e.KeyCode == Keys.Escape)
-            {
-                ShowPlaceholder();
-                row?.SetStatus(null, normalTextColor);
+                int direction = e.KeyCode is Keys.Up or Keys.PageUp ? 1 : -1;
+                int multiplier = e.KeyCode is Keys.PageUp or Keys.PageDown ? 5 : 1;
+                slider.SetExactValue(Math.Clamp(slider.Value + (direction * step * multiplier), min, max));
+                valueInput.SelectAll();
                 e.Handled = true;
                 e.SuppressKeyPress = true;
             }
@@ -1234,7 +1671,7 @@ internal sealed partial class TrayContext
         {
             AutoSize = false,
             Width = rightColumnWidth,
-            Height = 38,
+            Height = 48,
             ColumnCount = 2,
             RowCount = 1,
             BackColor = Color.Transparent,
@@ -1242,7 +1679,7 @@ internal sealed partial class TrayContext
             Padding = new Padding(0)
         };
         host.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        host.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
+        host.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, valueInputFrameWidth));
         host.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         host.Controls.Add(slider, 0, 0);
         host.Controls.Add(valueInputFrame, 1, 0);
@@ -1254,19 +1691,15 @@ internal sealed partial class TrayContext
         return row;
     }
 
-    private static bool TryParseSliderInput(string text, out int value)
-    {
-        string digits = new(text.Where(char.IsDigit).ToArray());
-        return int.TryParse(digits, out value);
-    }
-
     private SettingsRow CreateDropdownRow(string title, string description, string[] items, string current, Action<string> onChanged, Control? actionButton = null, int rightColumnWidth = 260, bool compact = false)
     {
         var combo = new ModernDropdown(CurrentTheme)
         {
-            Width = actionButton == null ? Math.Max(220, rightColumnWidth - 24) : Math.Max(210, rightColumnWidth - 144)
+            AccessibleName = title,
+            AccessibleDescription = description
         };
         combo.Items.AddRange(items);
+        combo.Width = combo.GetPreferredSize(Size.Empty).Width;
         combo.SelectedIndex = Math.Max(0, combo.Items.IndexOf(current));
         combo.SelectedIndexChanged += (_, _) =>
         {
@@ -1277,16 +1710,24 @@ internal sealed partial class TrayContext
         };
 
         Control rightControl;
+        int effectiveRightColumnWidth;
         if (actionButton == null)
         {
             rightControl = combo;
+            effectiveRightColumnWidth = Math.Max(
+                rightColumnWidth,
+                combo.Width + ControlDrawing.ScaleLogical(combo, 24));
         }
         else
         {
+            int actionGap = ControlDrawing.ScaleLogical(combo, 10);
+            effectiveRightColumnWidth = Math.Max(
+                rightColumnWidth,
+                combo.Width + actionButton.Width + actionGap);
             var row = new TableLayoutPanel
             {
                 AutoSize = false,
-                Width = rightColumnWidth,
+                Width = effectiveRightColumnWidth,
                 Height = Math.Max(combo.Height, actionButton.Height),
                 ColumnCount = 2,
                 RowCount = 1,
@@ -1306,26 +1747,39 @@ internal sealed partial class TrayContext
             rightControl = row;
         }
 
-        return new SettingsRow(CurrentTheme, title, description, rightControl, rightColumnWidth, compactDescription: compact);
+        return new SettingsRow(CurrentTheme, title, description, rightControl, effectiveRightColumnWidth, compactDescription: compact);
     }
 
     private SettingsRow CreateColorPaletteRow(string title, string description, Color selectedColor, Action<Color> onChanged)
     {
         var paletteControl = new ColorPaletteControl(CurrentTheme, BuildCursorColorPalette(), selectedColor)
         {
-            Width = 264
+            Width = 600,
+            AccessibleName = title,
+            AccessibleDescription = description,
+            AccessibleColorNames = BuildCursorColorAccessibleNames()
         };
         paletteControl.ColorSelected += (_, color) => onChanged(Color.FromArgb(255, color));
-        return new SettingsRow(CurrentTheme, title, description, paletteControl, rightColumnWidth: 280);
+        return new SettingsRow(CurrentTheme, title, description, paletteControl, rightColumnWidth: 620);
     }
 
-    private SettingsRow CreateKeybindRow(string title, string description, string currentKeyLabel, Func<string?> onCustomize, int rightColumnWidth = 360, bool compact = false)
+    private SettingsRow CreateKeybindRow(
+        string title,
+        string description,
+        string currentKeyLabel,
+        Func<string?> onCustomize,
+        int rightColumnWidth = 170,
+        bool compact = false,
+        Func<bool>? showWindowsLogo = null)
     {
         var badge = new KeyBadgeControl(CurrentTheme, currentKeyLabel)
         {
-            Width = 180,
-            Height = 74,
-            Dock = DockStyle.Fill
+            Width = 150,
+            Height = 92,
+            Dock = DockStyle.Fill,
+            AccessibleName = title,
+            AccessibleDescription = description,
+            ShowWindowsLogo = showWindowsLogo?.Invoke() == true
         };
         badge.ApplyTheme(CurrentTheme);
         badge.Click += (_, _) =>
@@ -1334,15 +1788,16 @@ internal sealed partial class TrayContext
             if (!string.IsNullOrWhiteSpace(nextLabel))
             {
                 badge.Text = nextLabel;
+                badge.ShowWindowsLogo = showWindowsLogo?.Invoke() == true;
             }
         };
 
-        return new SettingsRow(CurrentTheme, title, description, badge, Math.Max(180, rightColumnWidth), compactDescription: compact);
+        return new SettingsRow(CurrentTheme, title, description, badge, Math.Max(160, rightColumnWidth), compactDescription: compact);
     }
 
     private string KeyBadgeLabel(Keys key)
     {
-        return key is Keys.LWin or Keys.RWin ? "Win" : KeyLabel(key);
+        return key is Keys.LWin or Keys.RWin ? L("Common.KeyWinShort") : KeyLabel(key);
     }
 
     private void ApplyShortcutValidation(SettingsRow? row, ShortcutValidation validation)
@@ -1370,11 +1825,6 @@ internal sealed partial class TrayContext
         if (!string.IsNullOrWhiteSpace(conflictNames))
         {
             return new ShortcutValidation(ShortcutValidationLevel.Error, L("Settings.ShortcutErrorConflictWith", conflictNames));
-        }
-
-        if (role == ShortcutKeyRole.Enable && IsWindowsKey(key))
-        {
-            return new ShortcutValidation(ShortcutValidationLevel.Warning, L("Settings.ShortcutWarningWindowsKey"));
         }
 
         if (role == ShortcutKeyRole.Enable && IsNotRecommendedEnableKey(key))
@@ -1461,6 +1911,7 @@ internal sealed partial class TrayContext
         if (key is Keys.ControlKey or Keys.LControlKey or Keys.RControlKey ||
             key is Keys.ShiftKey or Keys.LShiftKey or Keys.RShiftKey ||
             key is Keys.Menu or Keys.LMenu ||
+            key is Keys.LWin or Keys.RWin ||
             key == Keys.Tab)
         {
             return true;
@@ -1579,6 +2030,136 @@ internal sealed partial class TrayContext
         L("Settings.DisplayModeCustom")
     ];
 
+    private string[] BuildZoomModeItems() =>
+    [
+        L("Settings.ZoomModeFullscreen"),
+        L("Settings.ZoomModeLens"),
+        L("Settings.ZoomModeDocked")
+    ];
+
+    private string ZoomModeLabel(ZoomMode mode) => mode switch
+    {
+        ZoomMode.Lens => L("Settings.ZoomModeLens"),
+        ZoomMode.Docked => L("Settings.ZoomModeDocked"),
+        _ => L("Settings.ZoomModeFullscreen")
+    };
+
+    private ZoomMode ParseZoomMode(string value)
+    {
+        if (string.Equals(value, L("Settings.ZoomModeLens"), StringComparison.Ordinal))
+        {
+            return ZoomMode.Lens;
+        }
+
+        if (string.Equals(value, L("Settings.ZoomModeDocked"), StringComparison.Ordinal))
+        {
+            return ZoomMode.Docked;
+        }
+
+        return ZoomMode.Fullscreen;
+    }
+
+    private string[] BuildLensShapeItems() =>
+    [
+        L("Settings.LensShapeRectangle"),
+        L("Settings.LensShapeSquare"),
+        L("Settings.LensShapeCircle")
+    ];
+
+    private string LensShapeLabel(LensShape shape) => shape switch
+    {
+        LensShape.Square => L("Settings.LensShapeSquare"),
+        LensShape.Circle => L("Settings.LensShapeCircle"),
+        _ => L("Settings.LensShapeRectangle")
+    };
+
+    private LensShape ParseLensShape(string value)
+    {
+        if (string.Equals(value, L("Settings.LensShapeSquare"), StringComparison.Ordinal))
+        {
+            return LensShape.Square;
+        }
+
+        if (string.Equals(value, L("Settings.LensShapeCircle"), StringComparison.Ordinal))
+        {
+            return LensShape.Circle;
+        }
+
+        return LensShape.Rectangle;
+    }
+
+    private string[] BuildDockPositionItems() =>
+    [
+        L("Settings.DockTop"),
+        L("Settings.DockBottom"),
+        L("Settings.DockLeft"),
+        L("Settings.DockRight")
+    ];
+
+    private string DockPositionLabel(DockPosition position) => position switch
+    {
+        DockPosition.Bottom => L("Settings.DockBottom"),
+        DockPosition.Left => L("Settings.DockLeft"),
+        DockPosition.Right => L("Settings.DockRight"),
+        _ => L("Settings.DockTop")
+    };
+
+    private DockPosition ParseDockPosition(string value)
+    {
+        if (string.Equals(value, L("Settings.DockBottom"), StringComparison.Ordinal))
+        {
+            return DockPosition.Bottom;
+        }
+
+        if (string.Equals(value, L("Settings.DockLeft"), StringComparison.Ordinal))
+        {
+            return DockPosition.Left;
+        }
+
+        if (string.Equals(value, L("Settings.DockRight"), StringComparison.Ordinal))
+        {
+            return DockPosition.Right;
+        }
+
+        return DockPosition.Top;
+    }
+
+    private string[] BuildTrackingSourceItems() =>
+    [
+        L("Settings.TrackingMouse"),
+        L("Settings.TrackingFocus"),
+        L("Settings.TrackingCaret"),
+        L("Settings.TrackingSelection")
+    ];
+
+    private string TrackingSourceLabel(TrackingSource source) => source switch
+    {
+        TrackingSource.KeyboardFocus => L("Settings.TrackingFocus"),
+        TrackingSource.TextCaret => L("Settings.TrackingCaret"),
+        TrackingSource.SelectedElement => L("Settings.TrackingSelection"),
+        _ => L("Settings.TrackingMouse")
+    };
+
+    private TrackingSource ParseTrackingSource(string value)
+    {
+        if (string.Equals(value, L("Settings.TrackingFocus"), StringComparison.Ordinal))
+        {
+            return TrackingSource.KeyboardFocus;
+        }
+
+        if (string.Equals(value, L("Settings.TrackingCaret"), StringComparison.Ordinal))
+        {
+            return TrackingSource.TextCaret;
+        }
+
+        if (string.Equals(value, L("Settings.TrackingSelection"), StringComparison.Ordinal))
+        {
+            return TrackingSource.SelectedElement;
+        }
+
+        return TrackingSource.MouseCursor;
+    }
+
     private string DisplaySelectionModeLabel(DisplaySelectionMode mode) => mode switch
     {
         DisplaySelectionMode.MonitorUnderCursor => L("Settings.DisplayModeCursor"),
@@ -1603,19 +2184,19 @@ internal sealed partial class TrayContext
 
     private string[] BuildFpsItems() =>
     [
-        "60 Hz",
-        "90 Hz",
-        "120 Hz",
-        "180 Hz",
-        "240 Hz",
+        L("Common.HertzValue", 60),
+        L("Common.HertzValue", 90),
+        L("Common.HertzValue", 120),
+        L("Common.HertzValue", 180),
+        L("Common.HertzValue", 240),
         FpsLabel(UnlimitedFps)
     ];
 
-    private static string FpsLabel(int fps) => fps == UnlimitedFps ? "Unlimited" : fps + " Hz";
+    private string FpsLabel(int fps) => fps == UnlimitedFps ? L("Settings.FpsUnlimited") : L("Common.HertzValue", fps);
 
-    private static int ParseFpsLabel(string value)
+    private int ParseFpsLabel(string value)
     {
-        if (value.StartsWith("Unlimited", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(value, L("Settings.FpsUnlimited"), StringComparison.OrdinalIgnoreCase))
         {
             return UnlimitedFps;
         }
@@ -1673,6 +2254,73 @@ internal sealed partial class TrayContext
         Color.FromArgb(120, 113, 108)
     ];
 
+    private static double GetContrastRatio(Color first, Color second)
+    {
+        static double Channel(byte value)
+        {
+            double normalized = value / 255d;
+            return normalized <= 0.04045d
+                ? normalized / 12.92d
+                : Math.Pow((normalized + 0.055d) / 1.055d, 2.4d);
+        }
+
+        static double Luminance(Color color) =>
+            (0.2126d * Channel(color.R)) +
+            (0.7152d * Channel(color.G)) +
+            (0.0722d * Channel(color.B));
+
+        double lighter = Math.Max(Luminance(first), Luminance(second));
+        double darker = Math.Min(Luminance(first), Luminance(second));
+        return (lighter + 0.05d) / (darker + 0.05d);
+    }
+
+    private static readonly string[] CursorColorNameKeys =
+    [
+        "Accessibility.ColorName.White",
+        "Accessibility.ColorName.Black",
+        "Accessibility.ColorName.SoftWhite",
+        "Accessibility.ColorName.Gray",
+        "Accessibility.ColorName.Charcoal",
+        "Accessibility.ColorName.Red",
+        "Accessibility.ColorName.DarkRed",
+        "Accessibility.ColorName.Orange",
+        "Accessibility.ColorName.Amber",
+        "Accessibility.ColorName.GoldenYellow",
+        "Accessibility.ColorName.Yellow",
+        "Accessibility.ColorName.Lime",
+        "Accessibility.ColorName.Green",
+        "Accessibility.ColorName.Emerald",
+        "Accessibility.ColorName.Teal",
+        "Accessibility.ColorName.Cyan",
+        "Accessibility.ColorName.SkyBlue",
+        "Accessibility.ColorName.Blue",
+        "Accessibility.ColorName.DarkBlue",
+        "Accessibility.ColorName.Indigo",
+        "Accessibility.ColorName.Violet",
+        "Accessibility.ColorName.Purple",
+        "Accessibility.ColorName.Magenta",
+        "Accessibility.ColorName.Pink",
+        "Accessibility.ColorName.Rose",
+        "Accessibility.ColorName.LightRed",
+        "Accessibility.ColorName.Peach",
+        "Accessibility.ColorName.LightYellow",
+        "Accessibility.ColorName.Mint",
+        "Accessibility.ColorName.LightCyan",
+        "Accessibility.ColorName.LightBlue",
+        "Accessibility.ColorName.Lavender",
+        "Accessibility.ColorName.LightPink",
+        "Accessibility.ColorName.PaleRed",
+        "Accessibility.ColorName.LightGray",
+        "Accessibility.ColorName.StoneGray"
+    ];
+
+    private string[] BuildCursorColorAccessibleNames()
+    {
+        return CursorColorNameKeys
+            .Select((key, index) => L("Accessibility.ColorOption", index + 1, CursorColorNameKeys.Length, L(key)))
+            .ToArray();
+    }
+
     private string ThemeModeLabel(ThemeMode mode) => mode switch
     {
         ThemeMode.Dark => L("Settings.ThemeDark"),
@@ -1697,30 +2345,42 @@ internal sealed partial class TrayContext
 
     private Control CreateDualActionButtons((string Text, Action OnClick, bool Enabled)[] buttons, int width)
     {
+        Control scaleOwner = _settingsWindow != null && !_settingsWindow.IsDisposed ? _settingsWindow : _uiInvoker;
+        int gap = ControlDrawing.ScaleLogical(scaleOwner, 8);
+        int buttonWidth = Math.Max(1, (width - (gap * Math.Max(0, buttons.Length - 1))) / Math.Max(1, buttons.Length));
+        Size actionButtonSize = new(buttonWidth, ControlDrawing.ScaleLogical(scaleOwner, 32));
         var host = new TableLayoutPanel
         {
             AutoSize = false,
-            Width = width,
-            Height = 44,
-            ColumnCount = buttons.Length,
+            ColumnCount = Math.Max(1, buttons.Length),
             RowCount = 1,
-            BackColor = Color.Transparent,
+            Size = new Size(width, actionButtonSize.Height),
+            MinimumSize = new Size(width, actionButtonSize.Height),
+            MaximumSize = new Size(width, actionButtonSize.Height),
+            BackColor = CurrentTheme.ControlBackground,
             Margin = new Padding(0),
             Padding = new Padding(0)
         };
-        host.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+        host.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        for (int i = 0; i < Math.Max(1, buttons.Length); i++)
+        {
+            host.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / Math.Max(1, buttons.Length)));
+        }
 
         for (int i = 0; i < buttons.Length; i++)
         {
-            host.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / buttons.Length));
             var buttonSpec = buttons[i];
 
             var button = new ModernButton
             {
                 Text = buttonSpec.Text,
                 Enabled = buttonSpec.Enabled,
+                AutoSize = false,
                 Dock = DockStyle.Fill,
-                Margin = new Padding(i == 0 ? 0 : 8, 2, 0, 2)
+                MinimumSize = Size.Empty,
+                MaximumSize = Size.Empty,
+                Margin = new Padding(i == 0 ? 0 : gap / 2, 0, i == buttons.Length - 1 ? 0 : gap - (gap / 2), 0),
+                AccessibleName = buttonSpec.Text
             };
             button.ApplyTheme(CurrentTheme, emphasis: false);
             button.Click += (_, _) => buttonSpec.OnClick();
@@ -1749,8 +2409,35 @@ internal sealed partial class TrayContext
         }
 
         Point previousCenter = new(_settingsWindow.Left + _settingsWindow.Width / 2, _settingsWindow.Top + _settingsWindow.Height / 2);
-        _settingsWindow.Close();
-        ShowSettingsWindow(page, previousCenter);
+        SettingsUiState? previousUiState = (_settingsWindow as SettingsForm)?.CaptureUiState();
+        if (_settingsWindow is SettingsForm settingsForm)
+        {
+            settingsForm.ClosePermanently();
+        }
+        else
+        {
+            _settingsWindow.Close();
+        }
+        ShowSettingsWindow(page, previousCenter, previousUiState);
+    }
+
+    private void RebuildSettingsPage(SettingsPage page)
+    {
+        if (_settingsWindow == null || _settingsWindow.IsDisposed)
+        {
+            return;
+        }
+
+        if (_settingsWindow.InvokeRequired)
+        {
+            _settingsWindow.BeginInvoke((MethodInvoker)(() => RunGuarded("Settings.RebuildPage.Invoke", () => RebuildSettingsPage(page))));
+            return;
+        }
+
+        if (_settingsWindow is SettingsForm settingsForm)
+        {
+            settingsForm.RebuildPage(GetSettingsPageType(page));
+        }
     }
 
     private void HandleResetDefaultsRequested()
@@ -1760,10 +2447,13 @@ internal sealed partial class TrayContext
             _pendingResetDefaultsConfirmation = true;
             ApplyResetDefaultsButtonTheme();
 
-            _resetDefaultsConfirmTimer ??= new System.Windows.Forms.Timer { Interval = 5000 };
+            if (_resetDefaultsConfirmTimer == null)
+            {
+                _resetDefaultsConfirmTimer = new System.Windows.Forms.Timer { Interval = 10000 };
+                _resetDefaultsConfirmTimer.Tick += OnResetDefaultsConfirmTimeout;
+            }
+
             _resetDefaultsConfirmTimer.Stop();
-            _resetDefaultsConfirmTimer.Tick -= OnResetDefaultsConfirmTimeout;
-            _resetDefaultsConfirmTimer.Tick += OnResetDefaultsConfirmTimeout;
             _resetDefaultsConfirmTimer.Start();
             return;
         }
@@ -1798,17 +2488,10 @@ internal sealed partial class TrayContext
         _resetDefaultsButton.Text = _pendingResetDefaultsConfirmation
             ? L("Settings.ResetDefaultsConfirm")
             : L("Settings.ResetDefaults");
-        if (_colourblindMode)
-        {
-            _resetDefaultsButton.ApplyWarningOutlineTheme(CurrentTheme, _pendingResetDefaultsConfirmation);
-        }
-        else
-        {
-            _resetDefaultsButton.ApplyTheme(
-                CurrentTheme,
-                emphasis: false,
-                destructive: _pendingResetDefaultsConfirmation,
-                destructiveHoverEnabled: true);
-        }
+        _resetDefaultsButton.ApplyTheme(
+            CurrentTheme,
+            emphasis: false,
+            destructive: _pendingResetDefaultsConfirmation,
+            destructiveHoverEnabled: true);
     }
 }

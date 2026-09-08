@@ -11,7 +11,7 @@ internal enum UiLanguage
     Danish = 1,
     Swedish = 2,
     Norwegian = 3,
-    German = 4
+    Finnish = 4
 }
 
 internal static class UiText
@@ -20,20 +20,9 @@ internal static class UiText
 
     internal static UiLanguage GetDefaultLanguage()
     {
-        string name = CultureInfo.InstalledUICulture.TwoLetterISOLanguageName;
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            name = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
-        }
-
-        return name.ToLowerInvariant() switch
-        {
-            "da" => UiLanguage.Danish,
-            "sv" => UiLanguage.Swedish,
-            "no" or "nb" or "nn" => UiLanguage.Norwegian,
-            "de" => UiLanguage.German,
-            _ => UiLanguage.English
-        };
+        return Manager.ResolveLanguageTag(CultureInfo.InstalledUICulture.Name)
+            ?? Manager.ResolveLanguageTag(CultureInfo.CurrentUICulture.Name)
+            ?? UiLanguage.English;
     }
 
     internal static UiLanguage GetStartupLanguage()
@@ -73,14 +62,13 @@ internal static class UiText
 
     internal static string GetLanguageDisplayName(UiLanguage displayLanguage, UiLanguage currentUiLanguage)
     {
-        return Get(currentUiLanguage, displayLanguage switch
-        {
-            UiLanguage.Danish => "Settings.Danish",
-            UiLanguage.Swedish => "Settings.Swedish",
-            UiLanguage.Norwegian => "Settings.Norwegian",
-            UiLanguage.German => "Settings.German",
-            _ => "Settings.English"
-        });
+        _ = currentUiLanguage;
+        return Manager.GetLocaleNativeName(displayLanguage);
+    }
+
+    internal static bool IsRightToLeft(UiLanguage language)
+    {
+        return Manager.IsRightToLeft(language);
     }
 
     internal static UiLanguage ParseLanguageDisplayName(UiLanguage currentUiLanguage, string value)

@@ -1,14 +1,14 @@
 <#
-Creates a self-signed *code signing* certificate and exports it to a PFX.
+Creates a self-signed code signing certificate with a nonexportable private key.
+The private key stays in the CurrentUser certificate store; only the public certificate is exported.
 
 Usage (PowerShell):
-  .\create_signing_cert.ps1
+  .\create-signing-cert.ps1
 
 Optional:
-  .\create_signing_cert.ps1 -Subject "CN=QuickZoom (Jonas)" -OutDir ".\signing" -InstallTrust
+  .\create-signing-cert.ps1 -Subject "CN=QuickZoom (Jonas)" -OutDir ".\signing" -InstallTrust
 
 Outputs:
-  - <OutDir>\QuickZoom_Signing.pfx
   - <OutDir>\QuickZoom_Signing.cer
 
 Notes:
@@ -35,31 +35,28 @@ if (-not (Test-Path -LiteralPath $OutDir)) {
   New-Item -ItemType Directory -Path $OutDir | Out-Null
 }
 
-$pfxPath = Join-Path $OutDir "QuickZoom_Signing.pfx"
 $cerPath = Join-Path $OutDir "QuickZoom_Signing.cer"
 
 Write-Host "Creating self-signed code signing certificate: $Subject" -ForegroundColor Cyan
 
-$cert = New-SelfSignedCertificate \
-  -Type CodeSigningCert \
-  -Subject $Subject \
-  -KeyAlgorithm RSA \
-  -KeyLength 2048 \
-  -HashAlgorithm SHA256 \
-  -KeyExportPolicy Exportable \
-  -KeySpec Signature \
-  -CertStoreLocation "Cert:\CurrentUser\My" \
-  -NotAfter (Get-Date).AddYears(5)
+$certificateParameters = @{
+  Type              = "CodeSigningCert"
+  Subject           = $Subject
+  KeyAlgorithm      = "RSA"
+  KeyLength         = 2048
+  HashAlgorithm     = "SHA256"
+  KeyExportPolicy   = "NonExportable"
+  KeySpec           = "Signature"
+  CertStoreLocation = "Cert:\CurrentUser\My"
+  NotAfter          = (Get-Date).AddYears(5)
+}
+$cert = New-SelfSignedCertificate @certificateParameters
 
 Write-Host "Created certificate thumbprint: $($cert.Thumbprint)" -ForegroundColor Green
 
-$pwd = Read-Host -Prompt "Enter a password to protect the PFX" -AsSecureString
-
-Export-PfxCertificate -Cert "Cert:\CurrentUser\My\$($cert.Thumbprint)" -FilePath $pfxPath -Password $pwd | Out-Null
 Export-Certificate -Cert "Cert:\CurrentUser\My\$($cert.Thumbprint)" -FilePath $cerPath | Out-Null
 
 Write-Host "Exported:" -ForegroundColor Cyan
-Write-Host "  PFX: $pfxPath"
 Write-Host "  CER: $cerPath"
 
 if ($InstallTrust.IsPresent) {
@@ -70,6 +67,7 @@ if ($InstallTrust.IsPresent) {
 }
 
 Write-Host "\nNext step:" -ForegroundColor Cyan
-Write-Host "  set SIGN_PFX=\"$pfxPath\"" 
-Write-Host "  set SIGN_PWD=<your password>" 
+Write-Host "  set SIGN_CERT_THUMBPRINT=$($cert.Thumbprint)"
+Write-Host "  REM Trust the public certificate on the build machine before signature verification."
+Write-Host "  REM Optional build-time network timestamp: set SIGN_TIMESTAMP_URL=https://your-approved-timestamp-server"
 Write-Host "  build.bat" 

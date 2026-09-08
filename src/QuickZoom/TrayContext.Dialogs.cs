@@ -29,6 +29,7 @@ internal sealed partial class TrayContext
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink
         };
+        ApplyDialogDirection(dlg);
 
         var root = new TableLayoutPanel
         {
@@ -246,6 +247,13 @@ internal sealed partial class TrayContext
         ApplyTo(form);
     }
 
+    private void ApplyDialogDirection(Form form)
+    {
+        bool rightToLeft = UiText.IsRightToLeft(_language);
+        form.RightToLeft = rightToLeft ? RightToLeft.Yes : RightToLeft.No;
+        form.RightToLeftLayout = rightToLeft;
+    }
+
     private static void TrySetDarkTitleBar(IntPtr hwnd, bool enabled)
     {
         if (hwnd == IntPtr.Zero)
@@ -272,8 +280,9 @@ internal sealed partial class TrayContext
             AutoScaleMode = AutoScaleMode.Dpi,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(12)
+            Padding = new Padding(18)
         };
+        ApplyDialogDirection(form);
 
         var lbl = new Label
         {
@@ -349,6 +358,7 @@ internal sealed partial class TrayContext
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             Padding = new Padding(12)
         };
+        ApplyDialogDirection(form);
 
         var lbl = new Label
         {
@@ -357,79 +367,74 @@ internal sealed partial class TrayContext
             Text = description ?? L("Dialog.PromptKeyDefaultDescription")
         };
 
-        var cur = new Label
+        var status = new Label
         {
             AutoSize = true,
-            Text = L("Dialog.CurrentValue", KeyLabel(current))
+            MaximumSize = new Size(560, 0),
+            Text = L("Dialog.CurrentValue", KeyLabel(current)),
+            AccessibleRole = AccessibleRole.StaticText
         };
-
-        var cancel = new Button
-        {
-            Text = L("Common.Cancel"),
-            DialogResult = DialogResult.Cancel,
-            AutoSize = true,
-            MinimumSize = new Size(100, 30)
-        };
-
-        var buttons = new FlowLayoutPanel
-        {
-            FlowDirection = FlowDirection.RightToLeft,
-            Dock = DockStyle.Fill,
-            AutoSize = true,
-            WrapContents = false
-        };
-        buttons.Controls.Add(cancel);
 
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             AutoSize = true,
             ColumnCount = 1,
-            RowCount = 3
+            RowCount = 2
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         layout.Controls.Add(lbl, 0, 0);
-        layout.Controls.Add(cur, 0, 1);
-        layout.Controls.Add(buttons, 0, 2);
+        layout.Controls.Add(status, 0, 1);
 
         form.Controls.Add(layout);
+        form.MinimumSize = new Size(460, 0);
         ApplyDialogTheme(form);
 
         Keys? chosen = null;
         bool pendingControlKey = false;
+        void FinishCapture(Keys key)
+        {
+            chosen = key;
+            pendingControlKey = false;
+            form.DialogResult = DialogResult.OK;
+        }
+
         form.PreviewKeyDown += (_, e) =>
         {
-            if (e.KeyCode is Keys.Enter or Keys.Tab)
-            {
-                e.IsInputKey = true;
-            }
+            e.IsInputKey = true;
         };
         form.KeyDown += (_, e) =>
         {
             if (e.KeyCode == Keys.ControlKey && !e.Alt)
             {
                 pendingControlKey = true;
+                e.Handled = true;
+                e.SuppressKeyPress = true;
                 return;
             }
 
-            chosen = e.KeyValue == FnVirtualKey
+            Keys selected = e.KeyValue == FnVirtualKey
                 ? (Keys)FnVirtualKey
                 : e.KeyCode == Keys.Menu && (e.Control || pendingControlKey) ? Keys.RMenu : e.KeyCode;
-            form.DialogResult = DialogResult.OK;
-            form.Close();
+            FinishCapture(selected);
+            e.Handled = true;
+            e.SuppressKeyPress = true;
         };
         form.KeyUp += (_, e) =>
         {
             if (pendingControlKey && e.KeyCode == Keys.ControlKey)
             {
-                chosen = Keys.ControlKey;
-                form.DialogResult = DialogResult.OK;
-                form.Close();
+                FinishCapture(Keys.ControlKey);
+                e.Handled = true;
             }
+        };
+        form.Shown += (_, _) =>
+        {
+            form.ActiveControl = null;
+            form.Focus();
         };
 
         return form.ShowDialog() == DialogResult.OK ? chosen : null;

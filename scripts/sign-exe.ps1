@@ -1,8 +1,7 @@
 param(
   [Parameter(Mandatory=$true)][string]$ExePath,
-  [Parameter(Mandatory=$true)][string]$PfxPath,
-  [string]$PfxPassword = "",
-  [string]$TimestampUrl = "http://timestamp.digicert.com",
+  [string]$CertificateThumbprint = $env:SIGN_CERT_THUMBPRINT,
+  [string]$TimestampUrl = $env:SIGN_TIMESTAMP_URL,
   [switch]$NoTimestamp
 )
 
@@ -10,15 +9,13 @@ param(
 try {
   $ErrorActionPreference = "Stop"
 
-  $ErrorActionPreference = "Stop"
-
   function Find-Signtool {
     $candidates = @()
 
     # Common Windows SDK locations (x64)
     $roots = @(
-      "$env:ProgramFiles(x86)\Windows Kits\10\bin",
-      "$env:ProgramFiles(x86)\Windows Kits\11\bin",
+      "${env:ProgramFiles(x86)}\Windows Kits\10\bin",
+      "${env:ProgramFiles(x86)}\Windows Kits\11\bin",
       "$env:ProgramFiles\Windows Kits\10\bin",
       "$env:ProgramFiles\Windows Kits\11\bin"
     ) | Where-Object { $_ -and (Test-Path $_) }
@@ -50,8 +47,13 @@ try {
     $candidates | Select-Object -Unique | Select-Object -First 1
   }
 
-  if (-not (Test-Path $ExePath)) { throw "Exe not found: $ExePath" }
-  if (-not (Test-Path $PfxPath)) { throw "PFX not found: $PfxPath" }
+  if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) { throw "Exe not found: $ExePath" }
+  $ExePath = (Resolve-Path -LiteralPath $ExePath).Path
+  if ($CertificateThumbprint -notmatch '^[0-9a-fA-F]{40}$') {
+    throw "Set SIGN_CERT_THUMBPRINT to a 40-character certificate thumbprint from CurrentUser\My."
+  }
+  $certificate = Get-Item -LiteralPath "Cert:\CurrentUser\My\$CertificateThumbprint"
+  if (-not $certificate.HasPrivateKey) { throw "The signing certificate has no private key." }
 
   $signtool = Find-Signtool
   if (-not $signtool) {
@@ -61,31 +63,33 @@ try {
   Write-Host "Using signtool: $signtool"
   Write-Host "Signing: $ExePath"
 
-  $args = @('sign', '/fd', 'sha256', '/f', $PfxPath)
-  if ($PfxPassword -ne "") {
-    $args += @('/p', $PfxPassword)
+  $signArguments = @('sign', '/fd', 'sha256', '/s', 'My', '/sha1', $CertificateThumbprint)
+
+  if (-not $NoTimestamp -and -not [string]::IsNullOrWhiteSpace($TimestampUrl)) {
+    # Explicit opt-in: the build signing tool contacts this RFC3161 server.
+    # This is build-time traffic, not application runtime traffic.
+    $timestampUri = [Uri]$TimestampUrl
+    if (-not $timestampUri.IsAbsoluteUri -or $timestampUri.Scheme -notin @('http', 'https')) {
+      throw "TimestampUrl must be an absolute HTTP or HTTPS URL."
+    }
+    $signArguments += @('/tr', $TimestampUrl, '/td', 'sha256')
   }
 
-  if (-not $NoTimestamp) {
-    # RFC3161 timestamp
-    $args += @('/tr', $TimestampUrl, '/td', 'sha256')
-  }
+  $signArguments += @($ExePath)
 
-  $args += @($ExePath)
-
-  & $signtool @args
+  & $signtool @signArguments
   if ($LASTEXITCODE -ne 0) {
     throw "signtool failed with exit code $LASTEXITCODE"
   }
 
-  Write-Host "SUCCESS: Signed." -ForegroundColor Green
+  & $signtool verify /pa $ExePath
+  if ($LASTEXITCODE -ne 0) {
+    throw "Signature verification failed with exit code $LASTEXITCODE. The certificate must be trusted on this build machine."
+  }
+  Write-Host "SUCCESS: Signed and verified." -ForegroundColor Green
+  exit 0
 
 } catch {
   Write-Host "`nERROR: $($_.Exception.Message)" -ForegroundColor Red
-  if ($_.ScriptStackTrace) { Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray }
-  Write-Host "`nFull error:" -ForegroundColor Yellow
-  $_ | Format-List * -Force
-} finally {
-  Write-Host "`nPress Enter to close..." -ForegroundColor Cyan
-  try { Read-Host | Out-Null } catch {}
+  exit 1
 }

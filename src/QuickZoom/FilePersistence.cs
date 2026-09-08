@@ -10,16 +10,24 @@ internal static class FilePersistence
 
     internal static void WriteAllTextAtomic(string path, string content)
     {
+        LocalStorage.RunAsUser(() => WriteCore(path, content));
+    }
+
+    private static void WriteCore(string path, string content)
+    {
+        LocalStorage.RequireLocalPath(path);
         string? directory = Path.GetDirectoryName(path);
         if (!string.IsNullOrWhiteSpace(directory))
         {
             Directory.CreateDirectory(directory);
         }
 
-        string tempPath = path + "." + Environment.ProcessId.ToString() + ".tmp";
+        string tempPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            File.WriteAllText(tempPath, content, Utf8NoBom);
+            using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (var writer = new StreamWriter(stream, Utf8NoBom))
+                writer.Write(content);
 
             if (File.Exists(path))
             {

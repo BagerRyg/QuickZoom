@@ -90,6 +90,36 @@ internal sealed partial class TrayContext : ApplicationContext
         ExtraLarge = 2
     }
 
+    private enum ZoomMode
+    {
+        Fullscreen = 0,
+        Lens = 1,
+        Docked = 2
+    }
+
+    private enum LensShape
+    {
+        Rectangle = 0,
+        Square = 1,
+        Circle = 2
+    }
+
+    private enum DockPosition
+    {
+        Top = 0,
+        Bottom = 1,
+        Left = 2,
+        Right = 3
+    }
+
+    private enum TrackingSource
+    {
+        MouseCursor = 0,
+        KeyboardFocus = 1,
+        TextCaret = 2,
+        SelectedElement = 3
+    }
+
     private NotifyIcon _tray = null!;
     private Icon? _iconRef;
     private Control _uiInvoker = null!;
@@ -97,7 +127,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private bool _useDarkTheme;
     private ThemeMode _themeMode = ThemeMode.AutoSystem;
     private UiLanguage _language = UiText.GetStartupLanguage();
-    private UiFontSize _uiFontSize = UiFontSize.Large;
+    private UiFontSize _uiFontSize = UiFontSize.Default;
 
     // Hook + timers
     private IntPtr _hook = IntPtr.Zero;
@@ -124,9 +154,8 @@ internal sealed partial class TrayContext : ApplicationContext
     private bool _magActive;
     private bool _useFullscreenBackend;
     private bool _centerCursor;
-    private bool _suppressAltKeyInOfficeApps;
+    private bool _suppressShortcutKeystrokes;
     private bool _debugLoggingEnabled;
-    private bool _colourblindMode;
     private bool _wiggleSpotlightEnabled = true;
     private bool _cursorEnhancementEnabled;
     private int _cursorScale = 100;
@@ -134,6 +163,13 @@ internal sealed partial class TrayContext : ApplicationContext
     private int _cursorBorderColorArgb = Color.Black.ToArgb();
     private bool _cursorEnhancementApplied;
     private bool _applyingCursorEnhancement;
+    private ZoomMode _zoomMode = ZoomMode.Fullscreen;
+    private int _lensSize = 360;
+    private LensShape _lensShape = LensShape.Rectangle;
+    private DockPosition _dockPosition = DockPosition.Top;
+    private int _dockSizePercent = 25;
+    private TrackingSource _trackingSource = TrackingSource.MouseCursor;
+    private PointF? _smoothedLensCenter;
 
     // Animation
     private int _animDurationMs = 140;
@@ -146,8 +182,21 @@ internal sealed partial class TrayContext : ApplicationContext
     private bool _enableKeyPressed;
     private bool _invertKeyPressed;
     private bool _followCursorKeyPressed;
+    private bool _zoomModeCycleKeyPressed;
+    private bool _leftMouseButtonPressed;
+    private bool _rightMouseButtonPressed;
+    private bool _zoomModeMouseChordTriggered;
+    private bool _suppressLeftMouseButtonUp;
+    private bool _suppressRightMouseButtonUp;
     private bool _controlKeyPressed;
-    private bool _suppressEnableKeyForForeground;
+    private bool _altGrPressed;
+    private bool _enableKeyDownSuppressed;
+    private bool _enableKeyUsedByQuickZoom;
+    private bool _replayedEnableKeyDown;
+    private int _suppressedEnableVirtualKey;
+    private int _suppressedEnableScanCode;
+    private bool _suppressedEnableExtended;
+    private readonly HashSet<int> _suppressedShortcutKeyUps = new();
     private bool _pendingExitConfirmation;
 
     private POINT _staticCenter;
@@ -166,6 +215,9 @@ internal sealed partial class TrayContext : ApplicationContext
     private ToggleSwitchControl? _invertToggle;
     private ToggleSwitchControl? _followToggle;
     private TrayMenuRow? _displayRow;
+    private TrayModeButton? _fullscreenModeButton;
+    private TrayModeButton? _lensModeButton;
+    private TrayModeButton? _dockedModeButton;
     private FlowLayoutPanel? _displayOptionsHost;
     private Label? _startupServiceStatusLabel;
     private Point _lastTrayPopupAnchor;
@@ -189,40 +241,81 @@ internal sealed partial class TrayContext : ApplicationContext
     private static readonly int[] _fpsOptions = [60, 90, 120, 180, 240];
     private const int FnVirtualKey = 0xFF;
     private readonly HashSet<string> _selectedMonitorDeviceNames = new(StringComparer.OrdinalIgnoreCase);
+    private List<Screen>? _cachedOrderedScreens;
+    private List<Screen>? _cachedSelectedScreens;
+    private readonly List<Screen> _dynamicSelectedScreens = new(1);
     private readonly Dictionary<string, MonitorMagnifierWindow> _monitorWindows = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Point> _lastAnchorByMonitor = new(StringComparer.OrdinalIgnoreCase);
+    private OverlayMagnifierWindow? _overlayWindow;
     private bool _useCursorMonitorSelection;
     private DisplaySelectionMode _displaySelectionMode = DisplaySelectionMode.AllDisplays;
     private bool _suspendPerMonitorTrackingForMenu;
     private bool _suspendPerMonitorTrackingForShellUi;
+    private long _lastShellUiTrackingCheckTick;
     private bool _monitorLayoutDirty = true;
     private bool _coreRuntimeInitialized;
+    private bool _runtimeStopped;
     private bool _startupInitialized;
     private bool _magInitializationFailureLogged;
     private System.Windows.Forms.Timer? _startupTimer;
+    private System.Windows.Forms.Timer? _trayRecoveryTimer;
+    private System.Windows.Forms.Timer? _trayOverlayActivationGuardTimer;
+    private int _trayRecoveryAttemptsRemaining;
+    private int _trayRecoverySuccessfulPasses;
     private ShellMessageWindow? _shellMessageWindow;
     private int _taskbarCreatedMessage;
     private CursorSpotlightOverlay? _cursorSpotlightOverlay;
     private readonly List<(long Tick, Point Point)> _recentCursorSamples = new();
+    private long _lastCursorSampleTick;
     private long _lastCursorSpotlightTriggerTick;
     private long _cursorSpotlightVisibleUntilTick;
     private bool _cursorSpotlightHidesSystemCursor;
     private bool _cursorSpotlightOverridesSystemCursors;
     private long _lastSlowPerMonitorFrameLogTick;
+    private float _lastFullscreenMagnification = float.NaN;
+    private int _lastFullscreenXOffset = int.MinValue;
+    private int _lastFullscreenYOffset = int.MinValue;
+    private bool? _lastFullscreenInvertColors;
     private readonly string? _startupReadyEventName;
+    private readonly bool _screenshotMode;
+    private readonly bool _setupPracticeMode;
 
     // Settings
     private readonly string _settingsPath = AppPaths.SettingsPath;
     private readonly string _legacySettingsPath = AppPaths.LegacySettingsPath;
 
-    public TrayContext(string? startupReadyEventName = null, bool screenshotMode = false)
+    public TrayContext(
+        string? startupReadyEventName = null,
+        bool screenshotMode = false,
+        bool setupPracticeMode = false,
+        Keys setupPracticeKey = Keys.None)
     {
         _startupReadyEventName = startupReadyEventName;
+        _screenshotMode = screenshotMode;
+        _setupPracticeMode = setupPracticeMode;
         LoadSettings();
         if (screenshotMode)
         {
             _uiInvoker = new Control();
             _uiInvoker.CreateControl();
+            return;
+        }
+
+        if (setupPracticeMode)
+        {
+            _enableKey = setupPracticeKey == Keys.None ? Keys.Menu : setupPracticeKey;
+            _enabled = true;
+            _invertEnabled = true;
+            _invertColors = false;
+            _shortcutInputMode = ShortcutInputMode.Both;
+            _suppressShortcutKeystrokes = true;
+            _zoomMode = ZoomMode.Fullscreen;
+            _zoomPercent = 100;
+            _animTargetPercent = 100;
+            _autoDisableAt100 = true;
+            _uiInvoker = new Control();
+            _uiInvoker.CreateControl();
+            InitializeCoreRuntime();
             return;
         }
 
@@ -240,59 +333,92 @@ internal sealed partial class TrayContext : ApplicationContext
     {
         try
         {
-            DisableMagAndReset();
-
-            if (_hook != IntPtr.Zero)
-            {
-                UnhookWindowsHookEx(_hook);
-            }
-
-            if (_kbdHook != IntPtr.Zero)
-            {
-                UnhookWindowsHookEx(_kbdHook);
-            }
-
-            _followTimer?.Stop();
-            _followTimer?.Dispose();
-            _animTimer?.Stop();
-            _animTimer?.Dispose();
-            _cursorSpotlightTimer?.Stop();
-            _cursorSpotlightTimer?.Dispose();
-            _startupTimer?.Stop();
-            _startupTimer?.Dispose();
-            FlushSettingsSave();
-            _settingsSaveTimer?.Stop();
-            _settingsSaveTimer?.Dispose();
-            _cursorScaleApplyTimer?.Stop();
-            _cursorScaleApplyTimer?.Dispose();
-            _shellMessageWindow?.Dispose();
-            RestoreSystemCursorVisibility();
-            RestoreSystemCursorScheme(reapplyCursorEnhancement: false);
-            _cursorSpotlightOverlay?.HideSpotlight();
-            _cursorSpotlightOverlay?.Dispose();
-            CloseTrayPopup();
-            if (_settingsWindow != null && !_settingsWindow.IsDisposed)
-            {
-                _settingsWindow.Close();
-                _settingsWindow.Dispose();
-            }
-
-            if (_tray != null)
-            {
-                _tray.Visible = false;
-                _tray.Dispose();
-            }
-
-            UnsubscribePowerAndSessionChanges();
-            UnsubscribeThemeChanges();
-            UnsubscribeDisplayChanges();
-            _iconRef?.Dispose();
-            _uiInvoker.Dispose();
+            StopRuntime();
         }
         finally
         {
             base.ExitThreadCore();
         }
+    }
+
+    internal void StopSetupPractice()
+    {
+        if (_setupPracticeMode)
+        {
+            StopRuntime();
+        }
+    }
+
+    private void StopRuntime()
+    {
+        if (_runtimeStopped)
+        {
+            return;
+        }
+
+        _runtimeStopped = true;
+        _recentCursorSamples.Clear();
+        DisableMagAndReset();
+
+        if (_hook != IntPtr.Zero)
+        {
+            UnhookWindowsHookEx(_hook);
+            _hook = IntPtr.Zero;
+        }
+
+        if (_kbdHook != IntPtr.Zero)
+        {
+            UnhookWindowsHookEx(_kbdHook);
+            _kbdHook = IntPtr.Zero;
+        }
+
+        _followTimer?.Stop();
+        _followTimer?.Dispose();
+        _animTimer?.Stop();
+        _animTimer?.Dispose();
+        _cursorSpotlightTimer?.Stop();
+        _cursorSpotlightTimer?.Dispose();
+        _startupTimer?.Stop();
+        _startupTimer?.Dispose();
+        _trayRecoveryTimer?.Stop();
+        _trayRecoveryTimer?.Dispose();
+        _trayOverlayActivationGuardTimer?.Stop();
+        _trayOverlayActivationGuardTimer?.Dispose();
+        FlushSettingsSave();
+        _settingsSaveTimer?.Stop();
+        _settingsSaveTimer?.Dispose();
+        _cursorScaleApplyTimer?.Stop();
+        _cursorScaleApplyTimer?.Dispose();
+        _shellMessageWindow?.Dispose();
+        RestoreSystemCursorVisibility();
+        RestoreSystemCursorScheme(reapplyCursorEnhancement: false);
+        _cursorSpotlightOverlay?.HideSpotlight();
+        _cursorSpotlightOverlay?.Dispose();
+        CloseTrayPopup();
+        if (_settingsWindow != null && !_settingsWindow.IsDisposed)
+        {
+            if (_settingsWindow is SettingsForm settingsForm)
+            {
+                settingsForm.ClosePermanently();
+            }
+            else
+            {
+                _settingsWindow.Close();
+            }
+            _settingsWindow.Dispose();
+        }
+
+        if (_tray != null)
+        {
+            _tray.Visible = false;
+            _tray.Dispose();
+        }
+
+        UnsubscribePowerAndSessionChanges();
+        UnsubscribeThemeChanges();
+        UnsubscribeDisplayChanges();
+        _iconRef?.Dispose();
+        _uiInvoker.Dispose();
     }
 
     private sealed class ShellMessageWindow : NativeWindow, IDisposable

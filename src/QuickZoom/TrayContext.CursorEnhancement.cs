@@ -50,17 +50,20 @@ internal sealed partial class TrayContext
         }
     }
 
-    private void ScheduleCursorScaleApply()
+    private void ScheduleCursorEnhancementApply()
     {
         if (!_cursorEnhancementEnabled)
         {
             return;
         }
 
-        _cursorScaleApplyTimer ??= new System.Windows.Forms.Timer { Interval = 1000 };
+        if (_cursorScaleApplyTimer == null)
+        {
+            _cursorScaleApplyTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _cursorScaleApplyTimer.Tick += OnCursorScaleApplyTimerTick;
+        }
+
         _cursorScaleApplyTimer.Stop();
-        _cursorScaleApplyTimer.Tick -= OnCursorScaleApplyTimerTick;
-        _cursorScaleApplyTimer.Tick += OnCursorScaleApplyTimerTick;
         _cursorScaleApplyTimer.Start();
     }
 
@@ -140,7 +143,7 @@ internal sealed partial class TrayContext
         {
             using Bitmap source = RenderCursor(sourceCursor, baseWidth, baseHeight);
             using Bitmap scaled = ScaleCursorBitmap(source, scale);
-            using Bitmap recolored = RecolorCursorBitmap(scaled, fillColor, borderColor, Math.Max(1, (int)Math.Round(scale)));
+            using Bitmap recolored = CursorBitmapProcessing.Recolor(scaled, fillColor, borderColor, Math.Max(1, (int)Math.Round(scale)));
             return CreateCursorFromBitmap(
                 recolored,
                 Math.Clamp((int)Math.Round(iconInfo.xHotspot * scale), 0, Math.Max(0, recolored.Width - 1)),
@@ -195,69 +198,6 @@ internal sealed partial class TrayContext
         graphics.PixelOffsetMode = PixelOffsetMode.Half;
         graphics.DrawImage(source, new Rectangle(0, 0, scaled.Width, scaled.Height));
         return scaled;
-    }
-
-    private static Bitmap RecolorCursorBitmap(Bitmap source, Color fillColor, Color borderColor, int outlineRadius)
-    {
-        int width = source.Width;
-        int height = source.Height;
-        bool[,] mask = new bool[width, height];
-        var output = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-
-        for (int y = 0; y < height; y++)
-        {
-            for (int x = 0; x < width; x++)
-            {
-                mask[x, y] = source.GetPixel(x, y).A > 16;
-            }
-        }
-
-        for (int y = 0; y < height; y++)
-        {
-            for (int x = 0; x < width; x++)
-            {
-                if (mask[x, y])
-                {
-                    Color sourcePixel = source.GetPixel(x, y);
-                    output.SetPixel(x, y, Color.FromArgb(sourcePixel.A, fillColor));
-                    continue;
-                }
-
-                if (HasNeighbor(mask, x, y, outlineRadius))
-                {
-                    output.SetPixel(x, y, borderColor);
-                }
-            }
-        }
-
-        return output;
-    }
-
-    private static bool HasNeighbor(bool[,] mask, int x, int y, int radius)
-    {
-        int width = mask.GetLength(0);
-        int height = mask.GetLength(1);
-        int radiusSquared = radius * radius;
-
-        for (int dy = -radius; dy <= radius; dy++)
-        {
-            for (int dx = -radius; dx <= radius; dx++)
-            {
-                if ((dx * dx) + (dy * dy) > radiusSquared)
-                {
-                    continue;
-                }
-
-                int nx = x + dx;
-                int ny = y + dy;
-                if (nx >= 0 && nx < width && ny >= 0 && ny < height && mask[nx, ny])
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
     }
 
     private static IntPtr CreateCursorFromBitmap(Bitmap bitmap, int hotspotX, int hotspotY)

@@ -8,7 +8,10 @@ using System.Text;
 using System.Text.Json;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Xml;
+using System.Xml.Linq;
 using Microsoft.Win32;
 
 namespace QuickZoom;
@@ -20,9 +23,14 @@ internal static class Program
     // Per-monitor v2 gives physical pixel coordinates across mixed-DPI setups.
     private static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new(-4);
     private const string StartupTaskInstallFlag = "--install-startup-task";
+    internal const string SetupStartupTaskInstallFlag = "--setup-install-startup-task";
     private const string StartupReadyEventFlag = "--startup-ready-event";
     private const string StartupTaskUserFlag = "--startup-task-user";
     private const string CaptureUiScreenshotsFlag = "--capture-ui-screenshots";
+    private const string CaptureSettingsSmokeFlag = "--capture-settings-smoke";
+    private const string CaptureSetupSmokeFlag = "--capture-setup-smoke";
+    private const string SetupFlag = "-setup";
+    private const string LongSetupFlag = "--setup";
     private const int StartupTaskPriority = 3;
     private static readonly string[] LegacyStartupTaskNames =
     [
@@ -76,17 +84,58 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        try
+        {
+            LocalStorage.RequireLocalPath(AppContext.BaseDirectory);
+            LocalStorage.RequireLocalPath(AppPaths.SettingsPath);
+        }
+        catch
+        {
+            MessageBox.Show("QuickZoom requires local, non-redirected application and settings paths.", "QuickZoom", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            Environment.ExitCode = 1;
+            return;
+        }
         string? exePath = GetExecutablePath();
         bool isElevatedLaunch = HasArg(args, ElevatedFlag);
         bool shouldInstallStartupTask = HasArg(args, StartupTaskInstallFlag);
+        bool shouldInstallSetupStartupTask = HasArg(args, SetupStartupTaskInstallFlag);
         string? startupReadyEventName = GetArgValue(args, StartupReadyEventFlag);
         string? startupTaskUser = GetArgValue(args, StartupTaskUserFlag);
         bool shouldCaptureUiScreenshots = HasArg(args, CaptureUiScreenshotsFlag);
+        bool shouldCaptureSettingsSmoke = HasArg(args, CaptureSettingsSmokeFlag);
+        bool shouldCaptureSetupSmoke = HasArg(args, CaptureSetupSmokeFlag);
+        bool shouldRunSetup = HasArg(args, SetupFlag) || HasArg(args, LongSetupFlag);
         bool acquiredMutex = false;
+        bool setupFlowWasShown = false;
 
         ConfigureErrorLoggingFromSettings();
+        EnablePerMonitorDpiAwareness();
+        try { Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); } catch { }
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += (_, e) => LogFatalException("UI thread", e.Exception);
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => LogFatalException("AppDomain", e.ExceptionObject as Exception);
+        bool internalStartupMode = shouldCaptureUiScreenshots ||
+            shouldCaptureSettingsSmoke ||
+            shouldCaptureSetupSmoke ||
+            shouldInstallStartupTask ||
+            shouldInstallSetupStartupTask ||
+            startupReadyEventName != null;
+        if (shouldRunSetup || (!internalStartupMode && FirstRunSetup.ShouldRunAutomatically()))
+        {
+            setupFlowWasShown = true;
+            FirstRunSetup.Show(allowLivePractice: !IsSingleInstanceActive());
+        }
 
-        if (!shouldCaptureUiScreenshots && !shouldInstallStartupTask && startupReadyEventName == null)
+        _ = AppThemeBootstrap.TryApplyNativeColorMode(AppThemeBootstrap.ReadPersistedThemeMode());
+
+        if (!shouldCaptureUiScreenshots &&
+            !shouldCaptureSettingsSmoke &&
+            !shouldCaptureSetupSmoke &&
+            !shouldInstallStartupTask &&
+            !shouldInstallSetupStartupTask &&
+            startupReadyEventName == null)
         {
             if (ReconcileOtherQuickZoomInstances(exePath) == InstanceStartupDecision.ExitCurrent)
             {
@@ -102,23 +151,52 @@ internal static class Program
             acquiredMutex = true;
         }
 
-        EnablePerMonitorDpiAwareness();
-        try { Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); } catch { }
-        Application.EnableVisualStyles();
-        Application.SetCompatibleTextRenderingDefault(false);
-        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
-        Application.ThreadException += (_, e) => LogFatalException("UI thread", e.Exception);
-        AppDomain.CurrentDomain.UnhandledException += (_, e) => LogFatalException("AppDomain", e.ExceptionObject as Exception);
         ErrorLog.WriteAlways("Startup", $"Launching {AppInfo.DisplayVersion} from {AppContext.BaseDirectory}");
 
         if (shouldCaptureUiScreenshots)
         {
             string workingDirectory = Directory.GetCurrentDirectory();
-            string assetsDirectory = Path.Combine(workingDirectory, "assets");
-            string screenshotsRoot = Directory.Exists(assetsDirectory)
-                ? Path.Combine(assetsDirectory, "screenshots")
-                : Path.Combine(workingDirectory, "UI Screenshots");
+            string screenshotsRoot = Path.Combine(
+                workingDirectory,
+                "test-validation",
+                "Auto-screenshot",
+                "UI Screenshots");
             TrayContext.CaptureUiScreenshots(Path.Combine(screenshotsRoot, $"Build {AppInfo.BuildNumber}"));
+            return;
+        }
+
+        if (shouldCaptureSettingsSmoke)
+        {
+            string workingDirectory = Directory.GetCurrentDirectory();
+            TrayContext.CaptureSettingsSmoke(Path.Combine(
+                workingDirectory,
+                "test-validation",
+                "Auto-screenshot",
+                "Settings Smoke Test"));
+            return;
+        }
+
+        if (shouldCaptureSetupSmoke)
+        {
+            try
+            {
+                string workingDirectory = Directory.GetCurrentDirectory();
+                FirstRunSetup.CaptureSmoke(Path.Combine(
+                    workingDirectory,
+                    "test-validation",
+                    "Auto-screenshot",
+                    "First Run Setup"));
+                StartupDialogs.CaptureAlreadyRunningSmoke(Path.Combine(
+                    workingDirectory,
+                    "test-validation",
+                    "Auto-screenshot",
+                    "Already Running"));
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.WriteAlways("Program.CaptureSetupSmoke", ex.ToString());
+                Environment.ExitCode = 1;
+            }
             return;
         }
 
@@ -126,13 +204,22 @@ internal static class Program
         bool isManagedInstall = InstalledAppService.IsManagedInstallPath(exePath);
         bool needsSecureInstallMigration = InstalledAppService.NeedsSecureInstallMigration(exePath);
 
+        if (shouldInstallSetupStartupTask)
+        {
+            Environment.ExitCode = TryInstallStartupTaskForSetup(exePath, startupTaskUser) ? 0 : 1;
+            return;
+        }
+
         if (!shouldInstallStartupTask)
         {
-            TryCleanupLegacyUserStartupEntries(exePath);
-            if (isAdmin)
+            _ = Task.Run(() =>
             {
-                TryCleanupLegacyScheduledTasks(exePath);
-            }
+                TryCleanupLegacyUserStartupEntries(exePath);
+                if (isAdmin)
+                {
+                    TryCleanupLegacyScheduledTasks(exePath);
+                }
+            });
         }
 
         if (shouldInstallStartupTask)
@@ -252,7 +339,19 @@ internal static class Program
             return;
         }
 
-        if (!isAdmin && !isElevatedLaunch)
+        if (!isAdmin &&
+            !isElevatedLaunch &&
+            setupFlowWasShown &&
+            StartupTaskService.GetStatus() == StartupTaskStatus.Ready &&
+            TryStartElevatedScheduledTaskAndVerify(exePath))
+        {
+            return;
+        }
+
+        bool suppressLegacyStartupSetup =
+            FirstRunSetup.StartupServiceWasSkipped() ||
+            setupFlowWasShown;
+        if (!isAdmin && !isElevatedLaunch && !suppressLegacyStartupSetup)
         {
             if (shouldOfferInstallOrUpdate)
             {
@@ -339,6 +438,24 @@ internal static class Program
             // If mutex creation fails, do not block startup.
             ErrorLog.Write("Startup", "Could not create the single-instance mutex. Continuing without duplicate-instance protection.");
             return true;
+        }
+    }
+
+    private static bool IsSingleInstanceActive()
+    {
+        try
+        {
+            if (!Mutex.TryOpenExisting(SingleInstanceMutexName, out Mutex? existing))
+            {
+                return false;
+            }
+
+            existing.Dispose();
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -436,10 +553,7 @@ internal static class Program
 
     private static void ShowLatestAlreadyRunningDialog()
     {
-        StartupDialogs.ShowTrayInfo(
-            T("Common.AppName"),
-            T("Startup.LatestAlreadyRunningHeading"),
-            T("Startup.LatestAlreadyRunningBody"));
+        StartupDialogs.ShowAlreadyRunning();
     }
 
     private static bool IsRunningAsAdministrator()
@@ -532,6 +646,46 @@ internal static class Program
         return TryRegisterElevatedStartupTask(installedExePath, targetUser: null, out errorMessage);
     }
 
+    private static bool TryInstallStartupTaskForSetup(string? sourceExePath, string? targetUser)
+    {
+        if (!IsRunningAsAdministrator())
+        {
+            ErrorLog.Write("FirstRunSetup.Startup", "The startup-service helper was not elevated.");
+            return false;
+        }
+
+        try
+        {
+            TryCleanupLegacyUserStartupEntries(sourceExePath);
+            TryCleanupLegacyScheduledTasks(sourceExePath);
+
+            if (!TryPrepareInstalledQuickZoom(out string installedExePath, out string? errorMessage))
+            {
+                ErrorLog.Write("FirstRunSetup.Startup", errorMessage ?? "Could not prepare the managed install.");
+                return false;
+            }
+
+            if (!TryRegisterElevatedStartupTask(installedExePath, targetUser, out errorMessage))
+            {
+                ErrorLog.Write("FirstRunSetup.Startup", errorMessage ?? "Could not register the startup task.");
+                return false;
+            }
+
+            bool ready = StartupTaskService.WaitUntilReady(installedExePath, targetUser);
+            ErrorLog.Write(
+                "FirstRunSetup.Startup",
+                ready
+                    ? "The startup service was created and verified."
+                    : "The startup task was created, but verification did not complete.");
+            return ready;
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("FirstRunSetup.Startup", ex);
+            return false;
+        }
+    }
+
     private static bool TryPrepareInstalledQuickZoom(out string installedExePath, out string? errorMessage)
     {
         string? exePath = GetExecutablePath();
@@ -544,6 +698,7 @@ internal static class Program
 
         if (!InstalledAppService.TryPrepareInstalledPayload(exePath, out installedExePath, out errorMessage))
         {
+            errorMessage = T("Startup.SetupCopyFailedBody");
             return false;
         }
 
@@ -553,6 +708,7 @@ internal static class Program
     private static bool TryRegisterElevatedStartupTask(string installedExePath, string? targetUser, out string? errorMessage)
     {
         var stopwatch = Stopwatch.StartNew();
+        string? taskDefinitionPath = null;
         errorMessage = null;
 
         string currentUser = !string.IsNullOrWhiteSpace(targetUser)
@@ -573,40 +729,43 @@ internal static class Program
 
         TryCleanupLegacyScheduledTasks(installedExePath);
 
-        string psExe = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.System),
-            "WindowsPowerShell\\v1.0\\powershell.exe");
-
-        string command =
-            "$action = New-ScheduledTaskAction -Execute " + ToPowerShellSingleQuoted(installedExePath) + " -Argument " + ToPowerShellSingleQuoted(ElevatedFlag) + "; " +
-            "$trigger = New-ScheduledTaskTrigger -AtLogOn -User " + ToPowerShellSingleQuoted(currentUser) + " -RandomDelay (New-TimeSpan -Seconds 0); " +
-            "$principal = New-ScheduledTaskPrincipal -UserId " + ToPowerShellSingleQuoted(currentUser) + " -LogonType Interactive -RunLevel Highest; " +
-            "$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -Priority " + StartupTaskPriority.ToString() + "; " +
-            "Register-ScheduledTask -TaskName " + ToPowerShellSingleQuoted(StartupTaskService.ElevatedStartupTaskName) +
-            " -Description " + ToPowerShellSingleQuoted("Launch QuickZoom at user logon with highest privileges.") +
-            " -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null";
-
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = psExe,
-            Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command " + QuoteArgument(command),
-            CreateNoWindow = true,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-
         try
         {
+            if (!InstalledAppService.IsSecureInstallPath(installedExePath))
+                throw new InvalidOperationException("The startup executable is not in a protected managed install.");
+            taskDefinitionPath = Path.Combine(Path.GetDirectoryName(installedExePath)!, Guid.NewGuid().ToString("N") + ".task.xml");
+            using var taskDefinitionStream = new FileStream(taskDefinitionPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read);
+            var writerSettings = new XmlWriterSettings
+            {
+                Encoding = Encoding.Unicode,
+                Indent = true
+            };
+            using (XmlWriter writer = XmlWriter.Create(taskDefinitionStream, writerSettings))
+            {
+                CreateStartupTaskDefinition(installedExePath, currentUser).Save(writer);
+            }
+            taskDefinitionStream.Flush(flushToDisk: true);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = Path.Combine(Environment.SystemDirectory, "schtasks.exe"),
+                Arguments = "/Create /TN " + QuoteArgument(StartupTaskService.ElevatedStartupTaskName) +
+                    " /XML " + QuoteArgument(taskDefinitionPath) + " /F",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
             using var process = Process.Start(startInfo);
             if (process == null)
             {
-                errorMessage = T("Startup.ErrorPowerShellLaunch");
-                ErrorLog.Write("StartupTaskInstall", $"PowerShell launch failed after {ErrorLog.FormatElapsed(stopwatch.Elapsed)}.");
+                errorMessage = T("Startup.ErrorTaskRegistrationLaunch");
+                ErrorLog.Write("StartupTaskInstall", $"schtasks.exe launch failed after {ErrorLog.FormatElapsed(stopwatch.Elapsed)}.");
                 return false;
             }
 
-            if (!process.WaitForExit(5000))
+            if (!process.WaitForExit(15000))
             {
                 try
                 {
@@ -617,7 +776,7 @@ internal static class Program
                     // Best effort.
                 }
 
-                errorMessage = T("Startup.ErrorPowerShellTimeout");
+                errorMessage = T("Startup.ErrorTaskRegistrationTimeout");
                 ErrorLog.Write("StartupTaskInstall", $"{errorMessage} Elapsed={ErrorLog.FormatElapsed(stopwatch.Elapsed)}.");
                 return false;
             }
@@ -627,9 +786,7 @@ internal static class Program
             bool success = process.ExitCode == 0;
             if (!success)
             {
-                errorMessage = string.IsNullOrWhiteSpace(error)
-                    ? T("Startup.ErrorPowerShellFailed")
-                    : error;
+                errorMessage = T("Startup.ErrorTaskRegistrationFailed");
                 ErrorLog.Write("StartupTaskInstall", $"Task registration failed after {ErrorLog.FormatElapsed(stopwatch.Elapsed)}. StdOut: {output} StdErr: {error}");
                 return false;
             }
@@ -637,7 +794,7 @@ internal static class Program
             StartupTaskService.InvalidateCache();
             if (!StartupTaskService.IsReadyForCurrentBuild(installedExePath, currentUser, out StartupTaskInfo verifiedInfo))
             {
-                errorMessage = T("Startup.ErrorPowerShellFailed");
+                errorMessage = T("Startup.ErrorTaskRegistrationFailed");
                 ErrorLog.Write("StartupTaskInstall", $"Task registration finished but verification failed after {ErrorLog.FormatElapsed(stopwatch.Elapsed)}. ExpectedUser={currentUser}; ExpectedPath={installedExePath}; {DescribeStartupTask(verifiedInfo)}");
                 return false;
             }
@@ -652,13 +809,59 @@ internal static class Program
             ErrorLog.Write("StartupTaskInstall", $"Unexpected startup task registration error after {ErrorLog.FormatElapsed(stopwatch.Elapsed)}. {ex}");
             return false;
         }
+        finally
+        {
+            if (!string.IsNullOrWhiteSpace(taskDefinitionPath))
+            {
+                try
+                {
+                    File.Delete(taskDefinitionPath);
+                }
+                catch
+                {
+                    // Best effort.
+                }
+            }
+        }
+    }
+
+    private static XDocument CreateStartupTaskDefinition(string installedExePath, string currentUser)
+    {
+        XNamespace taskNamespace = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+        return new XDocument(
+            new XDeclaration("1.0", "utf-16", null),
+            new XElement(taskNamespace + "Task",
+                new XAttribute("version", "1.3"),
+                new XElement(taskNamespace + "RegistrationInfo",
+                    new XElement(taskNamespace + "Description", "Launch QuickZoom at user logon with highest privileges.")),
+                new XElement(taskNamespace + "Triggers",
+                    new XElement(taskNamespace + "LogonTrigger",
+                        new XElement(taskNamespace + "Enabled", true),
+                        new XElement(taskNamespace + "UserId", currentUser))),
+                new XElement(taskNamespace + "Principals",
+                    new XElement(taskNamespace + "Principal",
+                        new XAttribute("id", "Author"),
+                        new XElement(taskNamespace + "UserId", currentUser),
+                        new XElement(taskNamespace + "LogonType", "InteractiveToken"),
+                        new XElement(taskNamespace + "RunLevel", "HighestAvailable"))),
+                new XElement(taskNamespace + "Settings",
+                    new XElement(taskNamespace + "MultipleInstancesPolicy", "IgnoreNew"),
+                    new XElement(taskNamespace + "DisallowStartIfOnBatteries", false),
+                    new XElement(taskNamespace + "StopIfGoingOnBatteries", false),
+                    new XElement(taskNamespace + "StartWhenAvailable", true),
+                    new XElement(taskNamespace + "Priority", StartupTaskPriority)),
+                new XElement(taskNamespace + "Actions",
+                    new XAttribute("Context", "Author"),
+                    new XElement(taskNamespace + "Exec",
+                        new XElement(taskNamespace + "Command", installedExePath),
+                        new XElement(taskNamespace + "Arguments", ElevatedFlag)))));
     }
 
     private static bool TryStartElevatedScheduledTask()
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = "schtasks.exe",
+            FileName = Path.Combine(Environment.SystemDirectory, "schtasks.exe"),
             Arguments = "/Run /TN \"" + StartupTaskService.ElevatedStartupTaskName + "\"",
             CreateNoWindow = true,
             UseShellExecute = false,
@@ -897,11 +1100,6 @@ internal static class Program
 
         quoted.Append('"');
         return quoted.ToString();
-    }
-
-    private static string ToPowerShellSingleQuoted(string value)
-    {
-        return "'" + value.Replace("'", "''") + "'";
     }
 
     private static bool TryLaunchInstalledCopyAndWaitUntilReady(string installedExePath, int timeoutMs, params string[] extraFlags)
@@ -1180,10 +1378,16 @@ internal static class Program
         bool otherIsInstalledPreferred,
         Process otherProcess)
     {
-        int otherBuildNumber = TryGetExecutableBuildNumber(otherExePath);
-        if (otherBuildNumber > 0 && otherBuildNumber != AppInfo.BuildNumber)
+        int currentBuildNumber = TryGetExecutableBuildNumber(currentExePath);
+        if (currentBuildNumber <= 0)
         {
-            return AppInfo.BuildNumber > otherBuildNumber
+            currentBuildNumber = AppInfo.BuildNumber;
+        }
+
+        int otherBuildNumber = TryGetExecutableBuildNumber(otherExePath);
+        if (currentBuildNumber > 0 && otherBuildNumber > 0 && currentBuildNumber != otherBuildNumber)
+        {
+            return currentBuildNumber > otherBuildNumber
                 ? InstancePreference.CurrentWins
                 : InstancePreference.OtherWins;
         }
@@ -1299,12 +1503,15 @@ internal static class Program
 
     private static int TryGetExecutableBuildNumber(string exePath)
     {
+        int fileBuildNumber = 0;
+        int pathBuildNumber = 0;
         try
         {
             FileVersionInfo info = FileVersionInfo.GetVersionInfo(exePath);
-            if (info.FileBuildPart > 0)
+            int metadataBuildNumber = Math.Max(info.FileBuildPart, info.FilePrivatePart);
+            if (metadataBuildNumber > 0)
             {
-                return info.FileBuildPart;
+                fileBuildNumber = metadataBuildNumber;
             }
         }
         catch
@@ -1320,7 +1527,8 @@ internal static class Program
                 if (directory.Name.StartsWith("Build ", StringComparison.OrdinalIgnoreCase) &&
                     int.TryParse(directory.Name["Build ".Length..], out int buildNumber))
                 {
-                    return buildNumber;
+                    pathBuildNumber = buildNumber;
+                    break;
                 }
 
                 directory = directory.Parent;
@@ -1331,7 +1539,7 @@ internal static class Program
             // Ignore path parsing failures.
         }
 
-        return 0;
+        return Math.Max(fileBuildNumber, pathBuildNumber);
     }
 
     private static DateTime TryGetExecutableWriteTimeUtc(string exePath)
@@ -1530,7 +1738,7 @@ internal static class Program
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = "schtasks.exe",
+            FileName = Path.Combine(Environment.SystemDirectory, "schtasks.exe"),
             Arguments = "/Query /FO CSV /NH",
             CreateNoWindow = true,
             UseShellExecute = false,
@@ -1607,7 +1815,7 @@ internal static class Program
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = "schtasks.exe",
+            FileName = Path.Combine(Environment.SystemDirectory, "schtasks.exe"),
             Arguments = "/Delete /TN " + QuoteArgument(taskName) + " /F",
             CreateNoWindow = true,
             UseShellExecute = false,

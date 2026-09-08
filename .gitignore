@@ -3,8 +3,9 @@ bin/
 obj/
 dist/
 publish/
+/Builds/*
+!/Builds/.gitkeep
 /Build */
-/Build*/
 /Website/
 
 # Local tool/cache folders
@@ -30,4 +31,16 @@ crashpad/
 *.user
 *.suo
 *.tmp
+*.swp
 .DS_Store
+
+# IDE and test output
+.vs/
+.vscode/
+.idea/
+TestResults/
+/test-validation/
+
+# Local signing credentials
+*.cer
+*.pfx

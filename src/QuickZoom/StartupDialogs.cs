@@ -12,6 +12,16 @@ internal static class StartupDialogs
     [DllImport("dwmapi.dll", PreserveSig = true)]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
 
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool ReleaseCapture();
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int message, IntPtr wParam, IntPtr lParam);
+
     public static bool ShowYesNo(string title, string heading, string body)
     {
         UiLanguage language = UiText.GetStartupLanguage();
@@ -35,125 +45,327 @@ internal static class StartupDialogs
         _ = ShowDialogCore(title, heading, body, UiText.Get(language, "Common.Ok"), null);
     }
 
-    public static void ShowTrayInfo(string title, string heading, string body)
+    public static void ShowAlreadyRunning()
     {
         ApplyStartupFontScale();
         UiLanguage language = UiText.GetStartupLanguage();
-        ThemePalette palette = GetWindowsAppsUseDarkMode() ? ThemePalettes.Dark : ThemePalettes.Light;
-
-        using var form = new Form
+        ThemePalette palette = GetStartupPalette();
+        using Form form = CreateAlreadyRunningForm(language, palette, showInTaskbar: true, out ModernButton closeButton);
+        Rectangle area = Screen.FromPoint(Cursor.Position).WorkingArea;
+        Point finalLocation = new(
+            area.Left + Math.Max(0, (area.Width - form.Width) / 2),
+            area.Top + Math.Max(0, (area.Height - form.Height) / 2));
+        form.Opacity = 0;
+        form.Location = new Point(
+            SystemInformation.VirtualScreen.Left - form.Width - 200,
+            SystemInformation.VirtualScreen.Top - form.Height - 200);
+        _ = form.Handle;
+        WindowChrome.TrySetDarkTitleBar(form, palette.Equals(ThemePalettes.Dark));
+        bool cloaked = WindowChrome.TrySetCloaked(form, cloaked: true);
+        form.Shown += (_, _) => form.BeginInvoke((MethodInvoker)(() =>
         {
-            Text = title,
-            FormBorderStyle = FormBorderStyle.FixedDialog,
+            form.PerformLayout();
+            WindowChrome.RedrawNow(form);
+            form.Opacity = 1;
+            form.Location = finalLocation;
+            WindowChrome.RedrawNow(form);
+            if (cloaked)
+            {
+                _ = WindowChrome.TrySetCloaked(form, cloaked: false);
+            }
+
+            ForceToForeground(form);
+            closeButton.Focus();
+        }));
+        _ = form.ShowDialog();
+    }
+
+    internal static void CaptureAlreadyRunningSmoke(string outputDirectory)
+    {
+        Directory.CreateDirectory(outputDirectory);
+        foreach (UiLanguage language in Enum.GetValues<UiLanguage>())
+        {
+            foreach ((string themeName, ThemePalette palette) in new[]
+                     {
+                         ("dark", ThemePalettes.Dark),
+                         ("light", ThemePalettes.Light)
+                     })
+            {
+                string languageName = LocalizationManager.GetLanguageCode(language);
+                string variantDirectory = Path.Combine(outputDirectory, themeName);
+                Directory.CreateDirectory(variantDirectory);
+                using Form form = CreateAlreadyRunningForm(
+                    language,
+                    palette,
+                    showInTaskbar: false,
+                    out _);
+                Rectangle virtualScreen = SystemInformation.VirtualScreen;
+                form.Location = new Point(virtualScreen.Right + 64, virtualScreen.Bottom + 64);
+                form.Show();
+                WaitForCaptureUi();
+                using var bitmap = new Bitmap(form.Width, form.Height);
+                form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size));
+                bitmap.Save(Path.Combine(variantDirectory, languageName + ".png"));
+                form.Hide();
+            }
+        }
+    }
+
+    private static Form CreateAlreadyRunningForm(
+        UiLanguage language,
+        ThemePalette palette,
+        bool showInTaskbar,
+        out ModernButton closeButton)
+    {
+        string appName = UiText.Get(language, "Common.AppName");
+        string heading = UiText.Get(language, "Startup.LatestAlreadyRunningHeading");
+        string body = UiText.Get(language, "Startup.LatestAlreadyRunningBody");
+        string cardTitle = UiText.Get(language, "Startup.LatestAlreadyRunningCardTitle");
+        string cardBody = UiText.Get(language, "Startup.LatestAlreadyRunningCardBody");
+        var form = new Form
+        {
+            Text = appName,
+            FormBorderStyle = FormBorderStyle.None,
             StartPosition = FormStartPosition.Manual,
-            MinimizeBox = false,
-            MaximizeBox = false,
-            ShowInTaskbar = false,
+            ShowInTaskbar = showInTaskbar,
             AutoScaleMode = AutoScaleMode.Dpi,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            BackColor = palette.MenuBackground,
+            ClientSize = new Size(840, 500),
+            MinimumSize = new Size(700, 430),
+            BackColor = palette.Border,
             ForeColor = palette.Text,
-            Padding = new Padding(0),
-            MinimumSize = new Size(ControlDrawing.ScaleLogical(new Control(), 420), 0)
+            Padding = new Padding(1),
+            KeyPreview = true,
+            AccessibleRole = AccessibleRole.Dialog,
+            AccessibleName = heading,
+            AccessibleDescription = body + " " + cardBody
         };
-        form.HandleCreated += (_, _) => TrySetDarkTitleBar(form.Handle, palette.Equals(ThemePalettes.Dark));
+        try
+        {
+            form.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+        }
+        catch
+        {
+            // The dialog remains usable if Windows cannot read the executable icon.
+        }
 
         var root = new TableLayoutPanel
         {
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            ColumnCount = 2,
-            RowCount = 3,
-            Padding = new Padding(18),
-            Margin = new Padding(0),
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 4,
+            Padding = new Padding(46, 26, 46, 22),
+            Margin = Padding.Empty,
             BackColor = palette.MenuBackground
         };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, ControlDrawing.ScaleLogical(form, 46)));
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 1));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 66));
 
-        var icon = new StartupInfoIconControl(palette)
+        var titleLabel = new Label
         {
-            Width = ControlDrawing.ScaleLogical(form, 30),
-            Height = ControlDrawing.ScaleLogical(form, 30),
-            Margin = new Padding(0, 2, 14, 0)
-        };
-        root.Controls.Add(icon, 0, 0);
-        root.SetRowSpan(icon, 2);
-
-        root.Controls.Add(new Label
-        {
-            Text = heading,
-            AutoSize = true,
-            Font = ControlDrawing.UiFont("Segoe UI Semibold", 10.5f, FontStyle.Bold),
+            Dock = DockStyle.Fill,
+            Text = "QuickZoom 3",
+            TextAlign = ContentAlignment.MiddleLeft,
+            Font = ControlDrawing.UiFont("Segoe UI", 20f, FontStyle.Bold),
             ForeColor = palette.Text,
-            BackColor = Color.Transparent,
-            MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 340), 0),
-            Margin = new Padding(0, 0, 0, 5)
-        }, 1, 0);
-
-        root.Controls.Add(new Label
-        {
-            Text = body,
-            AutoSize = true,
-            Font = ControlDrawing.UiFont("Segoe UI", 9f, FontStyle.Regular),
-            ForeColor = palette.SecondaryText,
-            BackColor = Color.Transparent,
-            MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 340), 0),
-            Margin = new Padding(0)
-        }, 1, 1);
-
-        var ok = CreateButton(UiText.Get(language, "Common.Ok"), DialogResult.OK, palette, true);
-        ok.Margin = new Padding(0, 14, 0, 0);
-        root.Controls.Add(ok, 1, 2);
-
-        form.Controls.Add(root);
-        form.AcceptButton = ok;
-        form.CancelButton = ok;
-        form.Shown += (_, _) =>
-        {
-            Rectangle area = Screen.PrimaryScreen?.WorkingArea ?? SystemInformation.WorkingArea;
-            form.Location = new Point(area.Right - form.Width - 18, area.Bottom - form.Height - 18);
+            BackColor = palette.MenuBackground,
+            Margin = Padding.Empty,
+            AutoEllipsis = false
         };
+        var divider = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = palette.Border,
+            Margin = Padding.Empty
+        };
+        var content = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 5,
+            Padding = new Padding(0, 20, 0, 0),
+            Margin = Padding.Empty,
+            BackColor = palette.MenuBackground
+        };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 18));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 174));
+        content.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
-        _ = form.ShowDialog();
+        var headingLabel = NewSplashLabel(
+            heading,
+            palette.Text,
+            ControlDrawing.UiFont("Segoe UI", 15.5f, FontStyle.Bold));
+        var bodyLabel = NewSplashLabel(
+            body,
+            palette.SecondaryText,
+            ControlDrawing.UiFont("Segoe UI", 10.2f, FontStyle.Regular));
+        content.Controls.Add(headingLabel, 0, 0);
+        content.Controls.Add(bodyLabel, 0, 1);
+
+        var card = new ModernSurfacePanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = palette.ControlBackground,
+            CornerRadius = 14,
+            BorderAlpha = 38,
+            Padding = new Padding(22),
+            Margin = Padding.Empty
+        };
+        var cardLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 2,
+            BackColor = palette.ControlBackground,
+            Margin = Padding.Empty,
+            Padding = Padding.Empty
+        };
+        cardLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
+        cardLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        cardLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        cardLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        var infoIcon = new StartupInfoIconControl(palette)
+        {
+            Dock = DockStyle.Fill,
+            BackColor = palette.ControlBackground,
+            Margin = new Padding(0, 4, 18, 4),
+            AccessibleName = cardTitle,
+            AccessibleDescription = cardBody
+        };
+        var cardTitleLabel = NewSplashLabel(
+            cardTitle,
+            palette.Text,
+            ControlDrawing.UiFont("Segoe UI", 12.5f, FontStyle.Bold));
+        var cardBodyLabel = NewSplashLabel(
+            cardBody,
+            palette.SecondaryText,
+            ControlDrawing.UiFont("Segoe UI", 9.6f, FontStyle.Regular));
+        cardLayout.Controls.Add(infoIcon, 0, 0);
+        cardLayout.SetRowSpan(infoIcon, 2);
+        cardLayout.Controls.Add(cardTitleLabel, 1, 0);
+        cardLayout.Controls.Add(cardBodyLabel, 1, 1);
+        card.Controls.Add(cardLayout);
+        content.Controls.Add(card, 0, 3);
+
+        var footer = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            Padding = new Padding(0, 14, 0, 0),
+            Margin = Padding.Empty,
+            BackColor = palette.MenuBackground
+        };
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
+        footer.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        closeButton = new ModernButton
+        {
+            Text = UiText.Get(language, "Common.Close"),
+            DialogResult = DialogResult.OK,
+            AutoSize = false,
+            Size = new Size(210, 42),
+            Anchor = AnchorStyles.Right | AnchorStyles.Bottom,
+            Margin = Padding.Empty,
+            Font = ControlDrawing.UiFont("Segoe UI", 10.5f, FontStyle.Bold)
+        };
+        closeButton.ApplyTheme(palette, emphasis: true);
+        closeButton.SetProminentHover(
+            ControlDrawing.Blend(palette.Accent, palette.Text, 54),
+            ControlDrawing.Blend(palette.Accent, palette.Text, 118));
+        footer.Controls.Add(closeButton, 1, 0);
+
+        root.Controls.Add(titleLabel, 0, 0);
+        root.Controls.Add(divider, 0, 1);
+        root.Controls.Add(content, 0, 2);
+        root.Controls.Add(footer, 0, 3);
+        form.Controls.Add(root);
+        form.AcceptButton = closeButton;
+        form.CancelButton = closeButton;
+
+        void BeginWindowDrag(object? sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left)
+            {
+                return;
+            }
+
+            _ = ReleaseCapture();
+            _ = SendMessage(form.Handle, 0x00A1, new IntPtr(2), IntPtr.Zero);
+        }
+
+        titleLabel.MouseDown += BeginWindowDrag;
+        divider.MouseDown += BeginWindowDrag;
+        return form;
+    }
+
+    private static Label NewSplashLabel(string text, Color color, Font font) => new()
+    {
+        Dock = DockStyle.Fill,
+        Text = text,
+        TextAlign = ContentAlignment.MiddleLeft,
+        Font = font,
+        ForeColor = color,
+        BackColor = Color.Transparent,
+        Margin = Padding.Empty,
+        AutoEllipsis = false,
+        AccessibleRole = AccessibleRole.StaticText,
+        AccessibleName = text
+    };
+
+    private static void WaitForCaptureUi()
+    {
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        while (timer.ElapsedMilliseconds < 140)
+        {
+            Application.DoEvents();
+            System.Threading.Thread.Sleep(10);
+        }
     }
 
     public static void ShowTimedSuccess(string title, string heading, string body, int secondsUntilClose)
     {
+        // Completion information must remain available until the user dismisses it.
+        _ = secondsUntilClose;
         UiLanguage language = UiText.GetStartupLanguage();
-        _ = ShowDialogCore(title, heading, body, UiText.Get(language, "Common.Continue"), null, secondsUntilClose);
+        _ = ShowDialogCore(title, heading, body, UiText.Get(language, "Common.Continue"), null);
     }
 
     public static T ShowProgress<T>(string title, string heading, string body, Func<T> work)
     {
         ApplyStartupFontScale();
-        ThemePalette palette = GetWindowsAppsUseDarkMode() ? ThemePalettes.Dark : ThemePalettes.Light;
+        ThemePalette palette = GetStartupPalette();
 
         using var form = new Form
         {
             Text = title,
-            FormBorderStyle = FormBorderStyle.FixedDialog,
+            FormBorderStyle = FormBorderStyle.Sizable,
             StartPosition = FormStartPosition.CenterScreen,
-            MinimizeBox = false,
+            MinimizeBox = true,
             MaximizeBox = false,
-            ControlBox = false,
-            ShowInTaskbar = false,
+            ControlBox = true,
+            ShowInTaskbar = true,
             AutoScaleMode = AutoScaleMode.Dpi,
-            ClientSize = new Size(ControlDrawing.ScaleLogical(new Control(), 640), ControlDrawing.ScaleLogical(new Control(), 160)),
             BackColor = palette.MenuBackground,
             ForeColor = palette.Text,
-            Padding = new Padding(0)
+            Padding = new Padding(0),
+            AccessibleRole = AccessibleRole.Dialog,
+            AccessibleName = title,
+            AccessibleDescription = heading + Environment.NewLine + body
         };
+        SetResponsiveDialogSize(form, preferredClientWidth: 640, preferredClientHeight: 160, minimumClientWidth: 460, minimumClientHeight: 150);
 
         form.HandleCreated += (_, _) => TrySetDarkTitleBar(form.Handle, palette.Equals(ThemePalettes.Dark));
 
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
+            AutoScroll = false,
             ColumnCount = 2,
             RowCount = 2,
             Margin = new Padding(0),
@@ -164,12 +376,15 @@ internal static class StartupDialogs
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        WindowChrome.TrySetDarkScrollBars(root, palette.MenuBackground.GetBrightness() < 0.5f);
 
         var spinner = new StartupSpinnerControl(palette)
         {
             Width = ControlDrawing.ScaleLogical(form, 64),
             Height = ControlDrawing.ScaleLogical(form, 48),
-            Margin = new Padding(0, 2, 24, 0)
+            Margin = new Padding(0, 2, 24, 0),
+            AccessibleName = heading,
+            AccessibleDescription = body
         };
 
         var headingLabel = new Label
@@ -180,7 +395,9 @@ internal static class StartupDialogs
             ForeColor = palette.Text,
             BackColor = palette.MenuBackground,
             MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 500), 0),
-            Margin = new Padding(0, 0, 0, 8)
+            Margin = new Padding(0, 0, 0, 8),
+            AccessibleRole = AccessibleRole.StaticText,
+            AccessibleName = heading
         };
 
         var bodyLabel = new Label
@@ -191,7 +408,9 @@ internal static class StartupDialogs
             ForeColor = palette.SecondaryText,
             BackColor = palette.MenuBackground,
             MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 500), 0),
-            Margin = new Padding(0)
+            Margin = new Padding(0),
+            AccessibleRole = AccessibleRole.StaticText,
+            AccessibleName = body
         };
 
         root.Controls.Add(spinner, 0, 0);
@@ -200,12 +419,93 @@ internal static class StartupDialogs
         root.Controls.Add(bodyLabel, 1, 1);
         form.Controls.Add(root);
 
+        bool updatingLayout = false;
+
+        void UpdateWrapWidth()
+        {
+            int width = Math.Max(
+                ControlDrawing.ScaleLogical(form, 220),
+                root.ClientSize.Width - root.Padding.Horizontal - (int)Math.Ceiling(root.ColumnStyles[0].Width));
+            headingLabel.MaximumSize = new Size(width, 0);
+            bodyLabel.MaximumSize = new Size(width, 0);
+        }
+
+        int MeasureContentHeight()
+        {
+            int textHeight =
+                headingLabel.PreferredHeight + headingLabel.Margin.Vertical +
+                bodyLabel.PreferredHeight + bodyLabel.Margin.Vertical;
+            int spinnerHeight = spinner.Height + spinner.Margin.Vertical;
+            return root.Padding.Vertical + Math.Max(textHeight, spinnerHeight);
+        }
+
+        void UpdateProgressLayout(bool fitToContent)
+        {
+            if (updatingLayout || form.IsDisposed)
+            {
+                return;
+            }
+
+            updatingLayout = true;
+            try
+            {
+                root.AutoScroll = false;
+                root.AutoScrollMinSize = Size.Empty;
+                UpdateWrapWidth();
+                root.PerformLayout();
+
+                if (fitToContent)
+                {
+                    Rectangle area = Screen.FromControl(form).WorkingArea;
+                    int chromeHeight = Math.Max(0, form.Height - form.ClientSize.Height);
+                    int screenMargin = ControlDrawing.ScaleLogical(form, 24);
+                    int maximumClientHeight = Math.Max(1, area.Height - (screenMargin * 2) - chromeHeight);
+                    int minimumClientHeight = Math.Min(
+                        maximumClientHeight,
+                        Math.Max(1, form.MinimumSize.Height - chromeHeight));
+                    int targetHeight = Math.Clamp(MeasureContentHeight(), minimumClientHeight, maximumClientHeight);
+                    form.ClientSize = new Size(form.ClientSize.Width, targetHeight);
+
+                    form.Location = new Point(
+                        area.Left + Math.Max(0, (area.Width - form.Width) / 2),
+                        area.Top + Math.Max(0, (area.Height - form.Height) / 2));
+                }
+
+                UpdateWrapWidth();
+                root.PerformLayout();
+                int contentHeight = MeasureContentHeight();
+                int overflowTolerance = ControlDrawing.ScaleLogical(form, 2);
+                bool needsScrollBar = contentHeight > root.ClientSize.Height + overflowTolerance;
+                root.AutoScroll = needsScrollBar;
+                root.AutoScrollMinSize = needsScrollBar ? new Size(0, contentHeight) : Size.Empty;
+                root.HorizontalScroll.Enabled = false;
+                root.HorizontalScroll.Visible = false;
+            }
+            finally
+            {
+                updatingLayout = false;
+            }
+        }
+
+        form.ClientSizeChanged += (_, _) => UpdateProgressLayout(fitToContent: false);
+
         T? result = default;
         Exception? failure = null;
         var complete = new System.Threading.ManualResetEventSlim(false);
+        int workCompleted = 0;
+
+        form.FormClosing += (_, e) =>
+        {
+            if (e.CloseReason == CloseReason.UserClosing && System.Threading.Volatile.Read(ref workCompleted) == 0)
+            {
+                e.Cancel = true;
+            }
+        };
 
         form.Shown += (_, _) =>
         {
+            UpdateProgressLayout(fitToContent: true);
+            ForceToForeground(form);
             spinner.Start();
             System.Threading.Tasks.Task.Run(() =>
             {
@@ -219,6 +519,7 @@ internal static class StartupDialogs
                 }
                 finally
                 {
+                    System.Threading.Interlocked.Exchange(ref workCompleted, 1);
                     complete.Set();
                     if (!form.IsDisposed)
                     {
@@ -252,42 +553,45 @@ internal static class StartupDialogs
         string heading,
         string body,
         string primaryText,
-        string? secondaryText,
-        int autoCloseSeconds = 0)
+        string? secondaryText)
     {
         ApplyStartupFontScale();
-        ThemePalette palette = GetWindowsAppsUseDarkMode() ? ThemePalettes.Dark : ThemePalettes.Light;
+        ThemePalette palette = GetStartupPalette();
 
         using var form = new Form
         {
             Text = title,
-            FormBorderStyle = FormBorderStyle.FixedDialog,
+            FormBorderStyle = FormBorderStyle.Sizable,
             StartPosition = FormStartPosition.CenterScreen,
             MinimizeBox = false,
             MaximizeBox = false,
-            ShowInTaskbar = false,
+            ShowInTaskbar = true,
             AutoScaleMode = AutoScaleMode.Dpi,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            AutoSize = false,
             BackColor = palette.MenuBackground,
             ForeColor = palette.Text,
             Padding = new Padding(0),
-            MinimumSize = new Size(ControlDrawing.ScaleLogical(new Control(), 560), 0)
+            AccessibleRole = AccessibleRole.Dialog,
+            AccessibleName = title,
+            AccessibleDescription = heading + Environment.NewLine + body
         };
+        SetResponsiveDialogSize(form, preferredClientWidth: 640, preferredClientHeight: 300, minimumClientWidth: 420, minimumClientHeight: 240);
 
         form.HandleCreated += (_, _) => TrySetDarkTitleBar(form.Handle, palette.Equals(ThemePalettes.Dark));
 
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            AutoScroll = true,
             ColumnCount = 1,
             RowCount = 3,
             Margin = new Padding(0),
             Padding = new Padding(0),
             BackColor = palette.MenuBackground
         };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var headerPanel = new TableLayoutPanel
         {
@@ -310,7 +614,9 @@ internal static class StartupDialogs
             Font = ControlDrawing.UiFont("Segoe UI Semibold", 12.2f, FontStyle.Bold),
             ForeColor = palette.Text,
             BackColor = palette.MenuBackground,
-            MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 500), 0)
+            MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 560), 0),
+            AccessibleRole = AccessibleRole.StaticText,
+            AccessibleName = heading
         };
         headerPanel.Controls.Add(headingLabel, 0, 0);
 
@@ -335,7 +641,9 @@ internal static class StartupDialogs
             Font = ControlDrawing.UiFont("Segoe UI", 10f, FontStyle.Regular),
             ForeColor = palette.SecondaryText,
             BackColor = palette.MenuBackground,
-            MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 500), 0)
+            MaximumSize = new Size(ControlDrawing.ScaleLogical(form, 560), 0),
+            AccessibleRole = AccessibleRole.StaticText,
+            AccessibleName = body
         };
         bodyPanel.Controls.Add(bodyLabel, 0, 0);
 
@@ -345,7 +653,7 @@ internal static class StartupDialogs
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             FlowDirection = FlowDirection.RightToLeft,
-            WrapContents = false,
+            WrapContents = true,
             Padding = new Padding(28, 16, 28, 18),
             Margin = new Padding(0),
             BackColor = palette.MenuBackground.GetBrightness() < 0.5f
@@ -369,37 +677,46 @@ internal static class StartupDialogs
         form.Controls.Add(root);
         form.AcceptButton = primary;
         form.CancelButton = secondary ?? primary;
-        form.MinimumSize = new Size(ControlDrawing.ScaleLogical(form, 560), 0);
-
-        if (autoCloseSeconds > 0)
+        void UpdateWrapWidth()
         {
-            int remainingSeconds = autoCloseSeconds;
-            primary.Text = $"{primaryText} ({remainingSeconds})";
-
-            var timer = new System.Windows.Forms.Timer { Interval = 1000 };
-            timer.Tick += (_, _) =>
-            {
-                remainingSeconds--;
-                if (remainingSeconds <= 0)
-                {
-                    timer.Stop();
-                    form.DialogResult = DialogResult.OK;
-                    form.Close();
-                    return;
-                }
-
-                primary.Text = $"{primaryText} ({remainingSeconds})";
-            };
-
-            form.Shown += (_, _) => timer.Start();
-            form.FormClosed += (_, _) => timer.Dispose();
+            int width = Math.Max(ControlDrawing.ScaleLogical(form, 280), form.ClientSize.Width - ControlDrawing.ScaleLogical(form, 64));
+            headingLabel.MaximumSize = new Size(width, 0);
+            bodyLabel.MaximumSize = new Size(width, 0);
         }
+
+        form.ClientSizeChanged += (_, _) => UpdateWrapWidth();
+        form.Shown += (_, _) =>
+        {
+            UpdateWrapWidth();
+            ForceToForeground(form);
+            primary.Focus();
+        };
 
         return form.ShowDialog();
     }
 
     private static Button CreateButton(string text, DialogResult result, ThemePalette palette, bool primary)
     {
+        if (AccessibilityPreferences.HighContrast)
+        {
+            return new Button
+            {
+                Text = text,
+                DialogResult = result,
+                AutoSize = true,
+                Font = ControlDrawing.UiFont("Segoe UI Semibold", 9.5f, FontStyle.Bold),
+                MinimumSize = new Size(ControlDrawing.ScaleLogical(new Control(), 124), ControlDrawing.ScaleLogical(new Control(), 44)),
+                Padding = new Padding(12, 4, 12, 4),
+                Margin = new Padding(8, 0, 0, 0),
+                FlatStyle = FlatStyle.System,
+                BackColor = SystemColors.Control,
+                ForeColor = SystemColors.ControlText,
+                AccessibleRole = AccessibleRole.PushButton,
+                AccessibleName = text,
+                AccessibleDescription = text
+            };
+        }
+
         bool lightPalette = palette.MenuBackground.GetBrightness() > 0.65f;
         Color backColor = primary
             ? (lightPalette ? Color.FromArgb(242, 250, 245) : Color.FromArgb(24, 39, 31))
@@ -423,12 +740,16 @@ internal static class StartupDialogs
             DialogResult = result,
             AutoSize = true,
             Font = ControlDrawing.UiFont("Segoe UI Semibold", 9.5f, FontStyle.Bold),
-            MinimumSize = new Size(ControlDrawing.ScaleLogical(new Control(), 124), ControlDrawing.ScaleLogical(new Control(), 40)),
+            MinimumSize = new Size(ControlDrawing.ScaleLogical(new Control(), 124), ControlDrawing.ScaleLogical(new Control(), 44)),
+            Padding = new Padding(12, 4, 12, 4),
             Margin = new Padding(8, 0, 0, 0),
             FlatStyle = FlatStyle.Flat,
             BackColor = backColor,
             ForeColor = textColor,
             UseVisualStyleBackColor = false,
+            AccessibleRole = AccessibleRole.PushButton,
+            AccessibleName = text,
+            AccessibleDescription = text,
             FlatAppearance =
             {
                 BorderColor = borderColor,
@@ -446,6 +767,44 @@ internal static class StartupDialogs
             2 => 1.28f,
             _ => 1.14f
         };
+    }
+
+    private static void SetResponsiveDialogSize(
+        Form form,
+        int preferredClientWidth,
+        int preferredClientHeight,
+        int minimumClientWidth,
+        int minimumClientHeight)
+    {
+        Rectangle area = Screen.FromPoint(Cursor.Position).WorkingArea;
+        int screenMargin = ControlDrawing.ScaleLogical(form, 24);
+        int maximumWidth = Math.Max(1, area.Width - (screenMargin * 2));
+        int maximumHeight = Math.Max(1, area.Height - (screenMargin * 2));
+        int scaledMinimumWidth = Math.Min(maximumWidth, ControlDrawing.ScaleLogical(form, minimumClientWidth));
+        int scaledMinimumHeight = Math.Min(maximumHeight, ControlDrawing.ScaleLogical(form, minimumClientHeight));
+        int width = Math.Clamp(ControlDrawing.ScaleLogical(form, preferredClientWidth), scaledMinimumWidth, maximumWidth);
+        int height = Math.Clamp(ControlDrawing.ScaleLogical(form, preferredClientHeight), scaledMinimumHeight, maximumHeight);
+
+        form.ClientSize = new Size(width, height);
+        int chromeWidth = Math.Max(0, form.Width - form.ClientSize.Width);
+        int chromeHeight = Math.Max(0, form.Height - form.ClientSize.Height);
+        form.MinimumSize = new Size(scaledMinimumWidth + chromeWidth, scaledMinimumHeight + chromeHeight);
+        form.MaximumSize = new Size(maximumWidth + chromeWidth, maximumHeight + chromeHeight);
+    }
+
+    private static void ForceToForeground(Form form)
+    {
+        form.TopMost = true;
+        form.BringToFront();
+        form.Activate();
+        _ = SetForegroundWindow(form.Handle);
+        form.BeginInvoke((MethodInvoker)(() =>
+        {
+            if (!form.IsDisposed)
+            {
+                form.TopMost = false;
+            }
+        }));
     }
 
     private static int ReadStartupUiFontSize()
@@ -488,32 +847,10 @@ internal static class StartupDialogs
         _ = DwmSetWindowAttribute(hwnd, 19, ref useDark, sizeof(int));
     }
 
-    private static bool GetWindowsAppsUseDarkMode()
-    {
-        const string personalizeKey = @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
-        const string valueName = "AppsUseLightTheme";
-
-        try
-        {
-            using Microsoft.Win32.RegistryKey? key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(personalizeKey);
-            object? value = key?.GetValue(valueName);
-            if (value is int intValue)
-            {
-                return intValue == 0;
-            }
-
-            if (value is long longValue)
-            {
-                return longValue == 0;
-            }
-        }
-        catch
-        {
-            // Fall back to light mode if registry cannot be read.
-        }
-
-        return false;
-    }
+    private static ThemePalette GetStartupPalette() =>
+        AppThemeBootstrap.ShouldUseDarkPalette(AppThemeBootstrap.ReadPersistedThemeMode())
+            ? ThemePalettes.Dark
+            : ThemePalettes.Light;
 
     private sealed class StartupSpinnerControl : Control
     {
@@ -527,7 +864,9 @@ internal static class StartupDialogs
             _palette = palette;
             DoubleBuffered = true;
             BackColor = palette.MenuBackground;
-            _timer = new System.Windows.Forms.Timer { Interval = 16 };
+            AccessibleRole = AccessibleRole.Graphic;
+            TabStop = false;
+            _timer = new System.Windows.Forms.Timer { Interval = 33 };
             _timer.Tick += (_, _) =>
             {
                 _largeAngle = (_largeAngle - 1.9f) % 360f;
@@ -536,7 +875,19 @@ internal static class StartupDialogs
             };
         }
 
-        public void Start() => _timer.Start();
+        public void Start()
+        {
+            if (AccessibilityPreferences.AnimationsEnabled)
+            {
+                _timer.Start();
+            }
+            else
+            {
+                _largeAngle = 0f;
+                _smallAngle = 0f;
+                Invalidate();
+            }
+        }
 
         public void Stop()
         {
@@ -639,6 +990,8 @@ internal static class StartupDialogs
             _palette = palette;
             DoubleBuffered = true;
             BackColor = palette.MenuBackground;
+            AccessibleRole = AccessibleRole.Graphic;
+            TabStop = false;
         }
 
         protected override void OnPaint(PaintEventArgs e)

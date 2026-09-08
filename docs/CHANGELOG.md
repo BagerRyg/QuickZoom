@@ -1,5 +1,9 @@
 # QuickZoom Changelog
 
+## Version 3.0, Build 295
+
+- Promoted QuickZoom to version 3.0 after the settings, tray, accessibility, keyboard-navigation, and visual-refinement work.
+
 ## Version 2, Build 197
 
 - Improved UI startup and interface load times.

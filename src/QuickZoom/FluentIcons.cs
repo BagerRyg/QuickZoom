@@ -15,6 +15,9 @@ internal enum TrayFluentIcon
     FollowCursor,
     Appearance,
     Zoom,
+    ZoomModeFullscreen,
+    ZoomModeLens,
+    ZoomModeDocked,
     MagnifiedDisplays,
     KeyBinds,
     Cursor,
@@ -27,10 +30,21 @@ internal enum TrayFluentIcon
 internal static partial class FluentTrayIcons
 {
     private const float ViewBoxSize = 20f;
+    private static readonly object PathCacheSync = new();
+    private static readonly Dictionary<TrayFluentIcon, GraphicsPath> PathCache = new();
 
     public static GraphicsPath Create(TrayFluentIcon icon)
     {
-        return SvgPathMiniLanguage.Parse(GetPathData(icon));
+        lock (PathCacheSync)
+        {
+            if (!PathCache.TryGetValue(icon, out GraphicsPath? path))
+            {
+                path = SvgPathMiniLanguage.Parse(GetPathData(icon));
+                PathCache[icon] = path;
+            }
+
+            return (GraphicsPath)path.Clone();
+        }
     }
 
     public static string GetPathData(TrayFluentIcon icon) => icon switch
@@ -40,6 +54,9 @@ internal static partial class FluentTrayIcons
         TrayFluentIcon.FollowCursor => "M5 3.05854C5 2.21347 5.98325 1.74939 6.63564 2.28655L17.6418 11.3487C18.3661 11.9451 17.9444 13.1207 17.0061 13.1207H11.4142C10.9788 13.1207 10.5648 13.3099 10.2799 13.6392L6.75622 17.7117C6.15025 18.412 5 17.9835 5 17.0574L5 3.05854ZM17.0061 12.1207L6 3.05854L6 17.0574L9.52369 12.9849C9.99856 12.4361 10.6885 12.1207 11.4142 12.1207H17.0061Z",
         TrayFluentIcon.Appearance => "M10 2C14.4183 2 18 5.13399 18 9C18 11.2091 16.7646 13.0903 14.9958 14.2758C13.9145 14.9999 13.0862 16.0218 12.611 17.2239C12.5407 17.4019 12.3684 17.5186 12.177 17.5186H9.5C5.35786 17.5186 2 14.1607 2 10.0186C2 5.87642 5.35786 2.51855 9.5 2.51855H10V2ZM10 3H9.5C5.91015 3 3 5.91015 3 9.5C3 13.0899 5.91015 16 9.5 16H11.8336C12.4098 14.8135 13.2462 13.8019 14.4398 13.0031C15.9422 11.9967 17 10.3605 17 8.5C17 5.46243 13.866 3 10 3ZM6.75 8.5C7.44036 8.5 8 7.94036 8 7.25C8 6.55964 7.44036 6 6.75 6C6.05964 6 5.5 6.55964 5.5 7.25C5.5 7.94036 6.05964 8.5 6.75 8.5ZM10.5 6.75C10.5 7.44036 11.0596 8 11.75 8C12.4404 8 13 7.44036 13 6.75C13 6.05964 12.4404 5.5 11.75 5.5C11.0596 5.5 10.5 6.05964 10.5 6.75ZM14.75 10.5C14.75 11.1904 14.1904 11.75 13.5 11.75C12.8096 11.75 12.25 11.1904 12.25 10.5C12.25 9.80964 12.8096 9.25 13.5 9.25C14.1904 9.25 14.75 9.80964 14.75 10.5Z",
         TrayFluentIcon.Zoom => "M8.5 3C5.46243 3 3 5.46243 3 8.5C3 11.5376 5.46243 14 8.5 14C9.85462 14 11.0948 13.5102 12.0527 12.6977L16.677 17.322C16.8723 17.5172 17.1888 17.5172 17.3841 17.322C17.5794 17.1268 17.5794 16.8102 17.3841 16.6149L12.7598 11.9906C13.5723 11.0328 14.062 9.79257 14.062 8.43795C14.062 5.40038 11.5996 2.93795 8.56205 2.93795L8.5 3ZM4 8.5C4 6.01472 6.01472 4 8.5 4C10.9853 4 13 6.01472 13 8.5C13 10.9853 10.9853 13 8.5 13C6.01472 13 4 10.9853 4 8.5ZM8.5 6C8.77614 6 9 6.22386 9 6.5V8H10.5C10.7761 8 11 8.22386 11 8.5C11 8.77614 10.7761 9 10.5 9H9V10.5C9 10.7761 8.77614 11 8.5 11C8.22386 11 8 10.7761 8 10.5V9H6.5C6.22386 9 6 8.77614 6 8.5C6 8.22386 6.22386 8 6.5 8H8V6.5C8 6.22386 8.22386 6 8.5 6Z",
+        TrayFluentIcon.ZoomModeFullscreen => "M4 3C2.89543 3 2 3.89543 2 5V15C2 16.1046 2.89543 17 4 17H16C17.1046 17 18 16.1046 18 15V5C18 3.89543 17.1046 3 16 3H4ZM3 5C3 4.44772 3.44772 4 4 4H16C16.5523 4 17 4.44772 17 5V15C17 15.5523 16.5523 16 16 16H4C3.44772 16 3 15.5523 3 15V5ZM5.5 6C5.22386 6 5 6.22386 5 6.5V8.5C5 8.77614 5.22386 9 5.5 9C5.77614 9 6 8.77614 6 8.5V7H7.5C7.77614 7 8 6.77614 8 6.5C8 6.22386 7.77614 6 7.5 6H5.5ZM12.5 6C12.2239 6 12 6.22386 12 6.5C12 6.77614 12.2239 7 12.5 7H14V8.5C14 8.77614 14.2239 9 14.5 9C14.7761 9 15 8.77614 15 8.5V6.5C15 6.22386 14.7761 6 14.5 6H12.5ZM5.5 11C5.22386 11 5 11.2239 5 11.5V13.5C5 13.7761 5.22386 14 5.5 14H7.5C7.77614 14 8 13.7761 8 13.5C8 13.2239 7.77614 13 7.5 13H6V11.5C6 11.2239 5.77614 11 5.5 11ZM14.5 11C14.2239 11 14 11.2239 14 11.5V13H12.5C12.2239 13 12 13.2239 12 13.5C12 13.7761 12.2239 14 12.5 14H14.5C14.7761 14 15 13.7761 15 13.5V11.5C15 11.2239 14.7761 11 14.5 11Z",
+        TrayFluentIcon.ZoomModeLens => "M8.5 3C5.46243 3 3 5.46243 3 8.5C3 11.5376 5.46243 14 8.5 14C9.85462 14 11.0948 13.5102 12.0527 12.6977L16.677 17.322C16.8723 17.5172 17.1888 17.5172 17.3841 17.322C17.5794 17.1268 17.5794 16.8102 17.3841 16.6149L12.7598 11.9906C13.5723 11.0328 14.062 9.79257 14.062 8.43795C14.062 5.40038 11.5996 2.93795 8.56205 2.93795L8.5 3ZM4 8.5C4 6.01472 6.01472 4 8.5 4C10.9853 4 13 6.01472 13 8.5C13 10.9853 10.9853 13 8.5 13C6.01472 13 4 10.9853 4 8.5ZM8.5 6C8.77614 6 9 6.22386 9 6.5V8H10.5C10.7761 8 11 8.22386 11 8.5C11 8.77614 10.7761 9 10.5 9H9V10.5C9 10.7761 8.77614 11 8.5 11C8.22386 11 8 10.7761 8 10.5V9H6.5C6.22386 9 6 8.77614 6 8.5C6 8.22386 6.22386 8 6.5 8H8V6.5C8 6.22386 8.22386 6 8.5 6Z",
+        TrayFluentIcon.ZoomModeDocked => "M4 3C2.89543 3 2 3.89543 2 5V15C2 16.1046 2.89543 17 4 17H16C17.1046 17 18 16.1046 18 15V5C18 3.89543 17.1046 3 16 3H4ZM3 5C3 4.44772 3.44772 4 4 4H16C16.5523 4 17 4.44772 17 5V15C17 15.5523 16.5523 16 16 16H4C3.44772 16 3 15.5523 3 15V5ZM4.5 5.5C4.22386 5.5 4 5.72386 4 6V8.5C4 8.77614 4.22386 9 4.5 9H15.5C15.7761 9 16 8.77614 16 8.5V6C16 5.72386 15.7761 5.5 15.5 5.5H4.5ZM5 6.5H15V8H5V6.5ZM5 11C5 10.7239 5.22386 10.5 5.5 10.5H9.5C9.77614 10.5 10 10.7239 10 11C10 11.2761 9.77614 11.5 9.5 11.5H5.5C5.22386 11.5 5 11.2761 5 11ZM5.5 13C5.22386 13 5 13.2239 5 13.5C5 13.7761 5.22386 14 5.5 14H12.5C12.7761 14 13 13.7761 13 13.5C13 13.2239 12.7761 13 12.5 13H5.5Z",
         TrayFluentIcon.MagnifiedDisplays => "M4 2C2.89543 2 2 2.89543 2 4V13C2 14.1046 2.89543 15 4 15H7V17H5.5C5.22386 17 5 17.2239 5 17.5C5 17.7761 5.22386 18 5.5 18H14.5C14.7761 18 15 17.7761 15 17.5C15 17.2239 14.7761 17 14.5 17H13V15H16C17.1046 15 18 14.1046 18 13V4C18 2.89543 17.1046 2 16 2H4ZM12 15V17H8V15H12ZM3 4C3 3.44772 3.44772 3 4 3H16C16.5523 3 17 3.44772 17 4V13C17 13.5523 16.5523 14 16 14H4C3.44772 14 3 13.5523 3 13V4Z",
         TrayFluentIcon.KeyBinds => "M5 12.5C5 12.2239 5.22386 12 5.5 12H14.5C14.7761 12 15 12.2239 15 12.5C15 12.7761 14.7761 13 14.5 13H5.5C5.22386 13 5 12.7761 5 12.5ZM11.5024 8.00468C11.9179 8.00468 12.2547 7.66783 12.2547 7.25231C12.2547 6.83679 11.9179 6.49994 11.5024 6.49994C11.0868 6.49994 10.75 6.83679 10.75 7.25231C10.75 7.66783 11.0868 8.00468 11.5024 8.00468ZM15.2547 7.25231C15.2547 7.66783 14.9179 8.00468 14.5024 8.00468C14.0868 8.00468 13.75 7.66783 13.75 7.25231C13.75 6.83679 14.0868 6.49994 14.5024 6.49994C14.9179 6.49994 15.2547 6.83679 15.2547 7.25231ZM5.50237 8.00468C5.91789 8.00468 6.25474 7.66783 6.25474 7.25231C6.25474 6.83679 5.91789 6.49994 5.50237 6.49994C5.08685 6.49994 4.75 6.83679 4.75 7.25231C4.75 7.66783 5.08685 8.00468 5.50237 8.00468ZM7.74998 9.75231C7.74998 10.1678 7.41313 10.5047 6.99761 10.5047C6.58209 10.5047 6.24524 10.1678 6.24524 9.75231C6.24524 9.33679 6.58209 8.99994 6.99761 8.99994C7.41313 8.99994 7.74998 9.33679 7.74998 9.75231ZM10.0024 10.5047C10.4179 10.5047 10.7547 10.1678 10.7547 9.75231C10.7547 9.33679 10.4179 8.99994 10.0024 8.99994C9.58685 8.99994 9.25 9.33679 9.25 9.75231C9.25 10.1678 9.58685 10.5047 10.0024 10.5047ZM13.7595 9.75231C13.7595 10.1678 13.4227 10.5047 13.0071 10.5047C12.5916 10.5047 12.2548 10.1678 12.2548 9.75231C12.2548 9.33679 12.5916 8.99994 13.0071 8.99994C13.4227 8.99994 13.7595 9.33679 13.7595 9.75231ZM8.50237 8.00468C8.91789 8.00468 9.25474 7.66783 9.25474 7.25231C9.25474 6.83679 8.91789 6.49994 8.50237 6.49994C8.08685 6.49994 7.75 6.83679 7.75 7.25231C7.75 7.66783 8.08685 8.00468 8.50237 8.00468ZM2 5.5C2 4.67157 2.67157 4 3.5 4H16.5C17.3284 4 18 4.67157 18 5.5V13.5C18 14.3284 17.3284 15 16.5 15H3.5C2.67157 15 2 14.3284 2 13.5V5.5ZM3.5 5C3.22386 5 3 5.22386 3 5.5V13.5C3 13.7761 3.22386 14 3.5 14H16.5C16.7761 14 17 13.7761 17 13.5V5.5C17 5.22386 16.7761 5 16.5 5H3.5Z",
         TrayFluentIcon.Cursor => "M5 3.25V15.25L8.05 12.35L10.2 17L12.15 16.08L9.98 11.42H14.9L5 3.25Z",
@@ -56,6 +73,37 @@ internal static partial class FluentTrayIcons
             ControlDrawing.ScaleLogical(owner, 18),
             ControlDrawing.ScaleLogical(owner, 18));
     }
+
+    public static void Draw(Graphics graphics, GraphicsPath sourcePath, Rectangle drawRect, Color color)
+    {
+        if (drawRect.Width <= 1 || drawRect.Height <= 1)
+        {
+            return;
+        }
+
+        GraphicsState state = graphics.Save();
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+        using GraphicsPath iconPath = (GraphicsPath)sourcePath.Clone();
+        RectangleF sourceBounds = iconPath.GetBounds();
+        float inset = Math.Max(0.5f, Math.Min(drawRect.Width, drawRect.Height) * 0.08f);
+        RectangleF target = RectangleF.Inflate(drawRect, -inset, -inset);
+        float scale = Math.Min(target.Width / SafeDimension(sourceBounds.Width), target.Height / SafeDimension(sourceBounds.Height));
+        float offsetX = target.X + ((target.Width - (sourceBounds.Width * scale)) / 2f) - (sourceBounds.X * scale);
+        float offsetY = target.Y + ((target.Height - (sourceBounds.Height * scale)) / 2f) - (sourceBounds.Y * scale);
+
+        using Matrix matrix = new();
+        matrix.Scale(scale, scale);
+        matrix.Translate(offsetX / scale, offsetY / scale, MatrixOrder.Append);
+        iconPath.Transform(matrix);
+
+        using SolidBrush fill = new(color);
+        graphics.FillPath(fill, iconPath);
+        graphics.Restore(state);
+    }
+
+    private static float SafeDimension(float value) => Math.Max(0.001f, value);
 
     [GeneratedRegex(@"[A-Za-z]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?", RegexOptions.Compiled)]
     private static partial Regex SvgTokenRegex();
@@ -226,6 +274,8 @@ internal sealed class FluentIconControl : Control
             ControlStyles.SupportsTransparentBackColor |
             ControlStyles.UserPaint,
             true);
+        SetStyle(ControlStyles.Selectable, false);
+        TabStop = false;
         BackColor = Color.Transparent;
         Size = new Size(18, 18);
         Margin = new Padding(0);
@@ -248,26 +298,7 @@ internal sealed class FluentIconControl : Control
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
-        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        e.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-
-        RectangleF drawRect = new(0, 0, Width - 1, Height - 1);
-        using var iconPath = (GraphicsPath)_sourcePath.Clone();
-        RectangleF bounds = iconPath.GetBounds();
-
-        float inset = Math.Max(0.5f, Math.Min(drawRect.Width, drawRect.Height) * 0.08f);
-        RectangleF target = RectangleF.Inflate(drawRect, -inset, -inset);
-        float scale = Math.Min(target.Width / ViewBoxSafe(bounds.Width), target.Height / ViewBoxSafe(bounds.Height));
-        float offsetX = target.X + (target.Width - (bounds.Width * scale)) / 2f - (bounds.X * scale);
-        float offsetY = target.Y + (target.Height - (bounds.Height * scale)) / 2f - (bounds.Y * scale);
-
-        using var matrix = new Matrix();
-        matrix.Scale(scale, scale);
-        matrix.Translate(offsetX / scale, offsetY / scale, MatrixOrder.Append);
-        iconPath.Transform(matrix);
-
-        using SolidBrush fill = new(_palette.Text);
-        e.Graphics.FillPath(fill, iconPath);
+        FluentTrayIcons.Draw(e.Graphics, _sourcePath, new Rectangle(0, 0, Width - 1, Height - 1), _palette.Text);
     }
 
     protected override void OnPaintBackground(PaintEventArgs pevent)
@@ -286,5 +317,13 @@ internal sealed class FluentIconControl : Control
         pevent.Graphics.FillRectangle(brush, ClientRectangle);
     }
 
-    private static float ViewBoxSafe(float value) => Math.Max(0.001f, value);
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _sourcePath.Dispose();
+        }
+
+        base.Dispose(disposing);
+    }
 }

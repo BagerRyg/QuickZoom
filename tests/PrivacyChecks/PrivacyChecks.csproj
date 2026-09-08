@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/QuickZoom/LocalStorage.cs" Link="LocalStorage.cs" />
+    <Compile Include="../../src/QuickZoom/FilePersistence.cs" Link="FilePersistence.cs" />
+    <Compile Include="../../src/QuickZoom/ClipboardFreeTextBox.cs" Link="ClipboardFreeTextBox.cs" />
+    <Compile Include="../../src/QuickZoom/ErrorLog.cs" Link="ErrorLog.cs" />
+  </ItemGroup>
+</Project>

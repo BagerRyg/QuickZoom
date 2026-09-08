@@ -33,12 +33,13 @@ internal sealed partial class TrayContext
 
     private void OnUserPreferenceChanged(object? sender, UserPreferenceChangedEventArgs e)
     {
-        if (e.Category is not (UserPreferenceCategory.Color or UserPreferenceCategory.General or UserPreferenceCategory.VisualStyle))
+        if (e.Category is not (UserPreferenceCategory.Accessibility or UserPreferenceCategory.Color or UserPreferenceCategory.General or UserPreferenceCategory.VisualStyle))
         {
             return;
         }
 
-        RunOnUiThread("UserPreferenceChanged", () => ApplyThemePreference(force: false));
+        bool accessibilityChanged = e.Category == UserPreferenceCategory.Accessibility;
+        RunOnUiThread("UserPreferenceChanged", () => ApplyThemePreference(force: accessibilityChanged));
     }
 
     private void ApplyThemePreference(bool force)
@@ -63,6 +64,7 @@ internal sealed partial class TrayContext
     private void SetThemeMode(ThemeMode mode)
     {
         _themeMode = mode;
+        _ = AppThemeBootstrap.TryApplyNativeColorMode((int)mode);
         SaveSettings();
         FlushSettingsSave();
         ApplyThemePreference(force: true);

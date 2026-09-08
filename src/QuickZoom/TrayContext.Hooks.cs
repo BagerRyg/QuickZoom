@@ -9,6 +9,11 @@ namespace QuickZoom;
 internal sealed partial class TrayContext
 {
     private const int WH_MOUSE_LL = 14;
+    private const int WM_MOUSEMOVE = 0x0200;
+    private const int WM_LBUTTONDOWN = 0x0201;
+    private const int WM_LBUTTONUP = 0x0202;
+    private const int WM_RBUTTONDOWN = 0x0204;
+    private const int WM_RBUTTONUP = 0x0205;
     private const int WM_MOUSEWHEEL = 0x020A;
     private const int WM_MBUTTONDOWN = 0x0207;
     private const int WM_XBUTTONDOWN = 0x020B;
@@ -17,6 +22,11 @@ internal sealed partial class TrayContext
     private const int WM_KEYUP = 0x0101;
     private const int WM_SYSKEYDOWN = 0x0104;
     private const int WM_SYSKEYUP = 0x0105;
+    private const uint LLKHF_EXTENDED = 0x01;
+    private const uint INPUT_KEYBOARD = 1;
+    private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
+    private const uint KEYEVENTF_KEYUP = 0x0002;
+    private static readonly IntPtr ShortcutReplayExtraInfo = new(unchecked((long)0x515A535550505245UL));
 
     private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
     private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
@@ -32,6 +42,9 @@ internal sealed partial class TrayContext
 
     [DllImport("user32.dll")]
     private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint cInputs, INPUT[] pInputs, int cbSize);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     private static extern IntPtr GetModuleHandle(string lpModuleName);
@@ -57,6 +70,50 @@ internal sealed partial class TrayContext
         public uint flags;
         public uint time;
         public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct INPUT
+    {
+        public uint type;
+        public INPUTUNION data;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    private struct INPUTUNION
+    {
+        [FieldOffset(0)] public MOUSEINPUT mouse;
+        [FieldOffset(0)] public KEYBDINPUT keyboard;
+        [FieldOffset(0)] public HARDWAREINPUT hardware;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MOUSEINPUT
+    {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KEYBDINPUT
+    {
+        public ushort wVk;
+        public ushort wScan;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct HARDWAREINPUT
+    {
+        public uint uMsg;
+        public ushort wParamL;
+        public ushort wParamH;
     }
 
     private void InstallHook()
@@ -98,6 +155,11 @@ internal sealed partial class TrayContext
         catch (Exception ex)
         {
             _wheelDeltaRemainder = 0;
+            _leftMouseButtonPressed = false;
+            _rightMouseButtonPressed = false;
+            _zoomModeMouseChordTriggered = false;
+            _suppressLeftMouseButtonUp = false;
+            _suppressRightMouseButtonUp = false;
             ErrorLog.WriteThrottled("MouseHook", ex);
             return CallNextHookEx(_hook, nCode, wParam, lParam);
         }
@@ -105,24 +167,27 @@ internal sealed partial class TrayContext
 
     private IntPtr HookCallbackCore(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (!_enabled && !_invertEnabled)
+        if (nCode >= 0 && wParam.ToInt32() == WM_MOUSEMOVE && _wiggleSpotlightEnabled)
         {
-            _enableKeyPressed = false;
-            _invertKeyPressed = false;
-            _followCursorKeyPressed = false;
-            _wheelDeltaRemainder = 0;
-            return CallNextHookEx(_hook, nCode, wParam, lParam);
+            MSLLHOOKSTRUCT movement = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
+            RecordCursorMovementForSpotlight(new Point(movement.pt.X, movement.pt.Y));
         }
 
         if (nCode >= 0)
         {
             int message = wParam.ToInt32();
 
+            if (TryHandleZoomModeMouseChord(message))
+            {
+                return (IntPtr)1;
+            }
+
             if (_invertEnabled &&
                 MouseShortcutsAllowed() &&
                 (message == WM_MBUTTONDOWN || message == WM_XBUTTONDOWN) &&
                 MatchesInvertMouseTrigger(Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam), message))
             {
+                MarkEnableKeyUsedByQuickZoom();
                 ToggleInvertColors();
                 return (IntPtr)1;
             }
@@ -138,12 +203,18 @@ internal sealed partial class TrayContext
                     _wheelDeltaRemainder %= 120;
                     detents = Math.Max(-3, Math.Min(3, detents));
 
+                    MarkEnableKeyUsedByQuickZoom();
                     HandleZoomDetents(detents);
                     return (IntPtr)1;
                 }
 
                 _wheelDeltaRemainder = 0;
             }
+        }
+
+        if (!_enabled && !_invertEnabled)
+        {
+            _wheelDeltaRemainder = 0;
         }
 
         return CallNextHookEx(_hook, nCode, wParam, lParam);
@@ -160,7 +231,11 @@ internal sealed partial class TrayContext
             _enableKeyPressed = false;
             _invertKeyPressed = false;
             _followCursorKeyPressed = false;
+            _zoomModeCycleKeyPressed = false;
             _controlKeyPressed = false;
+            _altGrPressed = false;
+            ResetEnableKeySuppressionState();
+            _suppressedShortcutKeyUps.Clear();
             _wheelDeltaRemainder = 0;
             ErrorLog.WriteThrottled("KeyboardHook", ex);
             return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
@@ -169,15 +244,6 @@ internal sealed partial class TrayContext
 
     private IntPtr KeyboardHookCallbackCore(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (!_enabled && !_invertEnabled && !KeyboardShortcutsAllowed())
-        {
-            _enableKeyPressed = false;
-            _invertKeyPressed = false;
-            _followCursorKeyPressed = false;
-            _controlKeyPressed = false;
-            return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
-        }
-
         if (nCode < 0)
         {
             return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
@@ -186,6 +252,11 @@ internal sealed partial class TrayContext
         int message = wParam.ToInt32();
         var data = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
         int vk = (int)data.vkCode;
+        if (data.dwExtraInfo == ShortcutReplayExtraInfo)
+        {
+            return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
+        }
+
         if (vk == (int)Keys.PrintScreen && IsQuickZoomForeground())
         {
             return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
@@ -198,20 +269,80 @@ internal sealed partial class TrayContext
                 _controlKeyPressed = true;
             }
 
-            if (IsAltGrKey(vk))
+            if (vk == (int)Keys.RMenu && _controlKeyPressed)
+            {
+                _altGrPressed = true;
+                if (TryReplaySuppressedEnableKeyWith(data))
+                {
+                    return (IntPtr)1;
+                }
+
+                return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
+            }
+
+            if (_altGrPressed)
             {
                 return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
             }
 
-            if ((_enabled || _invertEnabled) && IsEnableKeyMatch(_enableKey, vk))
+            if (_controlKeyPressed &&
+                IsAltEnableKey() &&
+                IsEnableKeyMatch(_enableKey, vk))
             {
+                return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
+            }
+
+            if (IsEnableKeyMatch(_enableKey, vk))
+            {
+                bool wasAlreadyPressed = _enableKeyPressed;
                 _enableKeyPressed = true;
 
-                if (ShouldSuppressEnableKey())
+                if (_suppressShortcutKeystrokes)
                 {
-                    _suppressEnableKeyForForeground = true;
+                    if (!_enableKeyDownSuppressed)
+                    {
+                        BeginEnableKeySuppression(data);
+                    }
+                    else if (wasAlreadyPressed &&
+                             !_enableKeyUsedByQuickZoom &&
+                             !_replayedEnableKeyDown &&
+                             TryReplaySuppressedEnableKeyDown())
+                    {
+                        return (IntPtr)1;
+                    }
+
+                    if (_enableKeyDownSuppressed && !_replayedEnableKeyDown)
+                    {
+                        return (IntPtr)1;
+                    }
+                }
+            }
+
+            bool zoomModeCyclePressed = KeyboardShortcutsAllowed() &&
+                                        _enableKeyPressed &&
+                                        !IsEnableKeyMatch(_enableKey, vk) &&
+                                        vk == (int)Keys.Z;
+            if (zoomModeCyclePressed)
+            {
+                if (!_zoomModeCycleKeyPressed)
+                {
+                    _zoomModeCycleKeyPressed = true;
+                    CycleZoomModeShortcut();
+                }
+
+                MarkEnableKeyUsedByQuickZoom();
+                _suppressedShortcutKeyUps.Add(vk);
+                return (IntPtr)1;
+            }
+
+            if (_enableKeyPressed && IsProtectedAltShortcut(vk))
+            {
+                if (TryReplaySuppressedEnableKeyWith(data))
+                {
                     return (IntPtr)1;
                 }
+
+                return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
             }
 
             bool invertKeyPressed = _invertEnabled &&
@@ -228,6 +359,8 @@ internal sealed partial class TrayContext
                     ToggleInvertColors();
                 }
 
+                MarkEnableKeyUsedByQuickZoom();
+                _suppressedShortcutKeyUps.Add(vk);
                 return (IntPtr)1;
             }
 
@@ -244,6 +377,8 @@ internal sealed partial class TrayContext
                     SetFollowCursor(!_followCursor);
                 }
 
+                MarkEnableKeyUsedByQuickZoom();
+                _suppressedShortcutKeyUps.Add(vk);
                 return (IntPtr)1;
             }
 
@@ -256,21 +391,45 @@ internal sealed partial class TrayContext
 
                 if (vk == VK_OEM_PLUS || vk == VK_ADD)
                 {
+                    MarkEnableKeyUsedByQuickZoom();
+                    _suppressedShortcutKeyUps.Add(vk);
                     HandleZoomDetents(+1);
                     return (IntPtr)1;
                 }
 
                 if (vk == VK_OEM_MINUS || vk == VK_SUBTRACT)
                 {
+                    MarkEnableKeyUsedByQuickZoom();
+                    _suppressedShortcutKeyUps.Add(vk);
                     HandleZoomDetents(-1);
                     return (IntPtr)1;
                 }
             }
+
+            if (_enableKeyPressed &&
+                _enableKeyDownSuppressed &&
+                !_enableKeyUsedByQuickZoom &&
+                !_replayedEnableKeyDown &&
+                TryReplaySuppressedEnableKeyWith(data))
+            {
+                return (IntPtr)1;
+            }
         }
         else if (message == WM_KEYUP || message == WM_SYSKEYUP)
         {
-            if (IsAltGrKey(vk))
+            if (vk == (int)Keys.RMenu && _altGrPressed)
             {
+                _altGrPressed = false;
+                return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
+            }
+
+            if (_altGrPressed)
+            {
+                if (IsControlKey(vk))
+                {
+                    _controlKeyPressed = false;
+                }
+
                 return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
             }
 
@@ -279,38 +438,43 @@ internal sealed partial class TrayContext
                 _controlKeyPressed = false;
             }
 
-            if ((_enabled || _invertEnabled) && IsEnableKeyMatch(_enableKey, vk))
+            if (_enableKeyPressed && IsEnableKeyMatch(_enableKey, vk))
             {
+                bool keyDownWasSuppressed = _enableKeyDownSuppressed;
+                bool keyDownWasReplayed = _replayedEnableKeyDown;
+                bool keyWasUsedByQuickZoom = _enableKeyUsedByQuickZoom;
                 _enableKeyPressed = false;
                 _wheelDeltaRemainder = 0;
 
-                if (_suppressEnableKeyForForeground)
+                if (keyDownWasSuppressed && !keyDownWasReplayed && !keyWasUsedByQuickZoom)
                 {
-                    _suppressEnableKeyForForeground = false;
+                    _ = TryReplaySuppressedEnableKeyPress();
+                }
+
+                ResetEnableKeySuppressionState();
+                if (keyDownWasSuppressed && !keyDownWasReplayed)
+                {
                     return (IntPtr)1;
                 }
             }
 
-            bool invertKeyReleased = _invertEnabled &&
-                                     KeyboardShortcutsAllowed() &&
-                                     !IsEnableKeyMatch(_enableKey, vk) &&
-                                     IsInvertKeyMatch(vk) &&
-                                     _enableKeyPressed;
-
-            if (invertKeyReleased)
+            if (_suppressedShortcutKeyUps.Remove(vk))
             {
-                _invertKeyPressed = false;
-                return (IntPtr)1;
-            }
+                if (IsInvertKeyMatch(vk))
+                {
+                    _invertKeyPressed = false;
+                }
 
-            bool followCursorKeyReleased = KeyboardShortcutsAllowed() &&
-                                           !IsEnableKeyMatch(_enableKey, vk) &&
-                                           IsFollowCursorKeyMatch(vk) &&
-                                           _enableKeyPressed;
+                if (IsFollowCursorKeyMatch(vk))
+                {
+                    _followCursorKeyPressed = false;
+                }
 
-            if (followCursorKeyReleased)
-            {
-                _followCursorKeyPressed = false;
+                if (vk == (int)Keys.Z)
+                {
+                    _zoomModeCycleKeyPressed = false;
+                }
+
                 return (IntPtr)1;
             }
         }
@@ -336,63 +500,147 @@ internal sealed partial class TrayContext
         return vk == (int)Keys.ControlKey || vk == (int)Keys.LControlKey || vk == (int)Keys.RControlKey;
     }
 
-    private bool IsAltGrKey(int vk)
-    {
-        return vk == (int)Keys.RMenu && _controlKeyPressed;
-    }
-
     private bool IsAltEnableKey()
     {
         return _enableKey == Keys.Menu || _enableKey == Keys.LMenu || _enableKey == Keys.RMenu;
     }
 
-    private bool IsWindowsEnableKey()
+    private bool IsProtectedAltShortcut(int vk)
     {
-        return _enableKey == Keys.LWin || _enableKey == Keys.RWin;
+        return IsAltEnableKey() &&
+               (vk == (int)Keys.F4 || (vk == (int)Keys.Delete && _controlKeyPressed));
     }
 
-    private bool ShouldSuppressEnableKey()
+    private void BeginEnableKeySuppression(KBDLLHOOKSTRUCT data)
     {
-        if (IsWindowsEnableKey())
+        _enableKeyDownSuppressed = true;
+        _enableKeyUsedByQuickZoom = false;
+        _replayedEnableKeyDown = false;
+        _suppressedEnableVirtualKey = (int)data.vkCode;
+        _suppressedEnableScanCode = (int)data.scanCode;
+        _suppressedEnableExtended = (data.flags & LLKHF_EXTENDED) != 0;
+    }
+
+    private void MarkEnableKeyUsedByQuickZoom()
+    {
+        if (_enableKeyDownSuppressed)
+        {
+            _enableKeyUsedByQuickZoom = true;
+        }
+    }
+
+    private void ResetEnableKeySuppressionState()
+    {
+        _enableKeyDownSuppressed = false;
+        _enableKeyUsedByQuickZoom = false;
+        _replayedEnableKeyDown = false;
+        _suppressedEnableVirtualKey = 0;
+        _suppressedEnableScanCode = 0;
+        _suppressedEnableExtended = false;
+    }
+
+    private bool TryReplaySuppressedEnableKeyDown()
+    {
+        if (!_enableKeyDownSuppressed || _replayedEnableKeyDown)
+        {
+            return false;
+        }
+
+        bool sent = TrySendKeyboardInputs(CreateKeyboardInput(
+            _suppressedEnableVirtualKey,
+            _suppressedEnableScanCode,
+            _suppressedEnableExtended,
+            keyUp: false));
+        if (sent)
+        {
+            _replayedEnableKeyDown = true;
+        }
+
+        return sent;
+    }
+
+    private bool TryReplaySuppressedEnableKeyWith(KBDLLHOOKSTRUCT currentKey)
+    {
+        if (!_enableKeyDownSuppressed || _replayedEnableKeyDown || _enableKeyUsedByQuickZoom)
+        {
+            return false;
+        }
+
+        bool sent = TrySendKeyboardInputs(
+            CreateKeyboardInput(
+                _suppressedEnableVirtualKey,
+                _suppressedEnableScanCode,
+                _suppressedEnableExtended,
+                keyUp: false),
+            CreateKeyboardInput(
+                (int)currentKey.vkCode,
+                (int)currentKey.scanCode,
+                (currentKey.flags & LLKHF_EXTENDED) != 0,
+                keyUp: false));
+        if (sent)
+        {
+            _replayedEnableKeyDown = true;
+        }
+
+        return sent;
+    }
+
+    private bool TryReplaySuppressedEnableKeyPress()
+    {
+        if (!_enableKeyDownSuppressed || _replayedEnableKeyDown)
+        {
+            return false;
+        }
+
+        return TrySendKeyboardInputs(
+            CreateKeyboardInput(
+                _suppressedEnableVirtualKey,
+                _suppressedEnableScanCode,
+                _suppressedEnableExtended,
+                keyUp: false),
+            CreateKeyboardInput(
+                _suppressedEnableVirtualKey,
+                _suppressedEnableScanCode,
+                _suppressedEnableExtended,
+                keyUp: true));
+    }
+
+    private static INPUT CreateKeyboardInput(int virtualKey, int scanCode, bool extended, bool keyUp)
+    {
+        uint flags = extended ? KEYEVENTF_EXTENDEDKEY : 0;
+        if (keyUp)
+        {
+            flags |= KEYEVENTF_KEYUP;
+        }
+
+        return new INPUT
+        {
+            type = INPUT_KEYBOARD,
+            data = new INPUTUNION
+            {
+                keyboard = new KEYBDINPUT
+                {
+                    wVk = (ushort)virtualKey,
+                    wScan = (ushort)scanCode,
+                    dwFlags = flags,
+                    dwExtraInfo = ShortcutReplayExtraInfo
+                }
+            }
+        };
+    }
+
+    private static bool TrySendKeyboardInputs(params INPUT[] inputs)
+    {
+        uint sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        if (sent == inputs.Length)
         {
             return true;
         }
 
-        return ShouldSuppressEnableKeyForForeground();
-    }
-
-    private bool ShouldSuppressEnableKeyForForeground()
-    {
-        if (!_suppressAltKeyInOfficeApps || !IsAltEnableKey() || !MouseShortcutsAllowed())
-        {
-            return false;
-        }
-
-        IntPtr foreground = GetForegroundWindow();
-        if (foreground == IntPtr.Zero)
-        {
-            return false;
-        }
-
-        GetWindowThreadProcessId(foreground, out uint processId);
-        if (processId == 0)
-        {
-            return false;
-        }
-
-        try
-        {
-            using Process process = Process.GetProcessById((int)processId);
-            return IsOfficeProcessName(process.ProcessName);
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
+        ErrorLog.WriteThrottled(
+            "ShortcutSuppression.SendInput",
+            new Win32Exception(Marshal.GetLastWin32Error(), "Could not replay a non-QuickZoom keyboard shortcut."));
+        return false;
     }
 
     private static bool IsQuickZoomForeground()
@@ -405,18 +653,6 @@ internal sealed partial class TrayContext
 
         GetWindowThreadProcessId(foreground, out uint processId);
         return processId == Environment.ProcessId;
-    }
-
-    private static bool IsOfficeProcessName(string processName)
-    {
-        return processName.Equals("OUTLOOK", StringComparison.OrdinalIgnoreCase) ||
-               processName.Equals("WINWORD", StringComparison.OrdinalIgnoreCase) ||
-               processName.Equals("EXCEL", StringComparison.OrdinalIgnoreCase) ||
-               processName.Equals("POWERPNT", StringComparison.OrdinalIgnoreCase) ||
-               processName.Equals("ONENOTE", StringComparison.OrdinalIgnoreCase) ||
-               processName.Equals("MSACCESS", StringComparison.OrdinalIgnoreCase) ||
-               processName.Equals("MSPUB", StringComparison.OrdinalIgnoreCase) ||
-               processName.Equals("VISIO", StringComparison.OrdinalIgnoreCase);
     }
 
     private bool IsInvertKeyMatch(int vk)
@@ -437,6 +673,76 @@ internal sealed partial class TrayContext
         }
 
         return message == WM_MBUTTONDOWN;
+    }
+
+    private bool TryHandleZoomModeMouseChord(int message)
+    {
+        bool leftEvent = message is WM_LBUTTONDOWN or WM_LBUTTONUP;
+        bool rightEvent = message is WM_RBUTTONDOWN or WM_RBUTTONUP;
+        if (!leftEvent && !rightEvent)
+        {
+            return false;
+        }
+
+        if (message == WM_LBUTTONDOWN)
+        {
+            _leftMouseButtonPressed = true;
+        }
+        else if (message == WM_LBUTTONUP)
+        {
+            _leftMouseButtonPressed = false;
+        }
+        else if (message == WM_RBUTTONDOWN)
+        {
+            _rightMouseButtonPressed = true;
+        }
+        else
+        {
+            _rightMouseButtonPressed = false;
+        }
+
+        bool suppress = false;
+        if (_enableKeyPressed && MouseShortcutsAllowed())
+        {
+            if (message == WM_LBUTTONDOWN)
+            {
+                _suppressLeftMouseButtonUp = true;
+                suppress = true;
+            }
+            else if (message == WM_RBUTTONDOWN)
+            {
+                _suppressRightMouseButtonUp = true;
+                suppress = true;
+            }
+
+            if (_leftMouseButtonPressed &&
+                _rightMouseButtonPressed &&
+                !_zoomModeMouseChordTriggered)
+            {
+                _zoomModeMouseChordTriggered = true;
+                MarkEnableKeyUsedByQuickZoom();
+                CycleZoomModeShortcut();
+                suppress = true;
+            }
+        }
+
+        if (message == WM_LBUTTONUP && _suppressLeftMouseButtonUp)
+        {
+            _suppressLeftMouseButtonUp = false;
+            suppress = true;
+        }
+        else if (message == WM_RBUTTONUP && _suppressRightMouseButtonUp)
+        {
+            _suppressRightMouseButtonUp = false;
+            suppress = true;
+        }
+
+        if (!_leftMouseButtonPressed && !_rightMouseButtonPressed)
+        {
+            _zoomModeMouseChordTriggered = false;
+        }
+
+        return suppress;
     }
 
     private void ToggleInvertColors()
@@ -466,10 +772,11 @@ internal sealed partial class TrayContext
 
         ResetExitConfirmation();
 
-        int basePercent = _smoothZoom ? _animTargetPercent : _zoomPercent;
-        int newTarget = Math.Max(MinPercent, Math.Min(_maxPercent, basePercent + (detents * _stepPercent)));
+        bool animateZoom = _smoothZoom && AccessibilityPreferences.AnimationsEnabled;
+        int basePercent = animateZoom ? _animTargetPercent : _zoomPercent;
+        int newTarget = Math.Clamp(basePercent + (detents * _stepPercent), MinPercent, _maxPercent);
 
-        if (_smoothZoom)
+        if (animateZoom)
         {
             // Avoid perceived delay when stepping up from 100% with smooth animation.
             if (_zoomPercent <= 100 && newTarget > 100)

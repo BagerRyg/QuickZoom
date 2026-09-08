@@ -10,10 +10,8 @@ internal static class AppPaths
         "QuickZoom",
         "settings.json");
 
-    internal static string LegacySettingsPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "QuickZoom",
-        "settings.json");
+    // Do not consult roaming profiles: they may be backed by a remote server.
+    internal static string LegacySettingsPath => SettingsPath;
 
     internal static string RuntimeLogPath => Path.Combine(AppContext.BaseDirectory, "quickzoom-error.log");
 
