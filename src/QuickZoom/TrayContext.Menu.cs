@@ -13,6 +13,7 @@ namespace QuickZoom;
 internal sealed partial class TrayContext
 {
     private const int TrayContentLogicalWidth = 320;
+    private Func<bool> _restoreSystemCursors = () => SystemParametersInfo(SPI_SETCURSORS, 0, IntPtr.Zero, 0);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
@@ -90,6 +91,7 @@ internal sealed partial class TrayContext
         {
             BuildMenuAndTray();
             _startupInitialized = true;
+            _startupReadyMarker ??= StartupHandoff.MarkReady();
             SignalStartupReady();
         }
         catch (Exception ex)
@@ -429,8 +431,8 @@ internal sealed partial class TrayContext
         }
         else
         {
-            popup.LayoutForCapture(anchor);
             popup.ShowForCapture();
+            popup.LayoutForCapture(anchor);
         }
     }
 
@@ -671,8 +673,9 @@ internal sealed partial class TrayContext
 
         try
         {
-            _trayPopup.Close();
-            _trayPopup.Dispose();
+            TrayPopupWindow popup = _trayPopup;
+            popup.Close();
+            popup.Dispose();
         }
         catch
         {
@@ -734,7 +737,12 @@ internal sealed partial class TrayContext
 
     private async void RefreshStartupServiceStatusLabelAsync()
     {
-        await Task.Run(() => StartupTaskService.GetStatusInfo(forceRefresh: true));
+        try { await Task.Run(() => StartupTaskService.GetStatusInfo(forceRefresh: true)); }
+        catch (Exception ex)
+        {
+            ErrorLog.WriteThrottled("Tray.StartupStatusRefresh", ex);
+            return;
+        }
         RunOnUiThread("Tray.StartupStatusRefresh", () =>
         {
             UpdateStartupServiceStatusLabel();
@@ -957,7 +965,7 @@ internal sealed partial class TrayContext
 
     private bool ShouldRunFollowTimer()
     {
-        return _enabled &&
+        return !_runtimeStopped && _enabled &&
                _magActive &&
                _zoomPercent > 100 &&
                (_followCursor || _zoomMode != ZoomMode.Fullscreen);
@@ -1016,9 +1024,9 @@ internal sealed partial class TrayContext
 
         if (!isVisible)
         {
-            if (_recentCursorSamples.Count == 0)
-                _cursorSpotlightTimer?.Stop();
             RestoreSystemCursorVisibility();
+            if (_recentCursorSamples.Count == 0 && !_cursorSpotlightHidesSystemCursor && !_cursorSpotlightOverridesSystemCursors)
+                _cursorSpotlightTimer?.Stop();
             if (_trayPopup != null && !_trayPopup.IsDisposed)
             {
                 _trayPopup.IgnoreDeactivateClose = false;
@@ -1173,13 +1181,20 @@ internal sealed partial class TrayContext
 
     private void RestoreSystemCursorVisibility()
     {
-        if (!_cursorSpotlightHidesSystemCursor)
+        if (!_cursorSpotlightHidesSystemCursor && !_cursorSpotlightOverridesSystemCursors)
         {
             return;
         }
 
-        RestoreSystemCursorScheme();
-        _cursorSpotlightHidesSystemCursor = false;
+        if (RestoreSystemCursorScheme())
+        {
+            _cursorSpotlightHidesSystemCursor = false;
+        }
+        else
+        {
+            // A failed native restore must remain pending even after spotlight expires.
+            _cursorSpotlightTimer?.Start();
+        }
     }
 
     private void TryApplyTransparentSystemCursors()
@@ -1205,9 +1220,9 @@ internal sealed partial class TrayContext
                     _ = DestroyIcon(blankCursor);
                     throw new InvalidOperationException($"SetSystemCursor failed for OCR value {cursorId} with Win32 error {error}.");
                 }
-            }
 
-            _cursorSpotlightOverridesSystemCursors = true;
+                _cursorSpotlightOverridesSystemCursors = true;
+            }
         }
         catch (Exception ex)
         {
@@ -1216,20 +1231,24 @@ internal sealed partial class TrayContext
         }
     }
 
-    private void RestoreSystemCursorScheme(bool reapplyCursorEnhancement = true)
+    private bool RestoreSystemCursorScheme(bool reapplyCursorEnhancement = true)
     {
-        if (!SystemParametersInfo(SPI_SETCURSORS, 0, IntPtr.Zero, 0))
+        if (!_restoreSystemCursors())
         {
             ErrorLog.WriteThrottled("CursorRestore", new Win32Exception(Marshal.GetLastWin32Error()));
+            return false;
         }
 
         _cursorSpotlightOverridesSystemCursors = false;
+        _cursorSpotlightHidesSystemCursor = false;
         _cursorEnhancementApplied = false;
 
         if (reapplyCursorEnhancement && _cursorEnhancementEnabled && !_applyingCursorEnhancement)
         {
             ApplyCursorEnhancement();
         }
+
+        return true;
     }
 
     private static IntPtr CreateTransparentCursor(int width, int height)

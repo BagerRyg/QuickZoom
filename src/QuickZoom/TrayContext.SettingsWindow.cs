@@ -100,7 +100,8 @@ internal sealed partial class TrayContext
             BuildSettingsSearchEntries(),
             L("Settings.SearchPlaceholder"),
             L("Settings.SearchNoResults"),
-            L("Settings.SearchAccessibleDescription"));
+            L("Settings.SearchAccessibleDescription"),
+            L("Settings.NavigationLabels"));
         bool rightToLeft = UiText.IsRightToLeft(_language);
         form.RightToLeft = rightToLeft ? RightToLeft.Yes : RightToLeft.No;
         form.RightToLeftLayout = rightToLeft;
@@ -336,6 +337,8 @@ internal sealed partial class TrayContext
 
         Add(SettingsPage.About, "Settings.AboutBuildStartup", "Settings.AboutDescription");
         Add(SettingsPage.About, "Settings.AboutLocations", "Settings.AboutLocationsHelp");
+        Add(SettingsPage.About, "Settings.StrictDataMode", "Settings.StrictDataModeHelp");
+        Add(SettingsPage.About, "Settings.DebugLogging", "Settings.DebugLoggingHelp");
         Add(SettingsPage.About, "Settings.UsageHelp", "About.HowToUseDetailed");
 
         return entries;
@@ -488,7 +491,7 @@ internal sealed partial class TrayContext
             RefreshMenuAndTrayUi();
         }, rightColumnWidth: 96));
 
-        _displaySelectionSettingsSection = new SettingsSection(palette, L("Settings.DisplaySelectionSection"), string.Empty);
+        _displaySelectionSettingsSection = new SettingsSection(palette, string.Empty, string.Empty);
         _displaySelectionSettingsSection.AddRow(CreateTextTileRow(L("Settings.Loading"), string.Empty));
         StartDisplaySelectionLoad(page);
 
@@ -516,15 +519,21 @@ internal sealed partial class TrayContext
 
     private async Task LoadDisplaySelectionSettingsAsync(Control owner)
     {
-        List<DisplayMonitorSettingsInfo> monitors = await Task.Run(GetDisplayMonitorSettingsInfos);
+        List<DisplayMonitorSettingsInfo> monitors;
+        try { monitors = await Task.Run(GetDisplayMonitorSettingsInfos); }
+        catch (Exception ex)
+        {
+            ErrorLog.WriteThrottled("Settings.DisplayLoad", ex);
+            return;
+        }
         if (owner.IsDisposed || _settingsWindow == null || _settingsWindow.IsDisposed)
         {
             return;
         }
 
-        owner.BeginInvoke((MethodInvoker)(() =>
+        RunOnUiThread("Settings.DisplayLoad", () =>
         {
-            if (owner.IsDisposed || _displaySelectionSettingsSection == null)
+            if (owner.IsDisposed || _displaySelectionSettingsSection == null || _displaySelectionSettingsSection.IsDisposed)
             {
                 return;
             }
@@ -543,7 +552,7 @@ internal sealed partial class TrayContext
             {
                 settingsForm.FitToCurrentPage();
             }
-        }));
+        });
     }
 
     private static List<DisplayMonitorSettingsInfo> GetDisplayMonitorSettingsInfos()
@@ -573,6 +582,11 @@ internal sealed partial class TrayContext
         }
 
         _displaySelectionSettingsSection.ClearRows();
+        Control identifyButton = CreateInlineActionButton(L("Common.IdentifyDisplays"), () =>
+        {
+            if (_settingsWindow is { IsDisposed: false } owner)
+                DisplayIdentifier.Show(owner, CurrentTheme, GetFriendlyScreenLabel);
+        });
         _displaySelectionSettingsSection.AddRow(CreateDropdownRow(
             L("Settings.DisplaySelectionMode"),
             L("Settings.DisplaySelectionModeHelp"),
@@ -587,6 +601,9 @@ internal sealed partial class TrayContext
                 }
             },
             rightColumnWidth: 420));
+        _displaySelectionSettingsSection.AddRow(new SettingsRow(CurrentTheme,
+            L("Settings.IdentifyDisplaysHelp"), string.Empty, identifyButton,
+            rightColumnWidth: Math.Max(260, identifyButton.GetPreferredSize(Size.Empty).Width + 24)));
 
         if (GetDisplaySelectionMode() != DisplaySelectionMode.CustomSelection)
         {
@@ -663,7 +680,7 @@ internal sealed partial class TrayContext
     {
         ThemePalette palette = CurrentTheme;
         var page = new ZoomSettingsPageView(palette, L("Settings.ZoomTitle"), L("Settings.ZoomDescription"));
-        var modeSection = new SettingsSection(palette, L("Settings.ZoomModeSection"), string.Empty);
+        var modeSection = new SettingsSection(palette, string.Empty, string.Empty);
         _settingsZoomModeSection = modeSection;
         modeSection.AddRow(CreateZoomModeButtonRow());
 
@@ -758,6 +775,7 @@ internal sealed partial class TrayContext
                 _recentCursorSamples.Clear();
                 _cursorSpotlightVisibleUntilTick = 0;
                 _cursorSpotlightOverlay?.HideSpotlight();
+                RestoreSystemCursorVisibility();
             }
 
             SaveSettings();
@@ -769,6 +787,13 @@ internal sealed partial class TrayContext
             ApplyCursorEnhancementIfNeeded();
             SaveSettings();
         }, rightColumnWidth: 96));
+
+        section.AddRow(new SettingsRow(
+            palette,
+            L("Settings.CursorPreview"),
+            L("Settings.CursorPreviewHelp"),
+            preview,
+            rightColumnWidth: 560));
 
         section.AddRow(CreateSliderRow(
             L("Settings.CursorSize"),
@@ -815,13 +840,6 @@ internal sealed partial class TrayContext
             });
         section.AddRow(borderColorRow);
         UpdateCursorContrastWarning();
-
-        section.AddRow(new SettingsRow(
-            palette,
-            L("Settings.CursorPreview"),
-            L("Settings.CursorPreviewHelp"),
-            preview,
-            rightColumnWidth: 560));
 
         page.AddSection(section);
         return page;
@@ -931,6 +949,7 @@ internal sealed partial class TrayContext
 
                 _enableKey = key.Value;
                 _enableKeyPressed = false;
+                ResetTrackedModifierKeys();
                 ResetEnableKeySuppressionState();
                 _suppressedShortcutKeyUps.Clear();
                 SaveSettings();
@@ -1034,9 +1053,80 @@ internal sealed partial class TrayContext
             L("About.HowToUseDetailed")));
 
         page.AddSection(overviewSection);
+        page.AddSection(BuildDiagnosticsSection(page));
         StartAboutLoad(page, overviewSection);
         return page;
     }
+
+    private string DiagnosticLogPath => Path.Combine(Path.GetDirectoryName(_settingsPath)!, "quickzoom-error.log");
+
+    private SettingsSection BuildDiagnosticsSection(Control owner)
+    {
+        var section = new SettingsSection(CurrentTheme, L("Settings.PrivacyDiagnostics"), string.Empty);
+        ToggleSwitchControl? loggingToggle = null;
+        Control showLog = CreateInlineActionButton(L("About.OpenLog"), () =>
+        {
+            try
+            {
+                LocalStorage.RequireLocalPath(DiagnosticLogPath);
+                if (File.Exists(DiagnosticLogPath)) OpenFileLocation(DiagnosticLogPath);
+            }
+            catch { ShowLoggingFailure(); }
+        });
+        void UpdateControls()
+        {
+            if (loggingToggle != null)
+            {
+                loggingToggle.Enabled = !_strictDataMode;
+                loggingToggle.IsOn = !_strictDataMode && _debugLoggingEnabled;
+            }
+            showLog.Enabled = File.Exists(DiagnosticLogPath);
+        }
+        section.AddRow(CreateToggleRow(L("Settings.StrictDataMode"), L("Settings.StrictDataModeHelp"),
+            _strictDataMode, enabled =>
+            {
+                _strictDataMode = enabled;
+                if (enabled)
+                {
+                    ErrorLog.Stop();
+                    _debugLoggingEnabled = false;
+                }
+                SaveSettings();
+                UpdateControls();
+            }));
+        section.AddRow(CreateToggleRow(L("Settings.DebugLogging"), L("Settings.DebugLoggingHelp"),
+            _debugLoggingEnabled, enabled =>
+            {
+                bool started = !enabled || ErrorLog.StartSession(_strictDataMode, DiagnosticLogPath, AppInfo.ProductVersion);
+                if (!enabled) ErrorLog.Stop();
+                _debugLoggingEnabled = enabled && started;
+                UpdateControls();
+                if (!started) ShowLoggingFailure();
+            }, onCreated: (toggle, _) => loggingToggle = toggle));
+        section.AddRow(CreateInfoRow(L("Settings.DiagnosticFiles"), L("Settings.DiagnosticFilesHelp"),
+            string.Empty, showLog, 190));
+        UpdateControls();
+
+        // Report disk/permission failures without logging recursively or leaving an
+        // apparently enabled switch after the writer has stopped itself.
+        if (!_screenshotMode)
+        {
+            var timer = new System.Windows.Forms.Timer { Interval = 1000 };
+            timer.Tick += (_, _) =>
+            {
+                if (!_debugLoggingEnabled || ErrorLog.IsEnabled) return;
+                _debugLoggingEnabled = false;
+                UpdateControls();
+                ShowLoggingFailure();
+            };
+            owner.Disposed += (_, _) => timer.Dispose();
+            timer.Start();
+        }
+        return section;
+    }
+
+    private void ShowLoggingFailure() => StartupDialogs.ShowWarning(
+        L("Common.AppName"), L("Settings.LoggingFailedTitle"), L("Settings.LoggingFailedBody"));
 
     private void StartAboutLoad(Control owner, SettingsSection overviewSection)
     {
@@ -1059,21 +1149,30 @@ internal sealed partial class TrayContext
     {
         string notInstalled = L("About.NotInstalled");
         UiLanguage language = _language;
-        (string InstallPath, string StartupStatus, StartupTaskStatus Status) details = await Task.Run(() =>
+        (string InstallPath, string StartupStatus, StartupTaskStatus Status) details;
+        try
         {
-            string installPath = InstalledAppService.GetCurrentInstalledExecutablePath() ?? notInstalled;
-            StartupTaskInfo startupTaskInfo = StartupTaskService.GetStatusInfo(forceRefresh: true);
-            StartupTaskStatus startupTaskStatus = startupTaskInfo.Status;
-            string startupStatus = StartupTaskService.GetStatusLabel(language);
-            return (installPath, startupStatus, startupTaskStatus);
-        });
+            details = await Task.Run(() =>
+            {
+                string installPath = InstalledAppService.GetCurrentInstalledExecutablePath() ?? notInstalled;
+                StartupTaskInfo startupTaskInfo = StartupTaskService.GetStatusInfo(forceRefresh: true);
+                StartupTaskStatus startupTaskStatus = startupTaskInfo.Status;
+                string startupStatus = StartupTaskService.GetStatusLabel(language);
+                return (installPath, startupStatus, startupTaskStatus);
+            });
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.WriteThrottled("Settings.AboutLoad", ex);
+            details = (notInstalled, L("Tray.StartupUnknown"), StartupTaskStatus.Unknown);
+        }
 
         if (owner.IsDisposed || _settingsWindow == null || _settingsWindow.IsDisposed)
         {
             return;
         }
 
-        owner.BeginInvoke((MethodInvoker)(() =>
+        RunOnUiThread("Settings.AboutLoad", () =>
         {
             if (owner.IsDisposed || overviewSection.IsDisposed)
             {
@@ -1165,7 +1264,7 @@ internal sealed partial class TrayContext
             {
                 settingsForm.FitToCurrentPage();
             }
-        }));
+        });
     }
 
     private string ThemeEngineStatusText() => AppThemeBootstrap.NativeColorModeActive
@@ -1480,8 +1579,9 @@ internal sealed partial class TrayContext
                 valueInputFont,
                 Size.Empty,
                 TextFormatFlags.SingleLine | TextFormatFlags.NoPadding).Width);
-        int valueInputFrameWidth = Math.Clamp(widestValue + 18, 62, 92);
-        const int valueInputFrameHeight = 34;
+        int valueInputFrameWidth = Math.Max(62, widestValue + 18);
+        int valueInputFrameHeight = Math.Max(34, valueInputFont.Height + 12);
+        int accessoryHeight = Math.Max(48, valueInputFrameHeight + 8);
         var valueInput = new CompactNumericTextBox
         {
             AutoSize = false,
@@ -1514,7 +1614,7 @@ internal sealed partial class TrayContext
             Height = valueInputFrameHeight,
             BackColor = inputBorderColor,
             Anchor = AnchorStyles.Right | AnchorStyles.Top,
-            Margin = new Padding(0, (48 - valueInputFrameHeight) / 2, 0, 0),
+            Margin = new Padding(0, (accessoryHeight - valueInputFrameHeight) / 2, 0, 0),
             Padding = new Padding(1)
         };
         valueInputFrame.Controls.Add(valueInput);
@@ -1671,7 +1771,7 @@ internal sealed partial class TrayContext
         {
             AutoSize = false,
             Width = rightColumnWidth,
-            Height = 48,
+            Height = accessoryHeight,
             ColumnCount = 2,
             RowCount = 1,
             BackColor = Color.Transparent,
@@ -1699,7 +1799,7 @@ internal sealed partial class TrayContext
             AccessibleDescription = description
         };
         combo.Items.AddRange(items);
-        combo.Width = combo.GetPreferredSize(Size.Empty).Width;
+        combo.Size = combo.GetPreferredSize(Size.Empty);
         combo.SelectedIndex = Math.Max(0, combo.Items.IndexOf(current));
         combo.SelectedIndexChanged += (_, _) =>
         {
@@ -1949,12 +2049,12 @@ internal sealed partial class TrayContext
 
     private Color ShortcutWarningColor()
     {
-        return _useDarkTheme ? Color.FromArgb(250, 204, 21) : Color.FromArgb(202, 138, 4);
+        return CurrentTheme.WarningText;
     }
 
     private Color ShortcutErrorColor()
     {
-        return _useDarkTheme ? Color.FromArgb(248, 113, 113) : Color.FromArgb(220, 38, 38);
+        return CurrentTheme.ErrorText;
     }
 
     private SettingsRow CreateInfoRow(string title, string value, string description, Control? actionButton = null, int rightColumnWidth = 240)
@@ -2408,6 +2508,7 @@ internal sealed partial class TrayContext
             return;
         }
 
+        bool wasVisible = _settingsWindow.Visible;
         Point previousCenter = new(_settingsWindow.Left + _settingsWindow.Width / 2, _settingsWindow.Top + _settingsWindow.Height / 2);
         SettingsUiState? previousUiState = (_settingsWindow as SettingsForm)?.CaptureUiState();
         if (_settingsWindow is SettingsForm settingsForm)
@@ -2418,7 +2519,10 @@ internal sealed partial class TrayContext
         {
             _settingsWindow.Close();
         }
-        ShowSettingsWindow(page, previousCenter, previousUiState);
+        if (wasVisible)
+        {
+            ShowSettingsWindow(page, previousCenter, previousUiState);
+        }
     }
 
     private void RebuildSettingsPage(SettingsPage page)

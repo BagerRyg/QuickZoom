@@ -45,6 +45,7 @@ internal sealed partial class TrayContext
         public bool SuppressAltKeyInOfficeApps { get; set; }
         [JsonIgnore]
         public bool DebugLoggingEnabled { get; set; }
+        public bool StrictDataMode { get; set; }
         public bool WiggleSpotlightEnabled { get; set; } = true;
         public bool CursorEnhancementEnabled { get; set; }
         public int CursorScale { get; set; } = 100;
@@ -70,6 +71,8 @@ internal sealed partial class TrayContext
     }
 
     internal static bool IsKnownSetting(string name) => typeof(Settings).GetProperty(name) != null;
+
+    private sealed record SettingsWrite(Settings Value, long Revision);
 
     private static Settings CreateDefaultSettings()
     {
@@ -134,13 +137,13 @@ internal sealed partial class TrayContext
         _shortcutInputMode = Enum.IsDefined(typeof(ShortcutInputMode), s.ShortcutInputMode)
             ? (ShortcutInputMode)s.ShortcutInputMode
             : ShortcutInputMode.Both;
-        _enableKey = (Keys)s.EnableKey;
+        _enableKey = NormalizeShortcutKey(s.EnableKey, Keys.Menu);
         _language = Enum.IsDefined(typeof(UiLanguage), s.Language)
             ? (UiLanguage)s.Language
             : UiText.GetDefaultLanguage();
         _invertColors = s.InvertColors;
-        _invertKey = (Keys)s.InvertKey;
-        _followCursorKey = s.FollowCursorKey == 0 ? Keys.F : (Keys)s.FollowCursorKey;
+        _invertKey = NormalizeShortcutKey(s.InvertKey, Keys.I);
+        _followCursorKey = NormalizeShortcutKey(s.FollowCursorKey, Keys.F);
         _invertTrigger = Enum.IsDefined(typeof(InvertTriggerKind), s.InvertTrigger)
             ? (InvertTriggerKind)s.InvertTrigger
             : InvertTriggerKind.EnableKeyPlusMiddleClick;
@@ -149,8 +152,9 @@ internal sealed partial class TrayContext
         _fps = NormalizeFpsSetting(s.Fps);
         _centerCursor = s.CenterCursor;
         _suppressShortcutKeystrokes = s.SuppressShortcutKeystrokes || s.SuppressAltKeyInOfficeApps;
-        _debugLoggingEnabled = false;
-        ErrorLog.Configure(_debugLoggingEnabled, AppInfo.VersionHash);
+        _strictDataMode = s.StrictDataMode;
+        if (_strictDataMode && !_screenshotMode && !_setupPracticeMode) ErrorLog.Stop();
+        _debugLoggingEnabled = !_strictDataMode && ErrorLog.IsEnabled;
         _wiggleSpotlightEnabled = s.WiggleSpotlightEnabled;
         _cursorEnhancementEnabled = s.CursorEnhancementEnabled;
         _cursorScale = NormalizeCursorScale(s.CursorScale);
@@ -171,8 +175,15 @@ internal sealed partial class TrayContext
         _enableKeyPressed = false;
         _invertKeyPressed = false;
         _followCursorKeyPressed = false;
+        _zoomModeCycleKeyPressed = false;
+        _leftMouseButtonPressed = false;
+        _rightMouseButtonPressed = false;
+        _zoomModeMouseChordTriggered = false;
+        _suppressLeftMouseButtonUp = false;
+        _suppressRightMouseButtonUp = false;
         _controlKeyPressed = false;
         _altGrPressed = false;
+        ResetTrackedModifierKeys();
         ResetEnableKeySuppressionState();
         _suppressedShortcutKeyUps.Clear();
         _wheelDeltaRemainder = 0;
@@ -194,21 +205,12 @@ internal sealed partial class TrayContext
 
     private void LoadSettings()
     {
+        _settingsLoadFailed = false;
         try
         {
-            if (!_screenshotMode)
-            {
-                LocalStorage.RunAsUser(() =>
-                {
-                    LocalStorage.RequireLocalPath(_settingsPath);
-                    Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!);
-                });
-
-                if (!File.Exists(_settingsPath) && File.Exists(_legacySettingsPath))
-                {
-                    File.Copy(_legacySettingsPath, _settingsPath, overwrite: false);
-                }
-            }
+            // Reading preferences must not require profile-write permission or
+            // access to the elevated process's linked standard-user token.
+            LocalStorage.RequireLocalPath(_settingsPath);
 
             string settingsPath = File.Exists(_settingsPath)
                 ? _settingsPath
@@ -223,22 +225,20 @@ internal sealed partial class TrayContext
             var s = JsonSerializer.Deserialize<Settings>(File.ReadAllText(settingsPath));
             if (s == null)
             {
-                return;
+                throw new JsonException("The settings file must contain an object.");
             }
 
             ApplySettingsModel(s);
         }
         catch (JsonException ex)
         {
-            if (!_screenshotMode)
-            {
-                TryQuarantineCorruptSettingsFile();
-            }
+            _settingsLoadFailed = true;
             ErrorLog.Write("LoadSettings", ex);
             TryApplyDefaultSettingsAfterLoadFailure();
         }
         catch (Exception ex)
         {
+            _settingsLoadFailed = true;
             ErrorLog.Write("LoadSettings", ex);
             TryApplyDefaultSettingsAfterLoadFailure();
         }
@@ -259,7 +259,7 @@ internal sealed partial class TrayContext
 
     private void SaveSettings()
     {
-        if (_screenshotMode || _setupPracticeMode)
+        if (_screenshotMode || _setupPracticeMode || _settingsLoadFailed)
         {
             UpdateMenuLabels();
             return;
@@ -268,7 +268,7 @@ internal sealed partial class TrayContext
         Settings snapshot = CreateSettingsSnapshot();
         lock (_settingsSaveSync)
         {
-            _pendingSettingsSave = snapshot;
+            _pendingSettingsSave = new SettingsWrite(snapshot, ++_settingsSaveRevision);
         }
 
         void ScheduleSave()
@@ -298,11 +298,10 @@ internal sealed partial class TrayContext
     private void OnSettingsSaveTimerTick(object? sender, EventArgs e)
     {
         _settingsSaveTimer?.Stop();
-        Settings? snapshot;
+        SettingsWrite? snapshot;
         lock (_settingsSaveSync)
         {
             snapshot = _pendingSettingsSave;
-            _pendingSettingsSave = null;
         }
 
         if (snapshot == null)
@@ -325,13 +324,6 @@ internal sealed partial class TrayContext
             return;
         }
 
-        Settings? snapshot;
-        lock (_settingsSaveSync)
-        {
-            snapshot = _pendingSettingsSave;
-            _pendingSettingsSave = null;
-        }
-
         _settingsSaveTimer?.Stop();
         try
         {
@@ -340,6 +332,14 @@ internal sealed partial class TrayContext
         catch (Exception ex)
         {
             ErrorLog.WriteThrottled("SaveSettings.FlushWait", ex);
+        }
+
+        // Keep in-flight snapshots pending until committed so shutdown can finish
+        // a slow worker even when the bounded wait above expires.
+        SettingsWrite? snapshot;
+        lock (_settingsSaveSync)
+        {
+            snapshot = _pendingSettingsSave;
         }
 
         if (snapshot != null)
@@ -374,6 +374,7 @@ internal sealed partial class TrayContext
             CenterCursor = _centerCursor,
             SuppressShortcutKeystrokes = _suppressShortcutKeystrokes,
             DebugLoggingEnabled = _debugLoggingEnabled,
+            StrictDataMode = _strictDataMode,
             WiggleSpotlightEnabled = _wiggleSpotlightEnabled,
             CursorEnhancementEnabled = _cursorEnhancementEnabled,
             CursorScale = _cursorScale,
@@ -400,6 +401,12 @@ internal sealed partial class TrayContext
         return _fpsOptions.Contains(fps) ? fps : _fpsOptions[0];
     }
 
+    internal static Keys NormalizeShortcutKey(int key, Keys fallback)
+    {
+        return key > (int)Keys.XButton2 && key <= 0xFF &&
+            (key == FnVirtualKey || Enum.IsDefined(typeof(Keys), key)) ? (Keys)key : fallback;
+    }
+
     private static int NormalizeLensSize(int size)
     {
         int clamped = Math.Clamp(size, 100, 1400);
@@ -417,9 +424,9 @@ internal sealed partial class TrayContext
         return 10 + (int)Math.Round((clamped - 10) / 5.0) * 5;
     }
 
-    private void WriteSettingsSnapshot(Settings s)
+    private void WriteSettingsSnapshot(SettingsWrite snapshot)
     {
-        if (_screenshotMode)
+        if (_screenshotMode || _setupPracticeMode || _settingsLoadFailed)
         {
             return;
         }
@@ -428,21 +435,48 @@ internal sealed partial class TrayContext
         {
             lock (_settingsWriteSync)
             {
+                // A delayed worker must not overwrite a newer save or shutdown flush.
+                if (snapshot.Revision <= _settingsWrittenRevision) return;
                 FilePersistence.WriteAllTextAtomic(
                     _settingsPath,
-                    JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true }));
+                    JsonSerializer.Serialize(snapshot.Value, new JsonSerializerOptions { WriteIndented = true }));
+                _settingsWrittenRevision = snapshot.Revision;
+                lock (_settingsSaveSync)
+                {
+                    if (_pendingSettingsSave?.Revision <= snapshot.Revision)
+                        _pendingSettingsSave = null;
+                }
+                Interlocked.Exchange(ref _settingsSaveFailureNotified, 0);
             }
         }
         catch (Exception ex)
         {
+            lock (_settingsWriteSync)
+            {
+                if (snapshot.Revision <= _settingsWrittenRevision) return;
+                lock (_settingsSaveSync)
+                {
+                    // Keep the latest edit for the next save/close retry.
+                    if (_pendingSettingsSave == null || _pendingSettingsSave.Revision < snapshot.Revision)
+                        _pendingSettingsSave = snapshot;
+                }
+            }
             ErrorLog.Write("SaveSettings", ex);
+            if (Interlocked.Exchange(ref _settingsSaveFailureNotified, 1) == 0)
+                RunOnUiThread("SaveSettings.Warning", () =>
+                {
+                    if (!_runtimeStopped)
+                        StartupDialogs.ShowWarning(L("Common.AppName"), L("Settings.SaveFailedTitle"), L("Settings.SaveFailedBody"));
+                });
         }
 
     }
 
     private void ResetSettingsToDefaults()
     {
+        if (!_screenshotMode && !_setupPracticeMode) ErrorLog.Stop();
         ApplySettingsModel(CreateDefaultSettings());
+        _settingsLoadFailed = false;
         _animAnchorValid = false;
         _animTimer?.Stop();
         _zoomPercent = 100;
@@ -695,21 +729,4 @@ internal sealed partial class TrayContext
         _ => L("Common.Unknown")
     };
 
-    private void TryQuarantineCorruptSettingsFile()
-    {
-        try
-        {
-            if (!File.Exists(_settingsPath))
-            {
-                return;
-            }
-
-            // Replace invalid data without retaining an unbounded copy of its contents.
-            FilePersistence.WriteAllTextAtomic(_settingsPath, "{}");
-        }
-        catch (Exception ex)
-        {
-            ErrorLog.Write("LoadSettings", "Could not quarantine corrupt settings file: " + ex.Message);
-        }
-    }
 }

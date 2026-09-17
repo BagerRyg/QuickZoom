@@ -16,8 +16,8 @@ internal sealed class ColorPaletteControl : Control
     private int _hoveredIndex = -1;
     private int _keyboardIndex = -1;
     private bool _updatingHeight;
-    private const int LogicalVisibleSwatchSize = 18;
-    private const int LogicalHitTargetSize = 28;
+    private const int LogicalVisibleSwatchSize = 22;
+    private const int LogicalHitTargetSize = 32;
 
     public ColorPaletteControl(ThemePalette palette, Color[] colors, Color selectedColor)
     {
@@ -165,7 +165,15 @@ internal sealed class ColorPaletteControl : Control
                 ColorsEqual(_colors[i], _selectedColor),
                 ControlDrawing.ShouldDrawFocus(this, ShowFocusCues) && i == _keyboardIndex);
         }
-
+        int selectedIndex = Array.FindIndex(_colors, color => ColorsEqual(color, _selectedColor));
+        if (selectedIndex >= 0)
+        {
+            using Font labelFont = ControlDrawing.UiFont("Segoe UI", 9f, FontStyle.Regular);
+            int top = (int)Math.Ceiling(_colors.Length / (double)GetColumnCount()) * ControlDrawing.ScaleLogical(this, LogicalHitTargetSize);
+            TextRenderer.DrawText(e.Graphics, GetAccessibleColorName(selectedIndex), labelFont,
+                new Rectangle(0, top + 4, Width, Math.Max(1, Height - top - 4)), _palette.Text,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        }
     }
 
     protected override void OnResize(EventArgs e)
@@ -233,6 +241,18 @@ internal sealed class ColorPaletteControl : Control
         graphics.FillPath(fillBrush, outerPath);
         graphics.DrawPath(fillBorder, outerPath);
 
+        if (selected)
+        {
+            using Pen check = new(color.GetBrightness() > 0.55f ? Color.Black : Color.White, Math.Max(2f, bounds.Width / 10f));
+            check.StartCap = check.EndCap = LineCap.Round;
+            graphics.DrawLines(check, new[]
+            {
+                new PointF(bounds.Left + bounds.Width * 0.24f, bounds.Top + bounds.Height * 0.51f),
+                new PointF(bounds.Left + bounds.Width * 0.43f, bounds.Top + bounds.Height * 0.70f),
+                new PointF(bounds.Left + bounds.Width * 0.78f, bounds.Top + bounds.Height * 0.30f)
+            });
+        }
+
         if (hovered || selected || keyboardFocused)
         {
             Color outline = keyboardFocused ? ControlDrawing.FocusColor(_palette) : selected ? _palette.Accent : _palette.SecondaryText;
@@ -257,7 +277,8 @@ internal sealed class ColorPaletteControl : Control
         _updatingHeight = true;
         int cellSize = ControlDrawing.ScaleLogical(this, LogicalHitTargetSize);
         int rows = (int)Math.Ceiling(_colors.Length / (double)GetColumnCount());
-        int preferredHeight = Math.Max(cellSize, rows * cellSize);
+        using Font labelFont = ControlDrawing.UiFont("Segoe UI", 9f, FontStyle.Regular);
+        int preferredHeight = Math.Max(cellSize, rows * cellSize) + labelFont.Height + 8;
         if (Height != preferredHeight)
         {
             Height = preferredHeight;

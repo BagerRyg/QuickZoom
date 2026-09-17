@@ -252,8 +252,23 @@ internal sealed partial class TrayContext
         }
     }
 
+    private delegate bool WindowColorEffectSetter(IntPtr handle, ref MAGCOLOREFFECT effect);
+    private delegate bool WindowTransformSetter(IntPtr handle, ref MAGTRANSFORM transform);
+
+    private sealed class MagnifierWindowApi
+    {
+        public WindowColorEffectSetter SetColorEffect = MagSetColorEffect;
+        public WindowTransformSetter SetTransform = MagSetWindowTransform;
+        public Func<IntPtr, RECT, bool> SetSource = MagSetWindowSource;
+        public Func<IntPtr, int, int, IntPtr[], bool> SetFilterList = MagSetWindowFilterList;
+        public Func<IntPtr, bool> Destroy = DestroyWindow;
+    }
+
+    private Func<bool> _uninitializeMagnification = MagUninitialize;
+
     private sealed class MonitorMagnifierWindow : IDisposable
     {
+        private readonly MagnifierWindowApi _native = new();
         private readonly MonitorMagnifierHostForm _host;
         private IntPtr _magnifierHandle;
         private bool _hasLastFrame;
@@ -301,8 +316,6 @@ internal sealed partial class TrayContext
                 _host.Dispose();
                 throw new Win32Exception(error, "Failed to create magnifier child window.");
             }
-
-            _host.Show();
         }
 
         public void UpdateBounds(Rectangle bounds)
@@ -318,11 +331,11 @@ internal sealed partial class TrayContext
             }
         }
 
-        public void Apply(float magnification, RECT sourceRect, bool invertColors)
+        public bool Apply(float magnification, RECT sourceRect, bool invertColors)
         {
             if (_magnifierHandle == IntPtr.Zero)
             {
-                return;
+                return false;
             }
 
             if (_hasLastFrame &&
@@ -330,16 +343,16 @@ internal sealed partial class TrayContext
                 RectEquals(_lastSourceRect, sourceRect) &&
                 _lastInvertColors == invertColors)
             {
-                return;
+                return true;
             }
 
             if (!_hasLastFrame || _lastInvertColors != invertColors)
             {
                 MAGCOLOREFFECT colorEffect = invertColors ? InvertColorEffect : IdentityColorEffect;
-                if (!MagSetColorEffect(_magnifierHandle, ref colorEffect))
+                if (!_native.SetColorEffect(_magnifierHandle, ref colorEffect))
                 {
                     ErrorLog.WriteThrottled("Magnification.SetColorEffect", "MagSetColorEffect failed.");
-                    return;
+                    return false;
                 }
             }
 
@@ -351,19 +364,19 @@ internal sealed partial class TrayContext
                     v11 = magnification,
                     v22 = 1f
                 };
-                if (!MagSetWindowTransform(_magnifierHandle, ref transform))
+                if (!_native.SetTransform(_magnifierHandle, ref transform))
                 {
                     ErrorLog.WriteThrottled("Magnification.SetWindowTransform", "MagSetWindowTransform failed.");
-                    return;
+                    return false;
                 }
             }
 
             if (!_hasLastFrame || !RectEquals(_lastSourceRect, sourceRect))
             {
-                if (!MagSetWindowSource(_magnifierHandle, sourceRect))
+                if (!_native.SetSource(_magnifierHandle, sourceRect))
                 {
                     ErrorLog.WriteThrottled("Magnification.SetWindowSource", "MagSetWindowSource failed.");
-                    return;
+                    return false;
                 }
             }
 
@@ -371,12 +384,26 @@ internal sealed partial class TrayContext
             _lastSourceRect = sourceRect;
             _lastInvertColors = invertColors;
             _hasLastFrame = true;
+            return true;
+        }
+
+        public bool ExcludeFromSource(IntPtr[] handles)
+        {
+            if (_magnifierHandle != IntPtr.Zero &&
+                _native.SetFilterList(_magnifierHandle, MW_FILTERMODE_EXCLUDE, handles.Length, handles))
+            {
+                return true;
+            }
+
+            ErrorLog.WriteThrottled("Magnification.FilterList", "MagSetWindowFilterList failed.");
+            return false;
         }
 
         public void SetVisible(bool visible)
         {
             if (visible)
             {
+                if (!_hasLastFrame) return;
                 if (!_host.Visible)
                 {
                     _host.Show();
@@ -393,7 +420,7 @@ internal sealed partial class TrayContext
             _host.Hide();
             if (_magnifierHandle != IntPtr.Zero)
             {
-                _ = DestroyWindow(_magnifierHandle);
+                _ = _native.Destroy(_magnifierHandle);
                 _magnifierHandle = IntPtr.Zero;
             }
 
@@ -447,6 +474,7 @@ internal sealed partial class TrayContext
 
     private sealed class OverlayMagnifierWindow : IDisposable
     {
+        private readonly MagnifierWindowApi _native = new();
         private readonly OverlayMagnifierHostForm _host;
         private IntPtr _magnifierHandle;
         private bool _hasLastFrame;
@@ -501,7 +529,6 @@ internal sealed partial class TrayContext
             _lastSize = bounds.Size;
             _lastShape = shape;
             ApplyShape(shape);
-            _host.Show();
         }
 
         public void UpdateBounds(Rectangle bounds, LensShape shape)
@@ -531,11 +558,11 @@ internal sealed partial class TrayContext
             }
         }
 
-        public void Apply(float magnification, RECT sourceRect, MAGCOLOREFFECT colorEffect)
+        public bool Apply(float magnification, RECT sourceRect, MAGCOLOREFFECT colorEffect)
         {
             if (_magnifierHandle == IntPtr.Zero)
             {
-                return;
+                return false;
             }
 
             bool colorEffectChanged = !_hasLastFrame || !ColorEffectEquals(_lastColorEffect, colorEffect);
@@ -544,15 +571,15 @@ internal sealed partial class TrayContext
                 RectEquals(_lastSourceRect, sourceRect) &&
                 !colorEffectChanged)
             {
-                return;
+                return true;
             }
 
             if (colorEffectChanged)
             {
-                if (!MagSetColorEffect(_magnifierHandle, ref colorEffect))
+                if (!_native.SetColorEffect(_magnifierHandle, ref colorEffect))
                 {
                     ErrorLog.WriteThrottled("OverlayMagnification.SetColorEffect", "MagSetColorEffect failed.");
-                    return;
+                    return false;
                 }
             }
 
@@ -564,19 +591,19 @@ internal sealed partial class TrayContext
                     v11 = magnification,
                     v22 = 1f
                 };
-                if (!MagSetWindowTransform(_magnifierHandle, ref transform))
+                if (!_native.SetTransform(_magnifierHandle, ref transform))
                 {
                     ErrorLog.WriteThrottled("OverlayMagnification.SetWindowTransform", "MagSetWindowTransform failed.");
-                    return;
+                    return false;
                 }
             }
 
             if (colorEffectChanged || !RectEquals(_lastSourceRect, sourceRect))
             {
-                if (!MagSetWindowSource(_magnifierHandle, sourceRect))
+                if (!_native.SetSource(_magnifierHandle, sourceRect))
                 {
                     ErrorLog.WriteThrottled("OverlayMagnification.SetWindowSource", "MagSetWindowSource failed.");
-                    return;
+                    return false;
                 }
             }
 
@@ -584,26 +611,31 @@ internal sealed partial class TrayContext
             _lastSourceRect = sourceRect;
             _lastColorEffect = colorEffect;
             _hasLastFrame = true;
+            return true;
         }
 
-        public void ExcludeFromSource()
+        public bool ExcludeFromSource()
         {
             if (_magnifierHandle == IntPtr.Zero)
             {
-                return;
+                return false;
             }
 
             IntPtr[] handles = [HostHandle];
-            if (!MagSetWindowFilterList(_magnifierHandle, MW_FILTERMODE_EXCLUDE, handles.Length, handles))
+            if (!_native.SetFilterList(_magnifierHandle, MW_FILTERMODE_EXCLUDE, handles.Length, handles))
             {
                 ErrorLog.WriteThrottled("OverlayMagnification.FilterList", "MagSetWindowFilterList failed.");
+                return false;
             }
+
+            return true;
         }
 
         public void SetVisible(bool visible)
         {
             if (visible)
             {
+                if (!_hasLastFrame) return;
                 if (!_host.Visible)
                 {
                     _host.Show();
@@ -642,7 +674,7 @@ internal sealed partial class TrayContext
             _host.Region = null;
             if (_magnifierHandle != IntPtr.Zero)
             {
-                _ = DestroyWindow(_magnifierHandle);
+                _ = _native.Destroy(_magnifierHandle);
                 _magnifierHandle = IntPtr.Zero;
             }
 
@@ -744,6 +776,7 @@ internal sealed partial class TrayContext
 
     private void EnsureMag(bool active)
     {
+        if (active && _runtimeStopped) return;
         if (active && !_magActive)
         {
             _magActive = MagInitialize();
@@ -821,15 +854,15 @@ internal sealed partial class TrayContext
         else if (_magActive)
         {
             bool wasFullscreenBackend = _useFullscreenBackend;
-            DestroyOverlayWindow();
-            DestroyMonitorWindows();
+            RunGuarded("Shutdown.Overlay", DestroyOverlayWindow);
+            RunGuarded("Shutdown.Monitors", DestroyMonitorWindows);
             if (wasFullscreenBackend)
             {
                 _ = MagSetFullscreenTransform(1.0f, 0, 0);
                 var identity = IdentityColorEffect;
                 _ = MagSetFullscreenColorEffect(ref identity);
             }
-            if (!MagUninitialize())
+            if (!_uninitializeMagnification())
             {
                 ErrorLog.WriteThrottled("Magnification.Uninitialize", "MagUninitialize failed.");
             }
@@ -839,7 +872,7 @@ internal sealed partial class TrayContext
             _monitorLayoutDirty = true;
 
             // Cursor reset is only needed for fullscreen magnification transitions.
-            if (wasFullscreenBackend)
+            if (wasFullscreenBackend && !_runtimeStopped)
             {
                 RestoreSystemCursorScheme();
             }
@@ -895,12 +928,7 @@ internal sealed partial class TrayContext
                 catch (Exception ex)
                 {
                     ErrorLog.Write("SyncMonitorWindows", ex);
-                    DisableMagAndReset();
-                    MessageBox.Show(
-                        L("Error.MagnifierInit"),
-                        L("Common.AppName"),
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Error);
+                    HandleMagnifierFailure();
                     return;
                 }
             }
@@ -926,14 +954,17 @@ internal sealed partial class TrayContext
             _lastAnchorByMonitor.Remove(key);
         }
 
-        ApplyMagnifierFilterLists();
+        if (!ApplyMagnifierFilterLists())
+        {
+            HandleMagnifierFailure();
+        }
     }
 
     private void DestroyMonitorWindows()
     {
         foreach (var window in _monitorWindows.Values)
         {
-            window.Dispose();
+            RunGuarded("Magnification.DisposeMonitor", window.Dispose);
         }
 
         _monitorWindows.Clear();
@@ -942,9 +973,10 @@ internal sealed partial class TrayContext
 
     private void DestroyOverlayWindow()
     {
-        _overlayWindow?.Dispose();
+        OverlayMagnifierWindow? window = _overlayWindow;
         _overlayWindow = null;
         _smoothedLensCenter = null;
+        window?.Dispose();
     }
 
     private void RefreshMagnifierCursorRendering()
@@ -967,11 +999,11 @@ internal sealed partial class TrayContext
         ApplyTransformCurrentPoint();
     }
 
-    private void ApplyMagnifierFilterLists()
+    private bool ApplyMagnifierFilterLists()
     {
         if (_monitorWindows.Count == 0)
         {
-            return;
+            return true;
         }
 
         var hostHandles = new IntPtr[_monitorWindows.Count];
@@ -983,14 +1015,13 @@ internal sealed partial class TrayContext
 
         foreach (MonitorMagnifierWindow window in _monitorWindows.Values)
         {
-            if (window.MagnifierHandle != IntPtr.Zero)
+            if (!window.ExcludeFromSource(hostHandles))
             {
-                if (!MagSetWindowFilterList(window.MagnifierHandle, MW_FILTERMODE_EXCLUDE, hostHandles.Length, hostHandles))
-                {
-                    ErrorLog.WriteThrottled("Magnification.FilterList", "MagSetWindowFilterList failed.");
-                }
+                return false;
             }
         }
+
+        return true;
     }
 
     private void DisableMagAndReset()
@@ -1175,7 +1206,12 @@ internal sealed partial class TrayContext
             }
 
             RECT sourceRect = BuildSourceRect(screen.Bounds, anchorPoint, mag);
-            window.Apply(mag, sourceRect, _invertColors);
+            if (!window.Apply(mag, sourceRect, _invertColors))
+            {
+                HandleMagnifierFailure();
+                return;
+            }
+            window.SetVisible(true);
         }
 
         if (selectedScreens.Count == 1)
@@ -1224,22 +1260,72 @@ internal sealed partial class TrayContext
             if (_overlayWindow == null)
             {
                 _overlayWindow = new OverlayMagnifierWindow(bounds, showMagnifiedCursor, shape);
-                _overlayWindow.ExcludeFromSource();
+                if (!_overlayWindow.ExcludeFromSource())
+                {
+                    HandleMagnifierFailure();
+                    return;
+                }
             }
 
             _overlayWindow.UpdateBounds(bounds, shape);
+            if (!_overlayWindow.Apply(mag, sourceRect, colorEffect))
+            {
+                HandleMagnifierFailure();
+                return;
+            }
             _overlayWindow.SetVisible(true);
-            _overlayWindow.Apply(mag, sourceRect, colorEffect);
         }
         catch (Exception ex)
         {
             ErrorLog.Write("OverlayMagnification", ex);
-            DisableMagAndReset();
-            MessageBox.Show(
-                L("Error.MagnifierInit"),
-                L("Common.AppName"),
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
+            HandleMagnifierFailure();
+        }
+    }
+
+    private void HandleMagnifierFailure()
+    {
+        DisableMagAndReset();
+        NotifyMagnifierInitializationFailure();
+    }
+
+    private bool _magnifierFailureNotificationPending;
+
+    private void NotifyMagnifierInitializationFailure()
+    {
+        if (_runtimeStopped || _magnifierFailureNotificationPending)
+        {
+            return;
+        }
+
+        _magnifierFailureNotificationPending = true;
+        try
+        {
+            // Magnifier creation can originate inside a low-level input hook.
+            // Return from the hook before waiting for the user to dismiss a dialog.
+            _uiInvoker.BeginInvoke((MethodInvoker)(() =>
+            {
+                try
+                {
+                    if (!_runtimeStopped)
+                    {
+                        MessageBox.Show(L("Error.MagnifierInit"), L("Common.AppName"),
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    ErrorLog.WriteThrottled("Magnification.FailureNotification", ex);
+                }
+                finally
+                {
+                    _magnifierFailureNotificationPending = false;
+                }
+            }));
+        }
+        catch (Exception ex)
+        {
+            _magnifierFailureNotificationPending = false;
+            ErrorLog.WriteThrottled("Magnification.FailureNotification", ex);
         }
     }
 
@@ -1253,7 +1339,9 @@ internal sealed partial class TrayContext
             : target;
         _smoothedLensCenter = center;
 
-        int width = Math.Clamp(_lensSize, 100, Math.Max(100, screenBounds.Width));
+        int maxWidth = _lensShape == LensShape.Rectangle
+            ? screenBounds.Width : Math.Min(screenBounds.Width, screenBounds.Height);
+        int width = Math.Clamp(_lensSize, Math.Min(100, maxWidth), maxWidth);
         int height = _lensShape == LensShape.Rectangle
             ? Math.Clamp((int)Math.Round(width * 9.0 / 16.0), 56, Math.Max(56, screenBounds.Height))
             : width;

@@ -13,12 +13,17 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace QuickZoom;
 
 internal static class FirstRunSetup
 {
     private const int CurrentSetupVersion = 2;
+    private const int PrivacyStep = 4;
+    private const int StartupStep = 5;
+    private const int CompleteStep = 6;
+    private const int SetupStepCount = 7;
     private const int ThemeAuto = 0;
     private const int ThemeDark = 1;
     private const int ThemeLight = 2;
@@ -117,6 +122,10 @@ internal static class FirstRunSetup
         catch (Exception ex)
         {
             ErrorLog.Write("FirstRunSetup.StartupOnly", ex);
+            StartupDialogs.ShowWarning(
+                UiText.Get(initial.Language, "Common.AppName"),
+                UiText.Get(initial.Language, "Setup.SaveFailedTitle"),
+                UiText.Get(initial.Language, "Setup.SaveFailedBody"));
             return false;
         }
     }
@@ -141,9 +150,22 @@ internal static class FirstRunSetup
         }
     }
 
-    internal static void CaptureSmoke(string outputDirectory)
+    internal static void CaptureSmoke(string outputDirectory, string? languageFilter = null)
     {
         Directory.CreateDirectory(outputDirectory);
+        foreach ((string json, SetupViewMode expected) in new[]
+        {
+            ("{}", SetupViewMode.Accessible),
+            ("{\"Version\":0,\"PreferredSetupView\":\"Standard\"}", SetupViewMode.Accessible),
+            ("{\"Version\":2}", SetupViewMode.Standard),
+            ("{\"Version\":2,\"PreferredSetupView\":\"Accessible\"}", SetupViewMode.Accessible),
+            ("{\"Version\":2,\"PreferredSetupView\":\"99\"}", SetupViewMode.Standard)
+        })
+        {
+            using JsonDocument state = JsonDocument.Parse(json);
+            if (ParsePreferredSetupView(state.RootElement) != expected)
+                throw new InvalidOperationException("Setup view preference migration failed.");
+        }
         bool previousFollowWindowsTextScale = ControlDrawing.FollowWindowsTextScale;
         ControlDrawing.FollowWindowsTextScale = false;
         try
@@ -160,8 +182,18 @@ internal static class FirstRunSetup
                 interactionForm.ValidateViewToggleInteraction();
             }
 
+            foreach (bool skip in new[] { false, true })
+            {
+                using var startupForm = new FirstRunSetupForm(
+                    new FirstRunSetupSelection(UiLanguage.English, ThemeAuto,
+                        FontDefault, Keys.Menu, false, SetupViewMode.Standard),
+                    startupOnly: true);
+                startupForm.ValidateStartupOnlyNavigation(skip);
+            }
+
             foreach (UiLanguage language in Enum.GetValues<UiLanguage>())
             {
+                if (languageFilter != null && LocalizationManager.GetLanguageCode(language) != languageFilter) continue;
                 foreach (int themeMode in new[] { ThemeDark, ThemeLight })
                 {
                     string languageName = LocalizationManager.GetLanguageCode(language);
@@ -170,6 +202,8 @@ internal static class FirstRunSetup
                     Directory.CreateDirectory(variantDirectory);
                     Capture("language.png", 0);
                     Capture("appearance.png", 1);
+                    Capture("privacy.png", PrivacyStep);
+                    Capture("privacy-strict.png", PrivacyStep, strictDataMode: true);
                     Capture("shortcuts.png", 2);
                     Capture(
                         "shortcuts-capturing.png",
@@ -185,26 +219,36 @@ internal static class FirstRunSetup
                         enableKey: Keys.Menu);
                     Capture(
                         "startup.png",
-                        4,
+                        StartupStep,
                         startupState: SetupStartupState.NotConfigured);
                     Capture(
                         "startup-ready.png",
-                        4,
+                        StartupStep,
                         startupState: SetupStartupState.Ready);
                     Capture(
                         "startup-configuring.png",
-                        4,
+                        StartupStep,
                         startupState: SetupStartupState.Installing);
                     Capture(
                         "startup-completing.png",
-                        4,
+                        StartupStep,
                         startupState: SetupStartupState.Verifying,
                         startupProgressComplete: true);
                     Capture(
                         "startup-declined.png",
-                        4,
+                        StartupStep,
                         startupState: SetupStartupState.Declined);
-                    Capture("complete.png", 5);
+                    Capture("complete.png", CompleteStep);
+                    foreach (SetupViewMode startupView in Enum.GetValues<SetupViewMode>())
+                    {
+                        foreach (SetupStartupState state in Enum.GetValues<SetupStartupState>())
+                        {
+                            Capture($"startup-only/{startupView}/{state}.png", StartupStep,
+                                startupState: state, viewMode: startupView,
+                                captureSize: startupView == SetupViewMode.Accessible ? new Size(1600, 900) : null,
+                                windowsTextScale: 1f, startupOnly: true);
+                        }
+                    }
                     Capture(
                         "appearance-continue-hover.png",
                         1,
@@ -236,14 +280,14 @@ internal static class FirstRunSetup
                         windowsTextScale: 1f);
                     Capture(
                         "accessible/startup.png",
-                        4,
+                        StartupStep,
                         startupState: SetupStartupState.NotConfigured,
                         viewMode: SetupViewMode.Accessible,
                         captureSize: new Size(1600, 900),
                         windowsTextScale: 1f);
                     Capture(
                         "accessible/complete.png",
-                        5,
+                        CompleteStep,
                         viewMode: SetupViewMode.Accessible,
                         captureSize: new Size(1600, 900),
                         windowsTextScale: 1f);
@@ -259,12 +303,12 @@ internal static class FirstRunSetup
                         fontSize: FontExtraLarge);
                     Capture(
                         "extra-large/startup.png",
-                        4,
+                        StartupStep,
                         startupState: SetupStartupState.NotConfigured,
                         fontSize: FontExtraLarge);
-                    Capture("extra-large/complete.png", 5, fontSize: FontExtraLarge);
+                    Capture("extra-large/complete.png", CompleteStep, fontSize: FontExtraLarge);
 
-                    if (language is UiLanguage.English or UiLanguage.Finnish)
+                    foreach (SetupViewMode responsiveView in Enum.GetValues<SetupViewMode>())
                     {
                         string[] stepNames =
                         [
@@ -272,6 +316,7 @@ internal static class FirstRunSetup
                             "appearance",
                             "shortcuts",
                             "usage",
+                            "privacy",
                             "startup",
                             "complete"
                         ];
@@ -288,7 +333,7 @@ internal static class FirstRunSetup
                                 {
                                     string responsivePath = Path.Combine(
                                         "responsive",
-                                        "accessible",
+                                        responsiveView.ToString().ToLowerInvariant(),
                                         $"{responsiveSize.Width}x{responsiveSize.Height}",
                                         $"text-{(int)Math.Round(textScale * 100f)}",
                                         stepNames[responsiveStep] + ".png");
@@ -296,10 +341,10 @@ internal static class FirstRunSetup
                                         responsivePath,
                                         responsiveStep,
                                         enableKey: responsiveStep == 3 ? Keys.Menu : null,
-                                        startupState: responsiveStep == 4
+                                        startupState: responsiveStep == StartupStep
                                             ? SetupStartupState.NotConfigured
                                             : null,
-                                        viewMode: SetupViewMode.Accessible,
+                                        viewMode: responsiveView,
                                         captureSize: responsiveSize,
                                         windowsTextScale: textScale);
                                 }
@@ -319,7 +364,8 @@ internal static class FirstRunSetup
                         SetupViewMode viewMode = SetupViewMode.Standard,
                         Size? captureSize = null,
                         float? windowsTextScale = null,
-                        bool scrollToBottom = false)
+                        bool startupOnly = false,
+                        bool strictDataMode = false)
                     {
                         string capturePath = Path.Combine(variantDirectory, fileName);
                         Directory.CreateDirectory(Path.GetDirectoryName(capturePath)!);
@@ -330,7 +376,9 @@ internal static class FirstRunSetup
                                        fontSize,
                                        Keys.Menu,
                                        false,
-                                       viewMode),
+                                       viewMode,
+                                       strictDataMode),
+                                   startupOnly: startupOnly,
                                    captureWindowsTextScale: windowsTextScale))
                         {
                             form.CaptureStep(
@@ -344,8 +392,7 @@ internal static class FirstRunSetup
                                 capturingHotkey,
                                 viewMode,
                                 captureSize,
-                                windowsTextScale,
-                                scrollToBottom);
+                                windowsTextScale);
                         }
                     }
                 }
@@ -357,13 +404,15 @@ internal static class FirstRunSetup
         }
     }
 
-    private static FirstRunSetupSelection ReadInitialSelection()
+    private static FirstRunSetupSelection ReadInitialSelection(string? settingsPath = null)
     {
         UiLanguage language = UiText.GetStartupLanguage();
+        int themeMode = ThemeAuto;
         int fontSize = FontDefault;
         Keys enableKey = Keys.Menu;
+        bool strictDataMode = false;
 
-        foreach (string path in new[] { AppPaths.SettingsPath, AppPaths.LegacySettingsPath })
+        foreach (string path in settingsPath != null ? new[] { settingsPath } : new[] { AppPaths.SettingsPath, AppPaths.LegacySettingsPath })
         {
             try
             {
@@ -374,11 +423,20 @@ internal static class FirstRunSetup
 
                 using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
                 JsonElement root = document.RootElement;
+                if (root.TryGetProperty("StrictDataMode", out JsonElement strictValue) &&
+                    strictValue.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                    strictDataMode = strictValue.GetBoolean();
                 if (root.TryGetProperty("Language", out JsonElement languageValue) &&
                     languageValue.TryGetInt32(out int languageNumber) &&
                     Enum.IsDefined(typeof(UiLanguage), languageNumber))
                 {
                     language = (UiLanguage)languageNumber;
+                }
+
+                if (root.TryGetProperty("ThemeMode", out JsonElement themeValue) &&
+                    themeValue.TryGetInt32(out int themeNumber) && themeNumber is >= ThemeAuto and <= ThemeLight)
+                {
+                    themeMode = themeNumber;
                 }
 
                 if (root.TryGetProperty("UiFontSize", out JsonElement fontValue) &&
@@ -391,7 +449,7 @@ internal static class FirstRunSetup
                 if (root.TryGetProperty("EnableKey", out JsonElement enableKeyValue) &&
                     enableKeyValue.TryGetInt32(out int enableKeyNumber))
                 {
-                    enableKey = (Keys)enableKeyNumber;
+                    enableKey = TrayContext.NormalizeShortcutKey(enableKeyNumber, Keys.Menu);
                 }
 
                 break;
@@ -402,25 +460,26 @@ internal static class FirstRunSetup
             }
         }
 
-        // Every setup session begins by following Windows until the user makes
-        // an explicit appearance choice on step two.
+        // Replaying setup must preserve the user's existing appearance choice.
         return new FirstRunSetupSelection(
             language,
-            ThemeAuto,
+            themeMode,
             fontSize,
             enableKey,
             StartupServiceWasSkipped(),
-            ReadPreferredSetupView());
+            ReadPreferredSetupView(),
+            strictDataMode);
     }
 
-    private static void SaveSelection(FirstRunSetupSelection selection)
+    private static void SaveSelection(FirstRunSetupSelection selection, string? settingsPath = null)
     {
-        string path = AppPaths.SettingsPath;
-        JsonObject settings = ReadSettingsObject() ?? new JsonObject();
+        string path = settingsPath ?? AppPaths.SettingsPath;
+        JsonObject settings = ReadSettingsObject(settingsPath) ?? new JsonObject();
         settings["Language"] = (int)selection.Language;
         settings["ThemeMode"] = selection.ThemeMode;
         settings["UiFontSize"] = selection.FontSize;
         settings["EnableKey"] = (int)selection.EnableKey;
+        settings["StrictDataMode"] = selection.StrictDataMode;
 
         WriteJsonAtomically(path, settings.ToJsonString(new JsonSerializerOptions
         {
@@ -428,9 +487,9 @@ internal static class FirstRunSetup
         }));
     }
 
-    private static JsonObject? ReadSettingsObject()
+    private static JsonObject? ReadSettingsObject(string? settingsPath = null)
     {
-        foreach (string path in new[] { AppPaths.SettingsPath, AppPaths.LegacySettingsPath })
+        foreach (string path in settingsPath != null ? new[] { settingsPath } : new[] { AppPaths.SettingsPath, AppPaths.LegacySettingsPath })
         {
             try
             {
@@ -439,9 +498,8 @@ internal static class FirstRunSetup
                     continue;
                 }
 
-                JsonObject? settings = JsonNode.Parse(File.ReadAllText(path)) as JsonObject;
-                if (settings == null)
-                    continue;
+                JsonObject settings = JsonNode.Parse(File.ReadAllText(path)) as JsonObject
+                    ?? throw new JsonException("The settings file must contain an object.");
                 var filtered = new JsonObject();
                 foreach ((string key, JsonNode? value) in settings)
                 {
@@ -464,6 +522,8 @@ internal static class FirstRunSetup
             catch (Exception ex)
             {
                 ErrorLog.WriteThrottled("FirstRunSetup.ReadObject", ex);
+                // Do not replace unreadable preferences with only the setup choices.
+                throw;
             }
         }
 
@@ -516,27 +576,24 @@ internal static class FirstRunSetup
             }
 
             using JsonDocument document = JsonDocument.Parse(File.ReadAllText(StatePath));
-            JsonElement root = document.RootElement;
-            if (root.TryGetProperty("PreferredSetupView", out JsonElement value) &&
-                value.ValueKind == JsonValueKind.String &&
-                Enum.TryParse(value.GetString(), ignoreCase: true, out SetupViewMode viewMode))
-            {
-                return viewMode;
-            }
-
-            // Completed setup state from an older build keeps the original
-            // standard-size behavior until the user chooses a view.
-            return root.TryGetProperty("Version", out JsonElement versionValue) &&
-                versionValue.TryGetInt32(out int version) &&
-                version >= CurrentSetupVersion
-                ? SetupViewMode.Standard
-                : SetupViewMode.Accessible;
+            return ParsePreferredSetupView(document.RootElement);
         }
         catch (Exception ex)
         {
             ErrorLog.WriteThrottled("FirstRunSetup.ReadPreferredView", ex);
             return SetupViewMode.Accessible;
         }
+    }
+
+    private static SetupViewMode ParsePreferredSetupView(JsonElement root)
+    {
+        if (!root.TryGetProperty("Version", out JsonElement versionValue) ||
+            !versionValue.TryGetInt32(out int version) || version < CurrentSetupVersion)
+            return SetupViewMode.Accessible;
+        return root.TryGetProperty("PreferredSetupView", out JsonElement value) &&
+            value.ValueKind == JsonValueKind.String &&
+            Enum.TryParse(value.GetString(), ignoreCase: true, out SetupViewMode viewMode) && Enum.IsDefined(viewMode)
+            ? viewMode : SetupViewMode.Standard;
     }
 
     private static void WriteCompletionState(
@@ -566,7 +623,8 @@ internal static class FirstRunSetup
         int FontSize,
         Keys EnableKey,
         bool StartupServiceSkipped,
-        SetupViewMode ViewMode);
+        SetupViewMode ViewMode,
+        bool StrictDataMode = false);
 
     internal enum SetupViewMode
     {
@@ -583,7 +641,8 @@ internal static class FirstRunSetup
 
     private readonly record struct SetupValidation(
         SetupValidationLevel Level,
-        string Text);
+        string Text,
+        string TextKey = "");
 
     private enum SetupIcon
     {
@@ -648,12 +707,12 @@ internal static class FirstRunSetup
         private readonly SetupWaveTransition _transitionOverlay;
         private readonly List<SetupChoiceCard> _cards = new();
         private readonly Dictionary<(float Size, FontStyle Style), Font> _ownedFonts = new();
-        private Font? _fittedHeaderFont;
         private int _step;
         private UiLanguage _language;
         private int _themeMode;
         private int _fontSize;
         private Keys _enableKey;
+        private bool _strictDataMode;
         private SetupViewMode _viewMode;
         private bool _capturingHotkey;
         private bool _pendingControlKey;
@@ -661,7 +720,6 @@ internal static class FirstRunSetup
         private ThemePalette _palette;
         private Label? _headingLabel;
         private Label? _descriptionLabel;
-        private Label? _themeSectionLabel;
         private SetupHotkeyRow? _enableHotkeyRow;
         private readonly List<SetupUsageTile> _usageTiles = new();
         private SetupStartupServiceTile? _startupServiceTile;
@@ -671,6 +729,7 @@ internal static class FirstRunSetup
         private readonly bool _startupOnly;
         private readonly bool _allowLivePractice;
         private bool _startupStatusChecked;
+        private Process? _startupHelper;
         private bool _captureMode;
         private bool _startupServiceSkipped;
         private bool _accepted;
@@ -678,6 +737,8 @@ internal static class FirstRunSetup
         private Rectangle _standardBounds;
         private bool _updatingViewLayout;
         private float? _captureWindowsTextScale;
+        private float _windowsTextScale = AccessibilityPreferences.WindowsTextScale;
+        private float? _fittedFontScale;
 
         internal FirstRunSetupForm(
             FirstRunSetupSelection initial,
@@ -689,6 +750,7 @@ internal static class FirstRunSetup
             _themeMode = ThemeAuto;
             _fontSize = initial.FontSize;
             _enableKey = initial.EnableKey;
+            _strictDataMode = initial.StrictDataMode;
             _viewMode = initial.ViewMode;
             _captureWindowsTextScale = captureWindowsTextScale;
             _startupServiceSkipped = initial.StartupServiceSkipped;
@@ -867,13 +929,32 @@ internal static class FirstRunSetup
                 }
             };
             ClientSizeChanged += (_, _) => UpdateResponsiveLayout(rebuildContent: false);
+            _contentHost.ClientSizeChanged += (_, _) => UpdateResponsiveLayout(rebuildContent: false);
+            Shown += (_, _) => UpdateResponsiveLayout(rebuildContent: false);
+            SystemEvents.UserPreferenceChanged += OnAccessibilityPreferenceChanged;
 
             UpdateResponsiveLayout(rebuildContent: false);
-            ShowStep(startupOnly ? 4 : 0, animate: false);
+            ShowStep(startupOnly ? StartupStep : 0, animate: false);
         }
 
         internal FirstRunSetupSelection? Selection { get; private set; }
         internal SetupViewMode ViewMode => _viewMode;
+
+        private void OnAccessibilityPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
+        {
+            if (_captureMode || !IsHandleCreated || IsDisposed || Disposing) return;
+            if (e.Category is not (UserPreferenceCategory.Accessibility or UserPreferenceCategory.Color or UserPreferenceCategory.General)) return;
+            try
+            {
+                BeginInvoke((MethodInvoker)(() =>
+                {
+                    if (IsDisposed || Disposing) return;
+                    _windowsTextScale = AccessibilityPreferences.WindowsTextScale;
+                    ApplyVisuals();
+                }));
+            }
+            catch (InvalidOperationException) { /* Window closed while the system notification was queued. */ }
+        }
 
         protected override bool ShowWithoutActivation => _captureMode;
 
@@ -947,7 +1028,7 @@ internal static class FirstRunSetup
                 Activate();
                 FocusCurrentStepEntry();
                 WindowChrome.TryFlushComposition();
-                if (_step == 4)
+                if (_step == StartupStep)
                 {
                     BeginStartupStatusCheck();
                 }
@@ -1015,17 +1096,14 @@ internal static class FirstRunSetup
                 "Segoe UI",
                 Math.Max(8f, 9.2f * FontScale),
                 FontStyle.Bold);
-            int labelWidth = TextRenderer.MeasureText(
-                T("Setup.ViewAccessible"),
+            int labelWidth = Translations("Setup.ViewAccessible").Max(text => TextRenderer.MeasureText(
+                text,
                 font,
                 Size.Empty,
                 TextFormatFlags.NoPadding |
                 TextFormatFlags.SingleLine |
-                TextFormatFlags.NoPrefix).Width;
-            return Math.Clamp(
-                labelWidth + ControlDrawing.ScaleLogical(this, 86),
-                _viewMode == SetupViewMode.Accessible ? 220 : 190,
-                _viewMode == SetupViewMode.Accessible ? 360 : 280);
+                TextFormatFlags.NoPrefix).Width);
+            return labelWidth + ControlDrawing.ScaleLogical(this, 70);
         }
 
         private int GetViewSelectorHeight() =>
@@ -1033,7 +1111,7 @@ internal static class FirstRunSetup
                 ? Math.Max(
                     ControlDrawing.ScaleLogical(this, 48),
                     LayoutHeight(42))
-                : LayoutHeight(42);
+                : Math.Max(LayoutHeight(42), ControlDrawing.ScaleLogical(this, 30));
 
         private void UpdateResponsiveLayout(bool rebuildContent)
         {
@@ -1047,79 +1125,92 @@ internal static class FirstRunSetup
             _updatingViewLayout = true;
             try
             {
-                _root.Padding = GetRootPadding();
-                int contentWidth = Math.Max(
-                    1,
-                    ClientSize.Width - _root.Padding.Horizontal);
-                int selectorWidth = Math.Min(
-                    GetViewSelectorWidth(),
-                    Math.Max(1, contentWidth / 3));
-                int selectorHeight = GetViewSelectorHeight();
-                int headerGap = ControlDrawing.ScaleLogical(this, 18);
-                int titleWidth = Math.Max(
-                    1,
-                    contentWidth - selectorWidth - headerGap);
-                using Font headerFont = CreateFittedHeaderFont(
-                    T("Setup.WelcomeTitle"),
-                    titleWidth);
-                int measuredHeaderHeight = TextRenderer.MeasureText(
-                    T("Setup.WelcomeTitle"),
-                    headerFont,
-                    new Size(titleWidth, int.MaxValue),
-                    TextFormatFlags.NoPadding |
-                    TextFormatFlags.SingleLine |
-                    TextFormatFlags.NoPrefix).Height;
-                _root.RowStyles[0].Height = Math.Max(
-                    Math.Max(
-                        ControlDrawing.ScaleLogical(this, 58),
-                        selectorHeight),
-                    measuredHeaderHeight + ControlDrawing.ScaleLogical(this, 12));
-
-                int navigationColumn = _viewMode == SetupViewMode.Accessible ? 240 : 190;
-                int progressColumn = _viewMode == SetupViewMode.Accessible ? 220 : 200;
-                int navigationHeight = _viewMode == SetupViewMode.Accessible
-                    ? Math.Max(64, LayoutHeight(42))
-                    : LayoutHeight(42);
-                int footerTopPadding = _viewMode == SetupViewMode.Accessible ? 10 : 12;
-                _root.RowStyles[3].Height =
-                    navigationHeight + ControlDrawing.ScaleLogical(this, footerTopPadding);
-                _footer.Padding = new Padding(
-                    0,
-                    ControlDrawing.ScaleLogical(this, footerTopPadding),
-                    0,
-                    0);
-                int skipColumn =
-                    _step == 4 && _startupState != SetupStartupState.Ready
-                        ? (_viewMode == SetupViewMode.Accessible ? 140 : 118)
-                        : 0;
-                _footer.ColumnStyles[0].Width = navigationColumn;
-                _footer.ColumnStyles[1].Width = skipColumn;
-                _footer.ColumnStyles[3].Width = progressColumn;
-                _footer.ColumnStyles[5].Width = skipColumn;
-                _footer.ColumnStyles[6].Width = navigationColumn;
-                _backButton.Size = new Size(navigationColumn - 10, navigationHeight);
-                _continueButton.Size = new Size(navigationColumn - 10, navigationHeight);
-                _skipButton.Size = new Size(
-                    Math.Max(1, (int)_footer.ColumnStyles[5].Width - 8),
-                    navigationHeight);
-
-                MinimumSize = GetMinimumWindowSize();
-                UpdateHeaderLayout();
-                if (rebuildContent && _headingLabel != null)
+                _fittedFontScale = null;
+                for (int pass = 0; pass < 24; pass++)
                 {
-                    bool resumeHotkeyCapture = _capturingHotkey;
-                    BuildStepContent();
-                    ApplyVisuals();
-                    if (resumeHotkeyCapture && _step == 2)
-                    {
-                        BeginHotkeyCapture();
-                    }
-                }
+                    ApplyVisualScale();
+                    _root.Padding = GetRootPadding();
+                    int contentWidth = Math.Max(
+                        1,
+                        ClientSize.Width - Padding.Horizontal - _root.Padding.Horizontal);
+                    _root.RowStyles[0].Height = GetHeaderGeometry(contentWidth).Height;
 
-                UpdateStepTextRowHeights(contentWidth);
-                _footer.PerformLayout();
-                _root.PerformLayout();
-                _footer.PerformLayout();
+                    int navigationColumn = _viewMode == SetupViewMode.Accessible ? 240 : 190;
+                    int progressColumn = _startupOnly ? 0 : Math.Max(_viewMode == SetupViewMode.Accessible ? 220 : 200,
+                        _stepIndicator.GetPreferredSize(Size.Empty).Width);
+                    int progressHeight = _startupOnly ? 0 : _stepIndicator.GetPreferredSize(Size.Empty).Height;
+                    int navigationHeight = Math.Max(
+                        Math.Max(_viewMode == SetupViewMode.Accessible ? 64 : 42,
+                            progressHeight),
+                        NavigationLabels.Max(text => TextRenderer.MeasureText(text, _continueButton.Font).Height) + 20);
+                    navigationColumn = Math.Max(navigationColumn,
+                        Math.Max(NavigationLabels.Max(text => TextRenderer.MeasureText(text, _continueButton.Font).Width),
+                            Translations("Setup.Back").Max(text => TextRenderer.MeasureText(text, _backButton.Font).Width)) + 30);
+                    int footerTopPadding = _viewMode == SetupViewMode.Accessible ? 10 : 12;
+                    _root.RowStyles[3].Height =
+                        navigationHeight + ControlDrawing.ScaleLogical(this, footerTopPadding);
+                    _footer.Padding = new Padding(
+                        0,
+                        ControlDrawing.ScaleLogical(this, footerTopPadding),
+                        0,
+                        0);
+                    int skipColumn =
+                        _step == StartupStep
+                            ? Math.Max(118, Translations("Setup.StartupSkip").Max(text => TextRenderer.MeasureText(text, _skipButton.Font).Width) + 28)
+                            : 0;
+                    bool stackedFooter = 2 * (navigationColumn + skipColumn) + progressColumn > contentWidth;
+                    _footer.RowCount = stackedFooter ? 2 : 1;
+                    _footer.RowStyles.Clear();
+                    if (stackedFooter)
+                        _footer.RowStyles.Add(new RowStyle(SizeType.Absolute, progressHeight));
+                    _footer.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+                    _footer.SetColumnSpan(_stepIndicator, 1);
+                    _footer.SetCellPosition(_stepIndicator, new TableLayoutPanelCellPosition(stackedFooter ? 0 : 3, 0));
+                    _footer.SetColumnSpan(_stepIndicator, stackedFooter ? 7 : 1);
+                    _footer.SetCellPosition(_backButton, new TableLayoutPanelCellPosition(0, stackedFooter ? 1 : 0));
+                    _footer.SetCellPosition(_skipButton, new TableLayoutPanelCellPosition(5, stackedFooter ? 1 : 0));
+                    _footer.SetCellPosition(_continueButton, new TableLayoutPanelCellPosition(6, stackedFooter ? 1 : 0));
+                    if (stackedFooter)
+                        _root.RowStyles[3].Height += progressHeight;
+                    _footer.ColumnStyles[0].Width = navigationColumn;
+                    _footer.ColumnStyles[1].Width = skipColumn;
+                    _footer.ColumnStyles[3].Width = stackedFooter ? 0 : progressColumn;
+                    _footer.ColumnStyles[5].Width = skipColumn;
+                    _footer.ColumnStyles[6].Width = navigationColumn;
+                    _backButton.Size = new Size(navigationColumn - 10, navigationHeight);
+                    _continueButton.Size = new Size(navigationColumn - 10, navigationHeight);
+                    _skipButton.Size = new Size(
+                        Math.Max(1, (int)_footer.ColumnStyles[5].Width - 8),
+                        navigationHeight);
+
+                    MinimumSize = GetMinimumWindowSize();
+                    UpdateHeaderLayout();
+                    if (rebuildContent && _headingLabel != null)
+                    {
+                        bool resumeHotkeyCapture = _capturingHotkey;
+                        BuildStepContent();
+                        ApplyVisuals();
+                        if (resumeHotkeyCapture && _step == 2)
+                        {
+                            BeginHotkeyCapture();
+                        }
+                    }
+
+                    UpdateStepTextRowHeights(contentWidth);
+                    _footer.PerformLayout();
+                    _root.PerformLayout();
+                    _footer.PerformLayout();
+                    UpdateHeaderLayout();
+                    int contentHeight = LayoutStepContent();
+                    if (contentHeight <= _contentHost.ClientSize.Height || FontScale <= 0.8f)
+                        break;
+
+                    // Fit the measured content, not a clipped or scrollable canvas.
+                    // Quantize the scale so resize/layout passes reuse cached fonts.
+                    float fit = Math.Clamp(_contentHost.ClientSize.Height / (float)contentHeight, 0.8f, 0.97f);
+                    _fittedFontScale = Math.Max(0.8f, MathF.Floor(FontScale * fit * 40f) / 40f);
+                    rebuildContent = false;
+                }
             }
             finally
             {
@@ -1136,36 +1227,81 @@ internal static class FirstRunSetup
             }
 
             int width = Math.Max(1, availableWidth);
-            layout.RowStyles[0].Height = MeasureLabelHeight(_headingLabel, width) +
+            layout.RowStyles[0].Height = Translations(StepHeadingKey).Max(text => MeasureLabelHeight(_headingLabel, width, text)) +
                 ControlDrawing.ScaleLogical(this, 4);
-            layout.RowStyles[1].Height = MeasureLabelHeight(_descriptionLabel, width) +
+            layout.RowStyles[1].Height = Translations(StepDescriptionKey, KeyLabel(_enableKey)).Max(text => MeasureLabelHeight(_descriptionLabel, width, text)) +
                 ControlDrawing.ScaleLogical(this, 4);
-            if (_themeSectionLabel?.Parent == layout)
-            {
-                layout.RowStyles[3].Height = MeasureLabelHeight(_themeSectionLabel, width) +
-                    ControlDrawing.ScaleLogical(this, 4);
-            }
         }
 
-        private static int MeasureLabelHeight(Label label, int availableWidth)
+        private int LayoutStepContent()
         {
+            if (_headingLabel?.Parent is not TableLayoutPanel layout) return 0;
+            _contentHost.AutoScroll = false;
+            _contentHost.AutoScrollMinSize = Size.Empty;
+            int width = _contentHost.ClientSize.Width;
+            layout.Padding = new Padding(0, LayoutHeight(_step >= StartupStep ? 4 : 12), 0, 0);
+            UpdateStepTextRowHeights(width);
+            layout.RowStyles[2].Height = LayoutHeight(16);
+            for (int row = 3; row < layout.RowCount; row++)
+            {
+                Control? child = layout.GetControlFromPosition(0, row);
+                int height = 0;
+                if (child != null)
+                {
+                    if (_step == 0 && child is TableLayoutPanel languageColumn)
+                        languageColumn.ColumnStyles[1].Width = Math.Min(width, Math.Max(480, 560f * FontScale));
+                    height = child.GetPreferredSize(new Size(width, 0)).Height + child.Margin.Vertical;
+                    if (_step == 0)
+                    {
+                        using Font font = new("Segoe UI", 10.2f * FontScale, FontStyle.Bold);
+                        height = 5 * (Math.Max(56, TextRenderer.MeasureText("English", font).Height + 24) + 8);
+                    }
+                    else if (_step == 1)
+                    {
+                        height = LayoutThemeChoices((TableLayoutPanel)child, width);
+                    }
+                    else if (_step == PrivacyStep)
+                    {
+                        int textWidth = Math.Max(1, width - ControlDrawing.ScaleLogical(this, 40));
+                        height = new[] { ("Setup.PrivacyStandard", "Setup.PrivacyStandardBody"),
+                            ("Settings.StrictDataMode", "Setup.PrivacyStrictBody") }.Sum(keys =>
+                            MeasureTranslatedSetupText(this, keys.Item1, 11.3f * FontScale, textWidth, FontStyle.Bold) +
+                            MeasureTranslatedSetupText(this, keys.Item2, 9.1f * FontScale, textWidth) +
+                            ControlDrawing.ScaleLogical(this, 40));
+                    }
+                }
+                layout.RowStyles[row].SizeType = SizeType.Absolute;
+                layout.RowStyles[row].Height = height;
+            }
+            int requiredHeight = layout.Padding.Vertical +
+                (int)Math.Ceiling(layout.RowStyles.Cast<RowStyle>().Sum(style => style.Height));
+            layout.Dock = DockStyle.None;
+            layout.Size = new Size(width, requiredHeight);
+            layout.Location = Point.Empty;
+            _contentHost.PerformLayout();
+            layout.PerformLayout();
+            return requiredHeight;
+        }
+
+        private static int MeasureLabelHeight(Label label, int availableWidth, string? text = null)
+        {
+            text ??= label.Text;
+            availableWidth = Math.Max(1, availableWidth - label.Margin.Horizontal - label.Padding.Horizontal);
             Size singleLine = TextRenderer.MeasureText(
-                label.Text,
+                text,
                 label.Font,
                 new Size(32767, 32767),
-                TextFormatFlags.NoPadding |
                 TextFormatFlags.SingleLine |
                 TextFormatFlags.NoPrefix);
-            if (!label.Text.Contains('\n') && singleLine.Width <= availableWidth)
+            if (!text.Contains('\n') && singleLine.Width <= availableWidth)
             {
                 return singleLine.Height;
             }
 
             return TextRenderer.MeasureText(
-                label.Text,
+                text,
                 label.Font,
                 new Size(availableWidth, 32767),
-                TextFormatFlags.NoPadding |
                 TextFormatFlags.WordBreak |
                 TextFormatFlags.NoPrefix).Height;
         }
@@ -1181,63 +1317,47 @@ internal static class FirstRunSetup
                 return;
             }
 
-            string welcomeTitle = T("Setup.WelcomeTitle");
-            int selectorWidth = GetViewSelectorWidth();
+            string welcomeTitle = GetHeaderTitle();
+            (int titleWidth, int titleHeight, int headerHeight, bool stacked) = GetHeaderGeometry(_header.Width);
+            int selectorWidth = Math.Min(GetViewSelectorWidth(), _header.Width);
             int selectorHeight = GetViewSelectorHeight();
-            selectorWidth = Math.Min(
-                selectorWidth,
-                Math.Max(1, _header.Width / 3));
+            int bottomGap = ControlDrawing.ScaleLogical(this, 6);
             _viewSelector.Bounds = new Rectangle(
                 Math.Max(0, _header.Width - selectorWidth),
-                Math.Max(0, (_header.Height - selectorHeight) / 2),
+                stacked ? headerHeight - selectorHeight - bottomGap : Math.Max(0, (_header.Height - bottomGap - selectorHeight) / 2),
                 selectorWidth,
-                Math.Min(selectorHeight, _header.Height));
-            int titleWidth = Math.Max(
-                1,
-                _viewSelector.Left - ControlDrawing.ScaleLogical(this, 18));
-            Font fittedHeaderFont = CreateFittedHeaderFont(
-                welcomeTitle,
-                titleWidth);
-            Font previousHeaderFont = _welcomeLabel.Font;
-            if (previousHeaderFont.FontFamily.Name == fittedHeaderFont.FontFamily.Name &&
-                previousHeaderFont.Style == fittedHeaderFont.Style &&
-                Math.Abs(previousHeaderFont.Size - fittedHeaderFont.Size) < 0.01f)
-            {
-                fittedHeaderFont.Dispose();
-            }
-            else
-            {
-                _welcomeLabel.Font = fittedHeaderFont;
-                _fittedHeaderFont?.Dispose();
-                _fittedHeaderFont = fittedHeaderFont;
-            }
-            _welcomeLabel.AccessibleName = welcomeTitle;
+                selectorHeight);
+            _welcomeLabel.Font = SetupFont(HeaderTitleFontSize, FontStyle.Bold);
+            _welcomeLabel.AccessibleName = _startupOnly ? welcomeTitle : T("Setup.WelcomeTitle");
             _welcomeLabel.Text = welcomeTitle;
             _welcomeLabel.Bounds = new Rectangle(
                 0,
                 0,
                 titleWidth,
-                _header.Height);
+                stacked ? titleHeight : _header.Height);
         }
 
-        private Font CreateFittedHeaderFont(string text, int availableWidth)
+        private (int TitleWidth, int TitleHeight, int Height, bool Stacked) GetHeaderGeometry(int width)
         {
-            Font baseFont = SetupFont(HeaderTitleFontSize, FontStyle.Bold);
-            float minimumSize = Math.Max(11f, baseFont.Size * 0.7f);
-            int safeWidth = Math.Max(1, (int)MathF.Floor(availableWidth * 0.9f));
-            int measuredWidth = TextRenderer.MeasureText(
-                text,
-                baseFont,
-                Size.Empty,
-                TextFormatFlags.NoPadding |
-                TextFormatFlags.SingleLine |
-                TextFormatFlags.NoPrefix).Width;
-            float fittedSize = measuredWidth <= safeWidth
-                ? baseFont.Size
-                : Math.Max(
-                    minimumSize,
-                    baseFont.Size * safeWidth / Math.Max(1f, measuredWidth));
-            return new Font("Segoe UI", fittedSize, FontStyle.Bold);
+            Font font = SetupFont(HeaderTitleFontSize, FontStyle.Bold);
+            int gap = ControlDrawing.ScaleLogical(this, 16);
+            int selectorWidth = Math.Min(GetViewSelectorWidth(), width);
+            string[] titles = _startupOnly ? ["QuickZoom 3"] : Translations("Setup.WelcomeTitle").ToArray();
+            int naturalWidth = titles.Max(title => TextRenderer.MeasureText(title, font).Width);
+            bool stacked = naturalWidth + selectorWidth + gap > width;
+            int titleWidth = Math.Max(1, stacked ? width : width - selectorWidth - gap);
+            int titleHeight = titles.Max(title => TextRenderer.MeasureText(title, font,
+                new Size(Math.Max(1, titleWidth - 12), int.MaxValue),
+                TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height) + 8;
+            int height = stacked ? titleHeight + gap / 2 + GetViewSelectorHeight()
+                : Math.Max(titleHeight, GetViewSelectorHeight());
+            height += ControlDrawing.ScaleLogical(this, 6);
+            return (titleWidth, titleHeight, height, stacked);
+        }
+
+        private string GetHeaderTitle()
+        {
+            return _startupOnly ? "QuickZoom 3" : T("Setup.WelcomeTitle");
         }
 
         private void SwitchViewMode(SetupViewMode viewMode)
@@ -1307,6 +1427,9 @@ internal static class FirstRunSetup
 
         internal void ValidateViewToggleInteraction()
         {
+            if (_step != 0 || _startupOnly)
+                throw new InvalidOperationException("Full setup must start at the language screen.");
+            _captureMode = true;
             CreateControl();
             EnsureControlHandles(this);
             PerformLayoutTree(this);
@@ -1336,6 +1459,128 @@ internal static class FirstRunSetup
                 throw new InvalidOperationException(
                     "The setup view toggle did not return to its initial mode.");
             }
+            for (int step = 0; step < SetupStepCount; step++)
+            {
+                _startupState = SetupStartupState.NotConfigured;
+                _enableKey = Keys.LWin;
+                ShowStep(step, animate: false);
+                if (step == PrivacyStep)
+                {
+                    if (_strictDataMode) throw new InvalidOperationException("Strict Data must default off.");
+                    _cards[1].AccessibilityObject.DoDefaultAction();
+                    if (!_strictDataMode || !_cards[1].Selected || _cards[0].Selected)
+                        throw new InvalidOperationException("Accessible privacy selection failed.");
+                }
+                if (step == 2) BeginHotkeyCapture();
+                _viewSelector.PerformMouseClickForValidation();
+                UpdateResponsiveLayout(rebuildContent: false);
+                ValidateSetupViewport();
+                _viewSelector.AccessibilityObject.DoDefaultAction();
+                UpdateResponsiveLayout(rebuildContent: false);
+                ValidateSetupViewport();
+                if (_step != step || _viewMode != initialMode || _enableKey != Keys.LWin ||
+                    step == 2 && !_capturingHotkey)
+                    throw new InvalidOperationException("Changing setup view lost wizard state.");
+                CancelHotkeyCapture();
+            }
+            ShowStep(PrivacyStep, animate: false);
+            if (!_strictDataMode || !_cards[1].Selected)
+                throw new InvalidOperationException("Privacy choice was lost when switching setup views/steps.");
+            _cards[0].AccessibilityObject.DoDefaultAction();
+            if (_strictDataMode) throw new InvalidOperationException("Standard data mode could not be restored.");
+            ShowStep(0, animate: false);
+            foreach (UiLanguage language in Enum.GetValues<UiLanguage>())
+            {
+                SelectLanguage(language);
+                UpdateResponsiveLayout(rebuildContent: false);
+                ValidateSetupViewport();
+            }
+            ShowStep(StartupStep, animate: false);
+            _startupState = SetupStartupState.Installing;
+            UpdateStartupServiceContent();
+            _viewSelector.PerformMouseClickForValidation();
+            if (_viewSelector.Enabled || _viewMode != initialMode)
+                throw new InvalidOperationException("The setup view toggle must be disabled during autostart work.");
+            Rectangle startupBounds = _startupServiceTile!.Bounds;
+            Rectangle footerBounds = _footer.Bounds;
+            float startupScale = FontScale;
+            foreach (SetupStartupState state in Enum.GetValues<SetupStartupState>())
+            {
+                _startupState = state;
+                UpdateStartupServiceContent();
+                if (_startupServiceTile.Bounds != startupBounds || _footer.Bounds != footerBounds || FontScale != startupScale)
+                    throw new InvalidOperationException("Startup status changes must not resize the progress card or navigation.");
+            }
+            _startupState = SetupStartupState.NotConfigured;
+        }
+
+        internal void ValidateStartupOnlyNavigation(bool skip)
+        {
+            _captureMode = true;
+            ShowStep(StartupStep, animate: false);
+            foreach (SetupStartupState state in Enum.GetValues<SetupStartupState>())
+            {
+                _startupState = state;
+                UpdateStartupServiceContent();
+                if (_continueButton.Enabled == StartupActionInProgress || _backButton.Visible)
+                    throw new InvalidOperationException("Startup-only wizard navigation is inconsistent.");
+                if (StartupActionInProgress)
+                {
+                    Continue();
+                    SkipStartupService();
+                    if (_accepted || IsDisposed)
+                        throw new InvalidOperationException("Busy startup work must not dismiss the wizard.");
+                }
+            }
+
+            _startupState = skip ? SetupStartupState.Declined : SetupStartupState.Ready;
+            UpdateStartupServiceContent();
+            if (skip) SkipStartupService();
+            else Continue();
+            if (_accepted == skip || (Selection != null) == skip ||
+                (!skip && Selection!.StartupServiceSkipped))
+                throw new InvalidOperationException("Startup-only finish/skip returned an incorrect result.");
+        }
+
+        private void ValidateLanguageLayoutStability()
+        {
+            UiLanguage original = _language;
+            string[]? expected = null;
+            try
+            {
+                // Exercise real language changes at the capture's resolution, view and text scale.
+                foreach (UiLanguage language in SetupLanguages)
+                {
+                    SelectLanguage(language);
+                    UpdateResponsiveLayout(rebuildContent: false);
+                    PerformLayoutTree(this);
+                    ValidateSetupViewport();
+                    string[] actual = Snapshot(this).Prepend($"FontScale={FontScale}").ToArray();
+                    if (expected != null && !expected.SequenceEqual(actual))
+                    {
+                        int difference = Enumerable.Range(0, Math.Min(expected.Length, actual.Length))
+                            .FirstOrDefault(index => expected[index] != actual[index]);
+                        throw new InvalidOperationException(
+                            $"Language changed setup geometry: step {_step}, {_viewMode}, {ClientSize}, {language}. " +
+                            $"Expected {expected[difference]}; actual {actual[difference]}.");
+                    }
+                    expected ??= actual;
+                }
+            }
+            finally
+            {
+                SelectLanguage(original);
+            }
+
+            static IEnumerable<string> Snapshot(Control parent)
+            {
+                foreach (Control child in parent.Controls)
+                {
+                    yield return child.Visible ? $"{child.GetType().Name}: {child.Bounds}" : $"{child.GetType().Name}: hidden";
+                    if (child.Visible)
+                        foreach (string descendant in Snapshot(child)) yield return descendant;
+                }
+            }
         }
 
         internal void CaptureStep(
@@ -1349,8 +1594,7 @@ internal static class FirstRunSetup
             bool capturingHotkey = false,
             SetupViewMode? viewMode = null,
             Size? captureSize = null,
-            float? windowsTextScale = null,
-            bool scrollToBottom = false)
+            float? windowsTextScale = null)
         {
             _captureMode = true;
             if (viewMode.HasValue)
@@ -1397,11 +1641,14 @@ internal static class FirstRunSetup
             WindowChrome.TrySetDarkTitleBar(this, _useDarkTheme);
             EnsureControlHandles(this);
             PerformLayoutTree(this);
+            ValidateLanguageLayoutStability();
+            if (capturingHotkey) BeginHotkeyCapture();
+            if (startupProgressComplete) _startupServiceTile?.SetCompletionProgressForCapture();
             ValidateAccessibilityTree(this);
             ValidateSetupViewport();
             _continueButton.SetInteractionStateForCapture(hoverContinue);
             WaitForCaptureUi();
-            _ = scrollToBottom;
+            ValidateSetupViewport();
             try
             {
                 using var bitmap = new Bitmap(Width, Height, PixelFormat.Format32bppArgb);
@@ -1453,6 +1700,8 @@ internal static class FirstRunSetup
 
         private void ValidateSetupViewport()
         {
+            if (_welcomeLabel.Text != GetHeaderTitle())
+                throw new InvalidOperationException("The localized setup heading must not be shortened or omitted.");
             if (_header.Bottom > _headerDivider.Top ||
                 _headerDivider.Bottom > _contentHost.Top ||
                 _contentHost.Bottom > _footer.Top)
@@ -1461,12 +1710,10 @@ internal static class FirstRunSetup
                     "Setup header, content, and footer regions must not overlap.");
             }
 
-            if (_contentHost.AutoScroll ||
-                _contentHost.VerticalScroll.Visible ||
-                _contentHost.HorizontalScroll.Visible)
+            if (_contentHost.HorizontalScroll.Visible || _contentHost.VerticalScroll.Visible)
             {
                 throw new InvalidOperationException(
-                    "Setup content must fit without scrollbars.");
+                    $"Setup content must never require scrolling. Step {_step}, host {_contentHost.ClientSize}, content {_headingLabel?.Parent?.Bounds}.");
             }
 
             if (_viewSelector.Left < 0 ||
@@ -1475,24 +1722,30 @@ internal static class FirstRunSetup
                 _viewSelector.Bottom > _header.ClientSize.Height)
             {
                 throw new InvalidOperationException(
-                    "The setup view toggle extends outside the header.");
+                    $"The setup view toggle {_viewSelector.Bounds} extends outside header {_header.ClientSize} on step {_step}, scale {FontScale}.");
             }
 
-            _stepIndicator.ValidatePaintBounds();
+            if (_stepIndicator.Visible) _stepIndicator.ValidatePaintBounds();
+            foreach (Control action in _footer.Controls)
+            {
+                if (action.Visible && !_footer.ClientRectangle.Contains(action.Bounds))
+                    throw new InvalidOperationException($"Setup footer control '{action.AccessibleName}' is clipped.");
+            }
 
             foreach (Control child in _contentHost.Controls)
             {
-                if (child.Left < 0 ||
-                    child.Top < 0 ||
-                    child.Right > _contentHost.ClientSize.Width + 1 ||
-                    child.Bottom > _contentHost.ClientSize.Height + 1)
+                if (child.Left < 0 || child.Top < 0 ||
+                    child.Right > _contentHost.ClientSize.Width + 1 || child.Bottom > _contentHost.ClientSize.Height + 1)
                 {
                     throw new InvalidOperationException(
-                        $"Setup content '{child.GetType().Name}' extends outside the viewport.");
+                        $"Setup step {_step} content {child.Bounds} extends outside viewport {_contentHost.ClientSize} at scale {FontScale}.");
                 }
             }
 
             ValidateVisibleLabelsFit(this);
+            _viewSelector.ValidateContentBounds();
+            foreach (SetupChoiceCard card in _cards)
+                if (card.Prominent) card.ValidateThemeContentBounds();
         }
 
         private static void ValidateVisibleLabelsFit(Control root)
@@ -1507,7 +1760,6 @@ internal static class FirstRunSetup
                     label.Text,
                     label.Font,
                     new Size(32767, 32767),
-                    TextFormatFlags.NoPadding |
                     TextFormatFlags.SingleLine |
                     TextFormatFlags.NoPrefix);
                 Size measured =
@@ -1518,7 +1770,6 @@ internal static class FirstRunSetup
                         label.Text,
                         label.Font,
                         new Size(label.ClientSize.Width, int.MaxValue),
-                        TextFormatFlags.NoPadding |
                         TextFormatFlags.WordBreak |
                         TextFormatFlags.NoPrefix);
                 if (measured.Height > label.ClientSize.Height + 2)
@@ -1534,6 +1785,12 @@ internal static class FirstRunSetup
             foreach (Control child in root.Controls)
             {
                 ValidateVisibleLabelsFit(child);
+            }
+            if (root.Visible && root is SetupHotkeyRow or SetupUsageTile or SetupStartupServiceTile or SetupCompletionTile)
+            {
+                int requiredHeight = root.GetPreferredSize(new Size(root.Width, 0)).Height;
+                if (root.Height + 3 < requiredHeight)
+                    throw new InvalidOperationException($"Painted setup control {root.GetType().Name} needs {requiredHeight}px, has {root.Height}px.");
             }
         }
 
@@ -1643,13 +1900,13 @@ internal static class FirstRunSetup
                 return;
             }
 
-            if (_step < 4)
+            if (_step < StartupStep)
             {
                 ShowStep(_step + 1);
                 return;
             }
 
-            if (_step == 5)
+            if (_step == CompleteStep)
             {
                 CompleteSetup(_startupServiceSkipped);
                 return;
@@ -1664,7 +1921,7 @@ internal static class FirstRunSetup
                 else
                 {
                     _startupServiceSkipped = false;
-                    ShowStep(5);
+                    ShowStep(CompleteStep);
                 }
                 return;
             }
@@ -1684,7 +1941,8 @@ internal static class FirstRunSetup
                 _fontSize,
                 _enableKey,
                 startupServiceSkipped,
-                _viewMode);
+                _viewMode,
+                _strictDataMode);
             _accepted = true;
             Close();
         }
@@ -1703,12 +1961,12 @@ internal static class FirstRunSetup
             }
 
             _startupServiceSkipped = true;
-            ShowStep(5);
+            ShowStep(CompleteStep);
         }
 
         private void ShowStep(int step, bool animate = true)
         {
-            int nextStep = Math.Clamp(step, _startupOnly ? 4 : 0, _startupOnly ? 4 : 5);
+            int nextStep = Math.Clamp(step, _startupOnly ? StartupStep : 0, _startupOnly ? StartupStep : CompleteStep);
             if (_step == 3 && nextStep != 3)
             {
                 StopLivePractice();
@@ -1723,7 +1981,7 @@ internal static class FirstRunSetup
             BuildStepContent();
             ApplyVisuals();
             _stepIndicator.Step = _step;
-            if (_step == 4 && Visible && !_captureMode)
+            if (_step == StartupStep && Visible && !_captureMode)
             {
                 BeginStartupStatusCheck();
             }
@@ -1743,7 +2001,7 @@ internal static class FirstRunSetup
 
             Control? target = _step switch
             {
-                0 or 1 => _cards.FirstOrDefault(card => card.Selected) ?? _cards.FirstOrDefault(),
+                0 or 1 or PrivacyStep => _cards.FirstOrDefault(card => card.Selected) ?? _cards.FirstOrDefault(),
                 2 => _enableHotkeyRow,
                 _ => _continueButton
             };
@@ -1808,7 +2066,6 @@ internal static class FirstRunSetup
                 }
 
                 _cards.Clear();
-                _themeSectionLabel = null;
                 _enableHotkeyRow = null;
                 _usageTiles.Clear();
                 _startupServiceTile = null;
@@ -1824,7 +2081,7 @@ internal static class FirstRunSetup
                     Margin = Padding.Empty,
                     Padding = new Padding(
                         0,
-                        LayoutHeight(_step >= 4 ? 4 : 12),
+                        LayoutHeight(_step >= StartupStep ? 4 : 12),
                         0,
                         0)
                 };
@@ -1848,8 +2105,7 @@ internal static class FirstRunSetup
                 }
                 else if (_step == 1)
                 {
-                    _themeSectionLabel = NewLabel();
-                    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, LayoutHeight(40)));
+                    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
                     if (_viewMode == SetupViewMode.Accessible)
                     {
                         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
@@ -1862,7 +2118,6 @@ internal static class FirstRunSetup
                             LayoutHeight(168)));
                         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
                     }
-                    layout.Controls.Add(_themeSectionLabel, 0, 3);
                     layout.Controls.Add(BuildThemeCards(), 0, 4);
                 }
                 else if (_step == 2)
@@ -1882,7 +2137,14 @@ internal static class FirstRunSetup
                     layout.Controls.Add(BuildUsageTile(SetupUsageKind.Invert), 0, 4);
                     layout.Controls.Add(BuildUsageTile(SetupUsageKind.Mode), 0, 5);
                 }
-                else if (_step == 4)
+                else if (_step == PrivacyStep)
+                {
+                    layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+                    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 1));
+                    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 1));
+                    layout.Controls.Add(BuildPrivacyCards(), 0, 3);
+                }
+                else if (_step == StartupStep)
                 {
                     layout.RowStyles[1].SizeType = SizeType.Absolute;
                     layout.RowStyles[1].Height = LayoutHeight(72);
@@ -1978,19 +2240,14 @@ internal static class FirstRunSetup
                 () => SelectLanguage(UiLanguage.Finnish),
                 compact: true,
                 vertical: true);
-            if (_viewMode != SetupViewMode.Accessible)
-            {
-                return grid;
-            }
-
             int availableWidth = Math.Max(
                 1,
                 ClientSize.Width - GetRootPadding().Horizontal);
             int listWidth = Math.Min(
                 availableWidth,
                 Math.Max(
-                    720,
-                    (int)Math.Round(840f * AccessibleCanvasScale)));
+                    480,
+                    (int)Math.Round(560f * FontScale)));
             var centered = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -2005,6 +2262,31 @@ internal static class FirstRunSetup
             centered.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
             centered.Controls.Add(grid, 1, 0);
             return centered;
+        }
+
+        private int LayoutThemeChoices(TableLayoutPanel grid, int width)
+        {
+            using Font font = new("Segoe UI", 13.2f * FontScale, FontStyle.Bold);
+            int requiredWidth = new[] { "Setup.ThemeSystemLabel", "Settings.ThemeDark", "Settings.ThemeLight" }
+                .SelectMany(key => Translations(key)).Max(text => TextRenderer.MeasureText(text, font).Width) +
+                ControlDrawing.ScaleLogical(this, 42);
+            bool stacked = requiredWidth * 3 > width;
+            grid.SuspendLayout();
+            grid.ColumnCount = stacked ? 1 : 3;
+            grid.RowCount = stacked ? 3 : 1;
+            grid.ColumnStyles.Clear();
+            grid.RowStyles.Clear();
+            for (int column = 0; column < grid.ColumnCount; column++)
+                grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / grid.ColumnCount));
+            for (int row = 0; row < grid.RowCount; row++)
+                grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100f / grid.RowCount));
+            for (int index = 0; index < _cards.Count; index++)
+                grid.SetCellPosition(_cards[index], new TableLayoutPanelCellPosition(stacked ? 0 : index, stacked ? index : 0));
+            grid.ResumeLayout();
+            int labelHeight = TextRenderer.MeasureText("Ag", font).Height;
+            int cardHeight = Math.Max((int)Math.Ceiling(140 * Math.Max(1f, FontScale)),
+                ControlDrawing.ScaleLogical(this, 68) + labelHeight + 12);
+            return (stacked ? 3 : 1) * cardHeight;
         }
 
         private Control BuildThemeCards()
@@ -2041,6 +2323,25 @@ internal static class FirstRunSetup
                 compact: true,
                 prominent: true);
             return grid;
+        }
+
+        private Control BuildPrivacyCards()
+        {
+            var grid = NewCardList(2);
+            AddCard(grid, T("Setup.PrivacyStandard"), T("Setup.PrivacyStandardBody"),
+                string.Empty, SetupIcon.None, !_strictDataMode, () => SelectPrivacy(false), vertical: true);
+            AddCard(grid, T("Settings.StrictDataMode"), T("Setup.PrivacyStrictBody"),
+                string.Empty, SetupIcon.None, _strictDataMode, () => SelectPrivacy(true), vertical: true);
+            _cards[1].UseWarningAccent = true;
+            foreach (SetupChoiceCard card in _cards) card.ShowIdentity = false;
+            return grid;
+        }
+
+        private void SelectPrivacy(bool strictDataMode)
+        {
+            _strictDataMode = strictDataMode;
+            _cards[0].Selected = !strictDataMode;
+            _cards[1].Selected = strictDataMode;
         }
 
         private SetupHotkeyRow BuildHotkeyRow()
@@ -2186,49 +2487,49 @@ internal static class FirstRunSetup
             {
                 return new SetupValidation(
                     SetupValidationLevel.Error,
-                    T("Setup.ShortcutUnsupported"));
+                    T("Setup.ShortcutUnsupported"), "Setup.ShortcutUnsupported");
             }
 
             if (key == Keys.F)
             {
                 return new SetupValidation(
                     SetupValidationLevel.Error,
-                    T("Setup.ShortcutFollowCursorConflict"));
+                    T("Setup.ShortcutFollowCursorConflict"), "Setup.ShortcutFollowCursorConflict");
             }
 
             if (key is Keys.LWin or Keys.RWin or Keys.Menu or Keys.LMenu or Keys.RMenu)
             {
                 return new SetupValidation(
                     SetupValidationLevel.Warning,
-                    T("Setup.ShortcutPriorityWarning", KeyLabel(key)));
+                    T("Setup.ShortcutPriorityWarning", KeyLabel(key)), "Setup.ShortcutPriorityWarning");
             }
 
             if (key == Keys.CapsLock)
             {
                 return new SetupValidation(
                     SetupValidationLevel.Warning,
-                    T("Setup.ShortcutCapsLockWarning"));
+                    T("Setup.ShortcutCapsLockWarning"), "Setup.ShortcutCapsLockWarning");
             }
 
             if (key is Keys.I or Keys.Z)
             {
                 return new SetupValidation(
                     SetupValidationLevel.Warning,
-                    T("Setup.ShortcutActionKeyWarning", KeyLabel(key)));
+                    T("Setup.ShortcutActionKeyWarning", KeyLabel(key)), "Setup.ShortcutActionKeyWarning");
             }
 
             if (key is Keys.Enter or Keys.Return || key == (Keys)FnVirtualKey)
             {
                 return new SetupValidation(
                     SetupValidationLevel.Warning,
-                    T("Setup.ShortcutSystemWarning", KeyLabel(key)));
+                    T("Setup.ShortcutSystemWarning", KeyLabel(key)), "Setup.ShortcutSystemWarning");
             }
 
             if (!IsRecommendedShortcutKey(key))
             {
                 return new SetupValidation(
                     SetupValidationLevel.Warning,
-                    T("Setup.ShortcutGeneralWarning"));
+                    T("Setup.ShortcutGeneralWarning"), "Setup.ShortcutGeneralWarning");
             }
 
             return new SetupValidation(SetupValidationLevel.None, string.Empty);
@@ -2360,9 +2661,7 @@ internal static class FirstRunSetup
             {
                 Dock = DockStyle.Fill,
                 Margin = vertical
-                    ? _viewMode == SetupViewMode.Accessible
-                        ? new Padding(0, 2, 0, cardIndex == grid.RowCount - 1 ? 2 : 4)
-                        : new Padding(0, 6, 0, cardIndex == grid.RowCount - 1 ? 6 : 8)
+                    ? new Padding(0, 2, 0, cardIndex == grid.RowCount - 1 ? 2 : 4)
                     : new Padding(0, 6, cardIndex == grid.ColumnCount - 1 ? 0 : 14, 6),
                 Compact = compact,
                 Prominent = prominent,
@@ -2437,7 +2736,7 @@ internal static class FirstRunSetup
                 SetupStartupState.Verifying;
 
         private bool StartupActionBlocksNavigation =>
-            _step == 4 && StartupActionInProgress;
+            _step == StartupStep && StartupActionInProgress;
 
         private async void BeginStartupStatusCheck()
         {
@@ -2448,7 +2747,7 @@ internal static class FirstRunSetup
 
             _startupStatusChecked = true;
             _startupState = SetupStartupState.Checking;
-            UpdateStartupServiceContent();
+            UpdateStartupServiceContent(relayout: false);
             try
             {
                 bool ready = await Task.Run(() => StartupTaskService.IsReadyForCurrentBuild(out _));
@@ -2457,10 +2756,13 @@ internal static class FirstRunSetup
                     return;
                 }
 
+                if (ready && _startupServiceTile != null)
+                    await _startupServiceTile.CompleteProgressAsync();
+                if (IsDisposed || Disposing) return;
                 _startupState = ready
                     ? SetupStartupState.Ready
                     : SetupStartupState.NotConfigured;
-                UpdateStartupServiceContent();
+                UpdateStartupServiceContent(relayout: false);
             }
             catch (Exception ex)
             {
@@ -2489,7 +2791,7 @@ internal static class FirstRunSetup
             }
 
             _startupState = SetupStartupState.AwaitingApproval;
-            UpdateStartupServiceContent();
+            UpdateStartupServiceContent(relayout: false);
             await Task.Yield();
 
             Process? helper;
@@ -2498,15 +2800,22 @@ internal static class FirstRunSetup
                 string currentUser = string.IsNullOrWhiteSpace(Environment.UserDomainName)
                     ? Environment.UserName
                     : Environment.UserDomainName + "\\" + Environment.UserName;
-                helper = Process.Start(new ProcessStartInfo
+                helper = _startupHelper;
+                if (helper == null || helper.HasExited)
                 {
-                    FileName = exePath,
-                    UseShellExecute = true,
-                    Verb = "runas",
-                    Arguments = Program.SetupStartupTaskInstallFlag +
-                        " --startup-task-user " +
-                        QuoteProcessArgument(currentUser)
-                });
+                    helper?.Dispose();
+                    _startupHelper = null;
+                    helper = Process.Start(new ProcessStartInfo
+                    {
+                        FileName = exePath,
+                        UseShellExecute = true,
+                        Verb = "runas",
+                        Arguments = Program.SetupStartupTaskInstallFlag +
+                            " --startup-task-user " +
+                            QuoteProcessArgument(currentUser)
+                    });
+                    _startupHelper = helper;
+                }
             }
             catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
             {
@@ -2530,12 +2839,14 @@ internal static class FirstRunSetup
             }
 
             _startupState = SetupStartupState.Installing;
-            UpdateStartupServiceContent();
-            using (helper)
+            UpdateStartupServiceContent(relayout: false);
             {
                 try
                 {
-                    await helper.WaitForExitAsync();
+                    // A stuck elevated helper must not permanently trap the user
+                    // on this page. A retry observes the same running helper.
+                    if (!await ProcessOutput.WaitForExitAsync(helper, TimeSpan.FromMinutes(3)))
+                        throw new TimeoutException("The startup helper did not finish within three minutes.");
                     int exitCode = helper.ExitCode;
                     if (IsDisposed || Disposing)
                     {
@@ -2543,7 +2854,7 @@ internal static class FirstRunSetup
                     }
 
                     _startupState = SetupStartupState.Verifying;
-                    UpdateStartupServiceContent();
+                    UpdateStartupServiceContent(relayout: false);
                     StartupTaskService.InvalidateCache();
                     bool ready = await Task.Run(() => StartupTaskService.IsReadyForCurrentBuild(out _));
                     if (IsDisposed || Disposing)
@@ -2575,19 +2886,32 @@ internal static class FirstRunSetup
                     ErrorLog.Write("FirstRunSetup.StartupWait", ex);
                     _startupState = SetupStartupState.Failed;
                 }
+                finally
+                {
+                    try
+                    {
+                        if (!IsDisposed && helper.HasExited)
+                        {
+                            _startupHelper = null;
+                            helper.Dispose();
+                        }
+                    }
+                    catch (InvalidOperationException) { /* The form disposed its process handle. */ }
+                    catch (Win32Exception ex) { ErrorLog.Write("FirstRunSetup.StartupCleanup", ex); }
+                }
             }
 
             if (!IsDisposed && !Disposing)
             {
-                UpdateStartupServiceContent();
+                UpdateStartupServiceContent(relayout: false);
             }
         }
 
-        private void UpdateStartupServiceContent()
+        private void UpdateStartupServiceContent(bool relayout = true)
         {
-            if (_step != 4)
+            if (_step != StartupStep)
             {
-                _continueButton.Text = T(_step == 5 ? "Setup.Finish" : "Setup.Continue");
+                _continueButton.Text = T(ContinueTextKey);
                 _continueButton.Enabled = true;
                 _skipButton.Visible = false;
                 _backButton.Enabled = true;
@@ -2616,15 +2940,10 @@ internal static class FirstRunSetup
                 T("Setup.StartupBenefitApproval"),
                 statusText,
                 _startupState);
+            if (_startupServiceTile != null) _startupServiceTile.SlowStatus = T("Setup.StartupStatusSlow");
 
             bool busy = StartupActionInProgress;
-            _continueButton.Text = T(_startupState switch
-            {
-                SetupStartupState.Ready => "Setup.Finish",
-                SetupStartupState.Declined or SetupStartupState.Failed => "Setup.StartupRetry",
-                SetupStartupState.NotConfigured => "Setup.StartupConfigure",
-                _ => "Setup.StartupPleaseWait"
-            });
+            _continueButton.Text = T(ContinueTextKey);
             _continueButton.Font = SetupFont(
                 _viewMode == SetupViewMode.Accessible ? 9.2f : 10.5f,
                 FontStyle.Bold);
@@ -2634,7 +2953,7 @@ internal static class FirstRunSetup
             _skipButton.Enabled = !busy;
             UpdateViewSelectorAvailability();
             UpdateAccessibilityText();
-            UpdateResponsiveLayout(rebuildContent: false);
+            if (relayout) UpdateResponsiveLayout(rebuildContent: false);
         }
 
         private void UpdateViewSelectorAvailability()
@@ -2663,10 +2982,6 @@ internal static class FirstRunSetup
             {
                 _descriptionLabel.AccessibleName = _descriptionLabel.Text;
             }
-            if (_themeSectionLabel != null)
-            {
-                _themeSectionLabel.AccessibleName = _themeSectionLabel.Text;
-            }
 
             _backButton.AccessibleName = _backButton.Text;
             _backButton.AccessibleDescription = T("Setup.AccessibilityBack");
@@ -2676,17 +2991,19 @@ internal static class FirstRunSetup
             _skipButton.AccessibleDefaultActionDescription = _skipButton.AccessibleDescription;
             _continueButton.AccessibleName = _continueButton.Text;
             _continueButton.AccessibleDescription = T(
-                _step == 5
+                _step == CompleteStep
                     ? "Setup.AccessibilityFinish"
-                    : _step == 4
+                    : _step == StartupStep
                         ? StartupActionInProgress
                             ? "Setup.AccessibilityStartupBusy"
                             : "Setup.AccessibilityStartupAction"
                         : "Setup.AccessibilityNext");
             _continueButton.AccessibleDefaultActionDescription = _continueButton.AccessibleDescription;
             _stepIndicator.UpdateAccessibility(
-                T("Setup.AccessibilityProgress", _step + 1, 6));
+                T("Setup.AccessibilityProgress", _step + 1, SetupStepCount));
+            _stepIndicator.Caption = T("Setup.Progress", _step + 1, SetupStepCount);
             _viewSelector.AccessibleName = T("Setup.ViewSelectorLabel");
+            _viewSelector.AccessibleDefaultActionDescription = T("Setup.ViewSelectorDescription");
             _viewSelector.AccessibleDescription = string.Join(
                 " ",
                 T("Setup.ViewSelectorDescription"),
@@ -2710,51 +3027,68 @@ internal static class FirstRunSetup
             return "\"" + value.Replace("\"", "\\\"") + "\"";
         }
 
+        private IEnumerable<string> NavigationLabels => _step == StartupStep
+            ? new[] { "Setup.Finish", "Setup.StartupRetry", "Setup.StartupConfigure", "Setup.StartupPleaseWait" }
+                .SelectMany(key => Translations(key))
+            : Translations(ContinueTextKey);
+
+        private string ContinueTextKey => _step != StartupStep
+            ? (_step == CompleteStep ? "Setup.Finish" : "Setup.Continue")
+            : _startupState switch
+            {
+                SetupStartupState.Ready => "Setup.Finish",
+                SetupStartupState.Declined or SetupStartupState.Failed => "Setup.StartupRetry",
+                SetupStartupState.NotConfigured => "Setup.StartupConfigure",
+                _ => "Setup.StartupPleaseWait"
+            };
+
+        private string StepHeadingKey => _step switch
+        {
+            0 => "Setup.LanguageTitle",
+            1 => "Setup.AppearanceTitle",
+            2 => "Setup.ShortcutsTitle",
+            3 => "Setup.UsageTitle",
+            PrivacyStep => "Setup.PrivacyTitle",
+            StartupStep => "Setup.StartupTitle",
+            _ => "Setup.CompleteTitle"
+        };
+
+        private string StepDescriptionKey => _step switch
+        {
+            0 => "Setup.LanguageBody",
+            1 => "Setup.AppearanceBody",
+            2 => "Setup.ShortcutsBody",
+            3 => _practiceContext != null ? "Setup.UsageBodyLive" : "Setup.UsageBody",
+            PrivacyStep => "Setup.PrivacyBody",
+            StartupStep => "Setup.StartupBody",
+            _ => "Setup.CompleteBody"
+        };
+
         private void UpdateText()
         {
-            Text = T("Setup.WindowTitle");
-            _welcomeLabel.Text = T("Setup.WelcomeTitle");
+            Text = T(_startupOnly ? "Setup.StartupTitle" : "Setup.WindowTitle");
+            _welcomeLabel.Text = _startupOnly ? "QuickZoom 3" : T("Setup.WelcomeTitle");
+            _stepIndicator.Visible = !_startupOnly;
             _viewSelector.UpdateContent(
                 T("Setup.ViewStandard"),
                 T("Setup.ViewAccessible"));
             _backButton.Text = T("Setup.Back");
             _skipButton.Text = T("Setup.StartupSkip");
             _backButton.Visible = _step > 0 && !_startupOnly;
-            _skipButton.Visible = _step == 4 && _startupState != SetupStartupState.Ready;
+            _skipButton.Visible = _step == StartupStep && _startupState != SetupStartupState.Ready;
 
             if (_headingLabel != null)
             {
-                _headingLabel.Text = T(_step switch
-                {
-                    0 => "Setup.LanguageTitle",
-                    1 => "Setup.AppearanceTitle",
-                    2 => "Setup.ShortcutsTitle",
-                    3 => "Setup.UsageTitle",
-                    4 => "Setup.StartupTitle",
-                    _ => "Setup.CompleteTitle"
-                });
+                _headingLabel.Text = T(StepHeadingKey);
             }
 
             if (_descriptionLabel != null)
             {
-                string descriptionKey = _step switch
-                {
-                    0 => "Setup.LanguageBody",
-                    1 => "Setup.AppearanceBody",
-                    2 => "Setup.ShortcutsBody",
-                    3 => _practiceContext != null ? "Setup.UsageBodyLive" : "Setup.UsageBody",
-                    4 => "Setup.StartupBody",
-                    _ => "Setup.CompleteBody"
-                };
                 _descriptionLabel.Text = _step == 3
-                    ? T(descriptionKey, KeyLabel(_enableKey))
-                    : T(descriptionKey);
+                    ? T(StepDescriptionKey, KeyLabel(_enableKey))
+                    : T(StepDescriptionKey);
             }
 
-            if (_themeSectionLabel != null)
-            {
-                _themeSectionLabel.Text = T("Setup.ThemeSection");
-            }
 
             UpdateStartupServiceContent();
         }
@@ -2764,43 +3098,24 @@ internal static class FirstRunSetup
             SuspendLayout();
             try
             {
+                _palette = _useDarkTheme ? ThemePalettes.Dark : ThemePalettes.Light;
                 BackColor = _palette.Border;
                 ForeColor = _palette.Text;
                 _root.BackColor = _palette.MenuBackground;
                 _header.BackColor = _palette.MenuBackground;
                 _headerDivider.BackColor = _palette.Border;
                 _contentHost.BackColor = _palette.MenuBackground;
-                WindowChrome.TrySetDarkScrollBars(_contentHost, _useDarkTheme);
                 _footer.BackColor = _palette.MenuBackground;
                 _welcomeLabel.BackColor = _palette.MenuBackground;
                 _welcomeLabel.ForeColor = _palette.Text;
 
-                ApplyLabel(_headingLabel, 15.5f, FontStyle.Bold, _palette.Text);
-                ApplyLabel(_descriptionLabel, 10.2f, FontStyle.Regular, _palette.SecondaryText);
-                ApplyLabel(_themeSectionLabel, 10.2f, FontStyle.Bold, _palette.Text);
-
-                _backButton.Font = SetupFont(10.5f, FontStyle.Regular);
-                _skipButton.Font = SetupFont(9.2f, FontStyle.Regular);
-                _continueButton.Font = SetupFont(10.5f, FontStyle.Bold);
                 _backButton.ApplyTheme(_palette);
                 _skipButton.ApplyTheme(_palette);
                 _continueButton.ApplyTheme(_palette, emphasis: true);
                 _continueButton.SetProminentHover(
                     ControlDrawing.Blend(_palette.Accent, _palette.Text, 54),
                     ControlDrawing.Blend(_palette.Accent, _palette.Text, 118));
-                _stepIndicator.ApplyTheme(_palette);
-                _viewSelector.ApplyTheme(_palette, FontScale);
-                foreach (SetupChoiceCard card in _cards)
-                {
-                    card.ApplyTheme(_palette, FontScale);
-                }
-                _enableHotkeyRow?.ApplyTheme(_palette, FontScale);
-                foreach (SetupUsageTile tile in _usageTiles)
-                {
-                    tile.ApplyTheme(_palette, FontScale);
-                }
-                _startupServiceTile?.ApplyTheme(_palette, FontScale);
-                _completionTile?.ApplyTheme(_palette, FontScale);
+                ApplyVisualScale();
                 _completionTile?.UpdateContent(
                     T("Setup.CompleteCardTitle"),
                     T("Setup.CompleteTrayHint"));
@@ -2816,6 +3131,22 @@ internal static class FirstRunSetup
             }
 
             UpdateResponsiveLayout(rebuildContent: false);
+        }
+
+        private void ApplyVisualScale()
+        {
+            ApplyLabel(_headingLabel, 15.5f, FontStyle.Bold, _palette.Text);
+            ApplyLabel(_descriptionLabel, 10.2f, FontStyle.Regular, _palette.SecondaryText);
+            _backButton.Font = SetupFont(10.5f, FontStyle.Regular);
+            _skipButton.Font = SetupFont(9.2f, FontStyle.Regular);
+            _continueButton.Font = SetupFont(_step == StartupStep && _viewMode == SetupViewMode.Accessible ? 9.2f : 10.5f, FontStyle.Bold);
+            _stepIndicator.ApplyTheme(_palette, FontScale);
+            _viewSelector.ApplyTheme(_palette, FontScale);
+            foreach (SetupChoiceCard card in _cards) card.ApplyTheme(_palette, FontScale);
+            _enableHotkeyRow?.ApplyTheme(_palette, FontScale);
+            foreach (SetupUsageTile tile in _usageTiles) tile.ApplyTheme(_palette, FontScale);
+            _startupServiceTile?.ApplyTheme(_palette, FontScale);
+            _completionTile?.ApplyTheme(_palette, FontScale);
         }
 
         private void RunWaveTransition(Action update)
@@ -2902,30 +3233,27 @@ internal static class FirstRunSetup
             }
         }
 
-        private float FontScale
+        private float FontScale => _fittedFontScale ?? RequestedFontScale;
+
+        private float RequestedFontScale
         {
             get
             {
                 if (_viewMode != SetupViewMode.Accessible)
                 {
-                    return PreferenceFontScale;
+                    return Math.Min(2.25f, PreferenceFontScale * (_captureWindowsTextScale ?? _windowsTextScale));
                 }
 
                 float requestedScale = Math.Min(
                     2.25f,
                     Math.Max(
                         AccessibleFontScale * AccessibleCanvasScale,
-                        _captureWindowsTextScale ?? AccessibilityPreferences.WindowsTextScale));
-                float heightCapacity = Math.Clamp(
-                    AccessibleFontScale +
-                    (Math.Max(0, ClientSize.Height - 900) / 540f * 0.8f),
-                    AccessibleFontScale,
-                    2.25f);
-                return Math.Min(requestedScale, heightCapacity);
+                        _captureWindowsTextScale ?? _windowsTextScale));
+                return requestedScale;
             }
         }
 
-        private float HeaderTitleFontSize => FontScale >= 1.8f ? 16f : 20f;
+        private float HeaderTitleFontSize => 18f;
 
         private float LayoutScale =>
             Math.Min(1.45f, 1f + ((FontScale - 1f) * 0.75f));
@@ -2951,9 +3279,10 @@ internal static class FirstRunSetup
         {
             if (disposing)
             {
+                SystemEvents.UserPreferenceChanged -= OnAccessibilityPreferenceChanged;
+                _startupHelper?.Dispose();
+                _startupHelper = null;
                 StopLivePractice();
-                _fittedHeaderFont?.Dispose();
-                _fittedHeaderFont = null;
                 foreach (Font font in _ownedFonts.Values)
                 {
                     font.Dispose();
@@ -2966,6 +3295,25 @@ internal static class FirstRunSetup
         }
 
         private string T(string key, params object[] args) => UiText.Get(_language, key, args);
+    }
+
+    // Layout reserves the longest translation, so changing language never changes geometry.
+    private static readonly UiLanguage[] SetupLanguages = Enum.GetValues<UiLanguage>();
+
+    private static IEnumerable<string> Translations(string key, params object[] args) =>
+        SetupLanguages.Select(language => UiText.Get(language, key, args));
+
+    private static int MeasureTranslatedSetupText(Control owner, string key, float size, int width,
+        FontStyle style = FontStyle.Regular, params object[] args) =>
+        Translations(key, args).Max(text => MeasureSetupText(owner, text, size, width, style));
+
+    private static int MeasureSetupText(Control owner, string text, float size, int width, FontStyle style = FontStyle.Regular)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return 0;
+        using Graphics graphics = owner.CreateGraphics();
+        using Font font = new("Segoe UI", size, style);
+        return TextRenderer.MeasureText(graphics, text, font, new Size(Math.Max(1, width), int.MaxValue),
+            TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Height + 2;
     }
 
     private sealed class SetupCompletionTile : Control
@@ -3003,6 +3351,15 @@ internal static class FirstRunSetup
         }
 
         internal bool AnimationComplete { get; set; }
+
+        public override Size GetPreferredSize(Size proposedSize)
+        {
+            int width = Math.Max(200, proposedSize.Width);
+            int height = 20 + (int)(80 * Math.Min(_fontScale, 2f)) + 18 +
+                MeasureTranslatedSetupText(this, "Setup.CompleteCardTitle", 14f * _fontScale, width - 56, FontStyle.Bold) + 6 +
+                MeasureTranslatedSetupText(this, "Setup.CompleteTrayHint", 9.5f * _fontScale, width - 96) + 24;
+            return new Size(width, height);
+        }
 
         private float Progress => AnimationComplete || !AccessibilityPreferences.AnimationsEnabled
             ? 1f
@@ -3067,11 +3424,9 @@ internal static class FirstRunSetup
                 e.Graphics.DrawPath(surfaceBorder, surfacePath);
 
                 float progress = Progress;
-                float renderScale = Math.Min(
-                    _fontScale,
-                    Math.Clamp(Height / 230f, 1f, 1.55f));
-                int checkSize = Math.Clamp(Height * 24 / 100, 72, 180);
-                int checkTop = Math.Max(14, Height * 5 / 100);
+                float renderScale = _fontScale;
+                int checkSize = (int)(80 * Math.Min(_fontScale, 2f));
+                int checkTop = 20;
                 Rectangle checkBounds = new(
                     (Width - checkSize) / 2,
                     checkTop,
@@ -3199,9 +3554,39 @@ internal static class FirstRunSetup
         private string _elevatedBenefit = string.Empty;
         private string _approvalBenefit = string.Empty;
         private string _status = string.Empty;
+        internal string SlowStatus { get; set; } = string.Empty;
+        private bool _slowStatusAnnounced;
+        private string DisplayStatus => IsBusy && _state != SetupStartupState.AwaitingApproval &&
+            Environment.TickCount64 - _stateChangedAt >= 30000 && SlowStatus.Length > 0 ? SlowStatus : _status;
         private SetupStartupState _state;
         private long _stateChangedAt = Environment.TickCount64;
         private float _completionProgress = -1f;
+        private float _completionSuccessBlend;
+        private float _stageStartProgress;
+        private float _lastPaintedProgress = -1f;
+        private Rectangle _progressBounds;
+        private bool _completingProgress;
+        private static readonly string[] StatusKeys = Enum.GetNames<SetupStartupState>()
+            .Select(state => "Setup.StartupStatus" + state).Append("Setup.StartupStatusSlow").ToArray();
+
+        public override Size GetPreferredSize(Size proposedSize)
+        {
+            int width = Math.Max(240, proposedSize.Width);
+            float visualScale = Math.Clamp(_fontScale / 1.45f, 0.86f, 1.45f);
+            int padding = (int)Math.Round(24f * visualScale);
+            int textWidth = Math.Max(1, width - padding * 2 - (int)Math.Round(58f * visualScale) - 20);
+            using Graphics graphics = CreateGraphics();
+            using Font body = new("Segoe UI", 9.5f * _fontScale);
+            using Font bold = new("Segoe UI", 9.5f * _fontScale, FontStyle.Bold);
+            int height = padding * 2 +
+                MeasureTranslatedSetupText(this, "Setup.StartupCardTitle", 13f * _fontScale, textWidth, FontStyle.Bold) +
+                Translations("Setup.StartupCardBody").Max(text => MeasureRichDescriptionHeight(graphics, text, textWidth, body, bold)) + 20;
+            foreach (string key in new[] { "Setup.StartupBenefitAutostart", "Setup.StartupBenefitElevated", "Setup.StartupBenefitApproval" })
+                height += MeasureTranslatedSetupText(this, key, 9.1f * _fontScale, width - padding * 2 - 21) + 6;
+            height += Math.Max(52, StatusKeys.Max(key =>
+                MeasureTranslatedSetupText(this, key, 9.2f * _fontScale, width - padding * 2 - 64, FontStyle.Bold)) + 24) + 16;
+            return new Size(width, height);
+        }
 
         internal SetupStartupServiceTile()
         {
@@ -3218,7 +3603,13 @@ internal static class FirstRunSetup
             {
                 if (IsBusy)
                 {
-                    Invalidate();
+                    if (!_slowStatusAnnounced && DisplayStatus == SlowStatus && SlowStatus.Length > 0)
+                    {
+                        _slowStatusAnnounced = true;
+                        AccessibleDescription = SlowStatus;
+                        AccessibilityNotifyClients(AccessibleEvents.DescriptionChange, -1);
+                    }
+                    InvalidateProgress();
                 }
             };
         }
@@ -3233,6 +3624,7 @@ internal static class FirstRunSetup
         {
             _palette = palette;
             _fontScale = fontScale;
+            _progressBounds = Rectangle.Empty;
             BackColor = palette.MenuBackground;
             ForeColor = palette.Text;
             Invalidate();
@@ -3249,6 +3641,8 @@ internal static class FirstRunSetup
         {
             bool stateChanged = _state != state;
             bool statusChanged = _status != status;
+            bool contentChanged = _title != title || _description != description ||
+                _autostartBenefit != autostartBenefit || _elevatedBenefit != elevatedBenefit || _approvalBenefit != approvalBenefit;
             _title = title;
             _description = description;
             _autostartBenefit = autostartBenefit;
@@ -3257,14 +3651,19 @@ internal static class FirstRunSetup
             _status = status;
             if (stateChanged)
             {
+                // A new stage continues from the rendered fill, not a hard-coded percentage.
+                _stageStartProgress = IsBusy ? (_lastPaintedProgress >= 0f ? _lastPaintedProgress : EstimatedProgress) : 0f;
+                if (!IsBusy) _lastPaintedProgress = -1f;
                 _stateChangedAt = Environment.TickCount64;
+                _slowStatusAnnounced = false;
                 if (state != SetupStartupState.Ready)
                 {
                     _completionProgress = -1f;
+                    _completionSuccessBlend = 0f;
                 }
             }
             _state = state;
-            if (IsBusy && AccessibilityPreferences.AnimationsEnabled)
+            if (IsBusy && AccessibilityPreferences.AnimationsEnabled && !_completingProgress)
             {
                 _animationTimer.Start();
             }
@@ -3288,48 +3687,66 @@ internal static class FirstRunSetup
                     AccessibilityNotifyClients(AccessibleEvents.SystemAlert, -1);
                 }
             }
-            Invalidate();
+            if (contentChanged) Invalidate();
+            else InvalidateProgress();
         }
 
         internal async Task CompleteProgressAsync()
         {
-            float startProgress = Math.Clamp(EstimatedProgress, 0f, 0.98f);
-            if (!AccessibilityPreferences.AnimationsEnabled)
+            _animationTimer.Stop();
+            _completingProgress = true;
+            try
             {
-                _completionProgress = 1f;
-                Invalidate();
-                return;
-            }
-
-            const int durationMilliseconds = 680;
-            long started = Environment.TickCount64;
-            while (!IsDisposed)
-            {
-                float elapsed = Math.Clamp(
-                    (Environment.TickCount64 - started) / (float)durationMilliseconds,
-                    0f,
-                    1f);
-                float eased = 1f - MathF.Pow(1f - elapsed, 3f);
-                _completionProgress = startProgress + ((1f - startProgress) * eased);
-                Invalidate();
-                Update();
-                if (elapsed >= 1f)
+                float startProgress = Math.Clamp(_lastPaintedProgress >= 0f ? _lastPaintedProgress : EstimatedProgress, 0f, 1f);
+                if (!AccessibilityPreferences.AnimationsEnabled)
                 {
-                    break;
+                    _completionProgress = 1f;
+                    _completionSuccessBlend = 1f;
+                    InvalidateProgress();
+                    Update();
+                    await Task.Delay(120);
+                    return;
                 }
 
-                await Task.Delay(16);
-            }
+                long started = Environment.TickCount64;
+                while (!IsDisposed)
+                {
+                    SetupProgressFrame frame = SetupProgressCompletion.GetFrame(startProgress, Environment.TickCount64 - started);
+                    _completionProgress = frame.Progress;
+                    _completionSuccessBlend = frame.SuccessBlend;
+                    InvalidateProgress();
+                    if (frame.IsFinished)
+                    {
+                        // Flush only the final frame before announcing success, not every animation tick.
+                        Update();
+                        break;
+                    }
 
-            _completionProgress = 1f;
-            Invalidate();
-            Update();
-            await Task.Delay(120);
+                    await Task.Delay(16);
+                }
+            }
+            finally
+            {
+                _completingProgress = false;
+            }
+        }
+
+        private void InvalidateProgress()
+        {
+            if (_progressBounds.IsEmpty) Invalidate();
+            else Invalidate(Rectangle.Inflate(_progressBounds, 2, 2));
+        }
+
+        protected override void OnSizeChanged(EventArgs e)
+        {
+            _progressBounds = Rectangle.Empty;
+            base.OnSizeChanged(e);
         }
 
         internal void SetCompletionProgressForCapture()
         {
             _completionProgress = 1f;
+            _completionSuccessBlend = 1f;
             Invalidate();
         }
 
@@ -3367,9 +3784,13 @@ internal static class FirstRunSetup
             e.Graphics.FillPath(surfaceBrush, surfacePath);
             e.Graphics.DrawPath(surfaceBorder, surfacePath);
 
-            float renderScale = Math.Min(
-                _fontScale,
-                Math.Clamp(Height / 260f, 1f, 1.45f));
+            float renderScale = _fontScale;
+            using Font statusFont = new("Segoe UI Semibold", Math.Max(8f, 9.2f * renderScale), FontStyle.Bold);
+            if (!_progressBounds.IsEmpty && Rectangle.Inflate(_progressBounds, 2, 2).Contains(e.ClipRectangle))
+            {
+                DrawStatus(e.Graphics, _progressBounds, statusFont);
+                return;
+            }
             float visualScale = Math.Clamp(renderScale / 1.45f, 0.86f, 1.45f);
             int padding = (int)Math.Round(24f * visualScale);
             int iconSize = (int)Math.Round(58f * visualScale);
@@ -3383,7 +3804,6 @@ internal static class FirstRunSetup
             using Font bodyFont = new("Segoe UI", Math.Max(8f, 9.5f * renderScale), FontStyle.Regular);
             using Font bodyBoldFont = new("Segoe UI Semibold", Math.Max(8f, 9.5f * renderScale), FontStyle.Bold);
             using Font benefitFont = new("Segoe UI", Math.Max(8f, 9.1f * renderScale), FontStyle.Regular);
-            using Font statusFont = new("Segoe UI Semibold", Math.Max(8f, 9.2f * renderScale), FontStyle.Bold);
             const TextFormatFlags titleFlags =
                 TextFormatFlags.Left |
                 TextFormatFlags.Top |
@@ -3421,25 +3841,23 @@ internal static class FirstRunSetup
 
             int statusHeight = Math.Max(
                 52,
-                TextRenderer.MeasureText(
+                StatusKeys.SelectMany(key => Translations(key)).Max(text => TextRenderer.MeasureText(
                     e.Graphics,
-                    _status,
+                    text,
                     statusFont,
-                    new Size(Width - (padding * 2), Height),
-                    TextFormatFlags.WordBreak | TextFormatFlags.NoPadding).Height +
-                18);
+                    new Size(Math.Max(1, Width - (padding * 2) - 64), Height),
+                    TextFormatFlags.WordBreak | TextFormatFlags.NoPadding).Height) +
+                24);
             Rectangle statusBounds = new(
                 padding,
                 Height - padding - statusHeight,
                 Width - (padding * 2),
                 statusHeight);
+            _progressBounds = statusBounds;
             int benefitsTop = Math.Max(
                 iconBounds.Bottom,
                 descriptionTop + descriptionHeight) +
                 10;
-            int benefitAreaHeight = Math.Max(
-                1,
-                statusBounds.Top - benefitsTop - 6);
             string[] benefits = [_autostartBenefit, _elevatedBenefit, _approvalBenefit];
             int benefitTextWidth = Math.Max(
                 1,
@@ -3455,73 +3873,13 @@ internal static class FirstRunSetup
                         benefitFont,
                         benefitTextWidth) + 3))
                 .ToArray();
-            int measuredBenefitHeight = benefitHeights.Sum();
-            bool useBenefitColumns =
-                Width >= 1000 &&
-                benefitAreaHeight < measuredBenefitHeight;
-            if (useBenefitColumns)
+            int benefitTop = benefitsTop;
+            for (int index = 0; index < benefits.Length; index++)
             {
-                const int columnGap = 18;
-                int availableWidth = Width - (padding * 2) - (columnGap * 2);
-                int columnWidth = Math.Max(1, availableWidth / 3);
-                float columnFontSize = benefitFont.Size;
-                while (columnFontSize > 8f)
-                {
-                    using Font candidateFont = new(
-                        "Segoe UI",
-                        columnFontSize,
-                        FontStyle.Regular);
-                    bool fits = benefits.All(benefit =>
-                        MeasureWrappedTextHeight(
-                            e.Graphics,
-                            benefit,
-                            candidateFont,
-                            Math.Max(1, columnWidth - 21)) <= benefitAreaHeight);
-                    if (fits)
-                    {
-                        break;
-                    }
-
-                    columnFontSize = Math.Max(8f, columnFontSize - 0.5f);
-                }
-
-                using Font columnFont = new(
-                    "Segoe UI",
-                    columnFontSize,
-                    FontStyle.Regular);
-                for (int index = 0; index < benefits.Length; index++)
-                {
-                    int columnLeft = padding + (index * (columnWidth + columnGap));
-                    int width = index == benefits.Length - 1
-                        ? Width - padding - columnLeft
-                        : columnWidth;
-                    DrawBenefit(
-                        e.Graphics,
-                        benefits[index],
-                        new Rectangle(
-                            columnLeft,
-                            benefitsTop,
-                            width,
-                            benefitAreaHeight),
-                        columnFont);
-                }
-            }
-            else
-            {
-                int extraBenefitSpace = Math.Max(0, benefitAreaHeight - measuredBenefitHeight);
-                int benefitTop = benefitsTop;
-                for (int index = 0; index < benefits.Length; index++)
-                {
-                    int rowHeight = benefitHeights[index] +
-                        (index < extraBenefitSpace ? 1 : 0);
-                    DrawBenefit(e.Graphics, benefits[index], new Rectangle(
-                        padding,
-                        benefitTop,
-                        Width - (padding * 2),
-                        rowHeight),
-                        benefitFont);
-                    benefitTop += rowHeight;
-                }
+                int rowHeight = benefitHeights[index] + 3;
+                DrawBenefit(e.Graphics, benefits[index], new Rectangle(
+                    padding, benefitTop, Width - padding * 2, rowHeight), benefitFont);
+                benefitTop += rowHeight;
             }
 
             DrawStatus(e.Graphics, statusBounds, statusFont);
@@ -3726,10 +4084,13 @@ internal static class FirstRunSetup
         {
             Color statusColor = _state switch
             {
-                SetupStartupState.Ready => _palette.Accent,
-                SetupStartupState.Failed => Color.FromArgb(239, 68, 68),
-                _ => Color.FromArgb(245, 158, 11)
+                SetupStartupState.Ready => _palette.SuccessText,
+                SetupStartupState.Failed => _palette.ErrorText,
+                _ => _palette.WarningText
             };
+            if (IsBusy && _completionSuccessBlend > 0f)
+                statusColor = ControlDrawing.Blend(statusColor, _palette.SuccessText,
+                    (int)Math.Round(255f * _completionSuccessBlend));
             using GraphicsPath path = ControlDrawing.RoundedRect(
                 bounds,
                 10);
@@ -3744,7 +4105,7 @@ internal static class FirstRunSetup
                 Math.Max(1f, DeviceDpi / 96f));
             graphics.FillPath(background, path);
 
-            if (IsBusy)
+            if (IsBusy || _state == SetupStartupState.Ready)
             {
                 DrawLiquidProgress(graphics, bounds, path, statusColor);
             }
@@ -3794,7 +4155,7 @@ internal static class FirstRunSetup
 
             TextRenderer.DrawText(
                 graphics,
-                _status,
+                DisplayStatus,
                 font,
                 new Rectangle(
                     indicator.Right + 12,
@@ -3815,19 +4176,17 @@ internal static class FirstRunSetup
                 }
 
                 double seconds = Math.Max(0, Environment.TickCount64 - _stateChangedAt) / 1000d;
-                return _state switch
+                (float target, double duration) = _state switch
                 {
-                    SetupStartupState.Checking =>
-                        0.06f + (0.09f * (float)(1d - Math.Exp(-seconds / 0.45d))),
-                    SetupStartupState.AwaitingApproval =>
-                        0.16f + (0.20f * (float)(1d - Math.Exp(-seconds / 2.2d))),
-                    SetupStartupState.Installing =>
-                        0.42f + (0.49f * (float)(1d - Math.Exp(-seconds / 2.2d))),
-                    SetupStartupState.Verifying =>
-                        0.91f + (0.075f * (float)(1d - Math.Exp(-seconds / 2.8d))),
-                    SetupStartupState.Ready => 1f,
-                    _ => 0f
+                    SetupStartupState.Checking => (0.15f, 0.45d),
+                    SetupStartupState.AwaitingApproval => (0.36f, 2.2d),
+                    SetupStartupState.Installing => (0.91f, 2.2d),
+                    SetupStartupState.Verifying => (0.985f, 2.8d),
+                    SetupStartupState.Ready => (1f, 0d),
+                    _ => (0f, 0d)
                 };
+                return duration == 0d ? target : _stageStartProgress +
+                    (Math.Max(_stageStartProgress, target) - _stageStartProgress) * (float)(1d - Math.Exp(-seconds / duration));
             }
         }
 
@@ -3838,11 +4197,13 @@ internal static class FirstRunSetup
             Color statusColor)
         {
             float progress = Math.Clamp(EstimatedProgress, 0f, 1f);
+            _lastPaintedProgress = progress;
             float leadingX = bounds.Left + (bounds.Width * progress);
             float phase = AccessibilityPreferences.AnimationsEnabled
                 ? (Environment.TickCount64 % 1800L) * MathF.Tau / 1800f
                 : 0f;
-            float waveAmplitude = Math.Max(2f, DeviceDpi / 32f);
+            float settling = Math.Clamp((1f - progress) / 0.04f, 0f, 1f);
+            float waveAmplitude = Math.Max(2f, DeviceDpi / 32f) * settling;
             int waveStep = Math.Max(3, DeviceDpi / 32);
 
             GraphicsState clipState = graphics.Save();
@@ -3888,7 +4249,7 @@ internal static class FirstRunSetup
 
                 using Pen surfacePen = new(
                     Color.FromArgb(
-                        112,
+                        (int)Math.Round(112f * settling),
                         ControlDrawing.Blend(statusColor, _palette.Text, 64)),
                     Math.Max(1f, DeviceDpi / 96f))
                 {
@@ -4048,6 +4409,21 @@ internal static class FirstRunSetup
 
         internal bool ShowWindowsLogo { get; set; }
 
+        public override Size GetPreferredSize(Size proposedSize)
+        {
+            int width = Math.Max(240, proposedSize.Width);
+            int padding = Math.Max(18, width / 50);
+            float visualScale = Math.Clamp(_fontScale / 1.35f, 1f, 1.8f);
+            int illustrationWidth = (int)Math.Ceiling(380 * visualScale);
+            bool stacked = width - padding * 3 - illustrationWidth < 340 * _fontScale;
+            int textWidth = width - padding * 2 - (stacked ? 0 : illustrationWidth + padding);
+            string keyPrefix = "Setup.Usage" + _kind;
+            int textHeight = MeasureTranslatedSetupText(this, keyPrefix + "Title", 10.8f * _fontScale, textWidth, FontStyle.Bold) +
+                MeasureTranslatedSetupText(this, keyPrefix + "Body", 8.8f * _fontScale, textWidth) + 8;
+            int illustrationHeight = (int)Math.Ceiling(84 * visualScale);
+            return new Size(width, padding * 2 + (stacked ? textHeight + illustrationHeight + 12 : Math.Max(textHeight, illustrationHeight)));
+        }
+
         protected override void Dispose(bool disposing)
         {
             if (disposing)
@@ -4081,14 +4457,10 @@ internal static class FirstRunSetup
             e.Graphics.DrawPath(surfaceBorder, surfacePath);
 
             int padding = Math.Max(18, Width / 50);
-            float visualScale = Math.Min(
-                Math.Clamp(_fontScale / 1.35f, 1f, 1.55f),
-                Math.Clamp((Height - 20) / 68f, 0.78f, 1.55f));
-            int illustrationWidth = Math.Clamp(
-                Width * 30 / 100,
-                (int)Math.Round(330f * visualScale),
-                (int)Math.Round(520f * visualScale));
-            int textWidth = Math.Max(180, Width - (padding * 3) - illustrationWidth);
+            float visualScale = Math.Clamp(_fontScale / 1.35f, 1f, 1.8f);
+            int illustrationWidth = (int)Math.Ceiling(380 * visualScale);
+            bool stacked = Width - padding * 3 - illustrationWidth < 340 * _fontScale;
+            int textWidth = Width - padding * 2 - (stacked ? 0 : illustrationWidth + padding);
             using Font titleFont = new("Segoe UI", Math.Max(8f, 10.8f * _fontScale), FontStyle.Bold);
             using Font bodyFont = new("Segoe UI", Math.Max(7.5f, 8.8f * _fontScale), FontStyle.Regular);
             using Font keyFont = new("Segoe UI", Math.Max(8f, 9.4f * _fontScale), FontStyle.Bold);
@@ -4098,11 +4470,6 @@ internal static class FirstRunSetup
                 TextFormatFlags.WordBreak |
                 TextFormatFlags.NoPadding |
                 TextFormatFlags.NoPrefix;
-            string balancedDescription = BalanceWrappedText(
-                e.Graphics,
-                _description,
-                bodyFont,
-                textWidth);
             int titleHeight = TextRenderer.MeasureText(
                 e.Graphics,
                 _title,
@@ -4111,12 +4478,11 @@ internal static class FirstRunSetup
                 textFlags).Height + 2;
             int descriptionHeight = TextRenderer.MeasureText(
                 e.Graphics,
-                balancedDescription,
+                _description,
                 bodyFont,
                 new Size(textWidth, Height),
                 textFlags).Height;
-            int titleTop = Math.Max(
-                10,
+            int titleTop = stacked ? padding : Math.Max(padding,
                 (Height - titleHeight - descriptionHeight - 4) / 2);
             Rectangle titleBounds = new(padding, titleTop, textWidth, titleHeight);
             Rectangle descriptionBounds = new(
@@ -4133,17 +4499,17 @@ internal static class FirstRunSetup
                 textFlags);
             TextRenderer.DrawText(
                 e.Graphics,
-                balancedDescription,
+                _description,
                 bodyFont,
                 descriptionBounds,
                 _palette.SecondaryText,
                 textFlags);
 
             Rectangle illustration = new(
-                Width - padding - illustrationWidth,
-                10,
+                stacked ? (Width - illustrationWidth) / 2 : Width - padding - illustrationWidth,
+                stacked ? descriptionBounds.Bottom + 12 : padding,
                 illustrationWidth,
-                Height - 20);
+                stacked ? (int)Math.Ceiling(84 * visualScale) : Height - padding * 2);
             int activationKeyWidth = (int)Math.Round(100f * visualScale);
             int activationKeyHeight = (int)Math.Round(56f * visualScale);
             DrawKeycap(
@@ -4234,68 +4600,6 @@ internal static class FirstRunSetup
             }
         }
 
-        private static string BalanceWrappedText(
-            Graphics graphics,
-            string text,
-            Font font,
-            int width)
-        {
-            string[] words = text.Split(
-                ' ',
-                StringSplitOptions.RemoveEmptyEntries |
-                StringSplitOptions.TrimEntries);
-            if (words.Length < 4 || width <= 1)
-            {
-                return text;
-            }
-
-            var lines = new List<List<string>>();
-            var current = new List<string>();
-            foreach (string word in words)
-            {
-                string candidate = string.Join(
-                    " ",
-                    current.Count == 0
-                        ? new[] { word }
-                        : current.Append(word));
-                int candidateWidth = TextRenderer.MeasureText(
-                    graphics,
-                    candidate,
-                    font,
-                    Size.Empty,
-                    TextFormatFlags.NoPadding |
-                    TextFormatFlags.SingleLine |
-                    TextFormatFlags.NoPrefix).Width;
-                if (current.Count > 0 && candidateWidth > width)
-                {
-                    lines.Add(current);
-                    current = new List<string>();
-                }
-
-                current.Add(word);
-            }
-
-            if (current.Count > 0)
-            {
-                lines.Add(current);
-            }
-
-            if (lines.Count > 1)
-            {
-                List<string> previous = lines[^2];
-                List<string> last = lines[^1];
-                while (last.Count < 4 && previous.Count > 4)
-                {
-                    string moved = previous[^1];
-                    previous.RemoveAt(previous.Count - 1);
-                    last.Insert(0, moved);
-                }
-            }
-
-            return string.Join(
-                Environment.NewLine,
-                lines.Select(line => string.Join(" ", line)));
-        }
 
         private void DrawMouse(Graphics graphics, Rectangle bounds, float pulse)
         {
@@ -4374,21 +4678,17 @@ internal static class FirstRunSetup
             Font font,
             bool showWindowsLogo = false)
         {
-            Rectangle shadowBounds = new(bounds.Left, bounds.Top + 5, bounds.Width, bounds.Height - 5);
+            Rectangle shadowBounds = new(bounds.Left, bounds.Top + 3, bounds.Width, bounds.Height - 3);
             using GraphicsPath shadowPath = ControlDrawing.RoundedRect(shadowBounds, 8);
-            using SolidBrush shadowBrush = new(Color.FromArgb(90, Color.Black));
+            using SolidBrush shadowBrush = new(Color.FromArgb(45, Color.Black));
             graphics.FillPath(shadowBrush, shadowPath);
 
-            Rectangle faceBounds = new(bounds.Left, bounds.Top, bounds.Width, bounds.Height - 7);
+            Rectangle faceBounds = new(bounds.Left, bounds.Top, bounds.Width, bounds.Height - 4);
             using GraphicsPath path = ControlDrawing.RoundedRect(faceBounds, 8);
             using SolidBrush brush = new(_palette.ButtonBackground);
-            using Pen border = new(_palette.Border, Math.Max(1.2f, DeviceDpi / 80f));
+            using Pen border = new(ControlContrast.FieldBorder(_palette), Math.Max(1.2f, DeviceDpi / 80f));
             graphics.FillPath(brush, path);
             graphics.DrawPath(border, path);
-            Rectangle innerBounds = Rectangle.Inflate(faceBounds, -4, -4);
-            using GraphicsPath innerPath = ControlDrawing.RoundedRect(innerBounds, 5);
-            using Pen innerBorder = new(Color.FromArgb(48, _palette.Text), 1f);
-            graphics.DrawPath(innerBorder, innerPath);
 
             if (showWindowsLogo)
             {
@@ -4453,6 +4753,25 @@ internal static class FirstRunSetup
         private bool _hovered;
         private bool _showWindowsLogo;
         private Rectangle _captureBounds;
+
+        private int CaptureHeight(int width, float scale) =>
+            MeasureSetupText(this, _keyLabel, 17f * _fontScale, Math.Max(1, width - 80), FontStyle.Bold) +
+            MeasureTranslatedSetupText(this, "Setup.ChangeKey", 9.4f * _fontScale, Math.Max(1, width - 80)) + (int)(24 * scale);
+
+        public override Size GetPreferredSize(Size proposedSize)
+        {
+            int width = Math.Max(240, proposedSize.Width);
+            float scale = Math.Clamp(_fontScale, 1f, 1.65f);
+            int inset = (int)Math.Round(40f * scale);
+            int height = (int)(20 * scale) + CaptureHeight(width, scale) + (int)(14 * scale) +
+                MeasureTranslatedSetupText(this, "Setup.PrimaryHotkeyTitle", 11.8f * _fontScale, width - inset * 2, FontStyle.Bold) +
+                MeasureTranslatedSetupText(this, "Setup.PrimaryHotkeyBody", 9.4f * _fontScale, width - inset * 2) + (int)(8 * scale);
+            if (_validation.Level != SetupValidationLevel.None)
+                height += (int)(24 * scale) + Math.Max((int)(52 * scale),
+                    MeasureTranslatedSetupText(this, _validation.TextKey, 8.8f * _fontScale,
+                        width - inset * 2 - (int)(80 * scale), FontStyle.Regular, _keyLabel) + 24);
+            return new Size(width, height + (int)(24 * scale));
+        }
 
         internal SetupHotkeyRow()
         {
@@ -4615,10 +4934,7 @@ internal static class FirstRunSetup
                 Width * 2 / 5,
                 (int)Math.Round(280f * layoutScale),
                 (int)Math.Round(360f * layoutScale));
-            int buttonHeight = Math.Clamp(
-                (int)Math.Round(108f * layoutScale),
-                96,
-                Math.Max(96, Height / 3));
+            int buttonHeight = CaptureHeight(Width, layoutScale);
             int topPadding = (int)Math.Round(20f * layoutScale);
             _captureBounds = new Rectangle(
                 (Width - buttonWidth) / 2,
@@ -4636,7 +4952,7 @@ internal static class FirstRunSetup
                 FontStyle.Regular);
             using Font warningFont = new(
                 "Segoe UI",
-                Math.Max(7.5f, 8.1f * _fontScale),
+                Math.Max(8f, 8.8f * _fontScale),
                 FontStyle.Regular);
             using Font keyFont = new(
                 "Segoe UI",
@@ -4685,7 +5001,7 @@ internal static class FirstRunSetup
                     _captureBounds.Left,
                     _captureBounds.Top + (int)Math.Round(7f * layoutScale),
                     _captureBounds.Width,
-                    (int)Math.Round(_captureBounds.Height * 0.56f));
+                    MeasureSetupText(this, _keyLabel, 17f * _fontScale, _captureBounds.Width, FontStyle.Bold));
                 Rectangle hintBounds = new(
                     _captureBounds.Left + (int)Math.Round(12f * layoutScale),
                     keyBounds.Bottom,
@@ -4707,7 +5023,7 @@ internal static class FirstRunSetup
             }
 
             int textHorizontalInset = (int)Math.Round(40f * layoutScale);
-            int descriptionInset = (int)Math.Round(64f * layoutScale);
+            int descriptionInset = textHorizontalInset;
             int titleTop = _captureBounds.Bottom + (int)Math.Round(14f * layoutScale);
             int titleHeight = TextRenderer.MeasureText(
                 graphics,
@@ -4759,17 +5075,10 @@ internal static class FirstRunSetup
 
             if (_validation.Level != SetupValidationLevel.None)
             {
-                int statusTop = descriptionBounds.Bottom + (int)Math.Round(16f * layoutScale);
-                int availableStatusHeight = Math.Max(
-                    40,
-                    Height - statusTop - (int)Math.Round(12f * layoutScale));
-                int statusHeight = _validation.Level == SetupValidationLevel.Warning
-                    ? Math.Min(
-                        availableStatusHeight,
-                        Math.Max(
-                            ControlDrawing.ScaleLogical(this, 56),
-                            (int)Math.Round(56f * layoutScale)))
-                    : availableStatusHeight;
+                int statusTop = descriptionBounds.Bottom + (int)Math.Round(24f * layoutScale);
+                int statusHeight = Math.Max((int)(52 * layoutScale),
+                    MeasureSetupText(this, _validation.Text, warningFont.Size,
+                        Width - descriptionInset * 2 - (int)(80 * layoutScale)) + 24);
                 Rectangle statusBounds = new(
                     descriptionInset,
                     statusTop,
@@ -4821,8 +5130,8 @@ internal static class FirstRunSetup
         {
             bool isError = _validation.Level == SetupValidationLevel.Error;
             Color accent = isError
-                ? Color.FromArgb(239, 68, 68)
-                : Color.FromArgb(59, 130, 246);
+                ? _palette.ErrorText
+                : _palette.InformationText;
             Color fill = ControlDrawing.Blend(_palette.ControlBackground, accent, isError ? 24 : 18);
             Rectangle panelBounds = Rectangle.Inflate(bounds, -1, -1);
             using GraphicsPath panelPath = ControlDrawing.RoundedRect(
@@ -4848,20 +5157,14 @@ internal static class FirstRunSetup
                 iconSize);
             using SolidBrush iconBrush = new(accent);
             graphics.FillEllipse(iconBrush, iconBounds);
-            using Font iconFont = new(
-                "Segoe UI",
-                Math.Max(8f, 9.2f * _fontScale),
-                FontStyle.Bold);
-            TextRenderer.DrawText(
-                graphics,
-                isError ? "!" : "i",
-                iconFont,
-                iconBounds,
-                ControlDrawing.ContrastText(accent),
-                TextFormatFlags.HorizontalCenter |
-                TextFormatFlags.VerticalCenter |
-                TextFormatFlags.NoPadding |
-                TextFormatFlags.SingleLine);
+            using Pen symbolPen = new(ControlDrawing.ContrastText(accent), Math.Max(2f, iconSize / 10f));
+            float centerX = iconBounds.Left + iconBounds.Width / 2f;
+            graphics.DrawLine(symbolPen, centerX, iconBounds.Top + iconSize * 0.43f,
+                centerX, iconBounds.Top + iconSize * (isError ? 0.27f : 0.76f));
+            graphics.DrawLine(symbolPen, centerX, iconBounds.Top + iconSize * 0.23f,
+                centerX, iconBounds.Top + iconSize * (isError ? 0.43f : 0.27f));
+            if (isError) graphics.DrawLine(symbolPen, centerX, iconBounds.Top + iconSize * 0.72f,
+                centerX, iconBounds.Top + iconSize * 0.76f);
 
             Rectangle textBounds = new(
                 iconBounds.Right + horizontalPadding,
@@ -4872,18 +5175,6 @@ internal static class FirstRunSetup
                     iconBounds.Right -
                     (horizontalPadding * 2)),
                 Math.Max(1, panelBounds.Height - 14));
-            if (!isError)
-            {
-                DrawFittedSingleLine(
-                    graphics,
-                    _validation.Text,
-                    font,
-                    textBounds,
-                    _palette.Text,
-                    TextFormatFlags.Left);
-                return;
-            }
-
             TextRenderer.DrawText(
                 graphics,
                 _validation.Text,
@@ -4893,6 +5184,7 @@ internal static class FirstRunSetup
                 TextFormatFlags.Left |
                 TextFormatFlags.VerticalCenter |
                 TextFormatFlags.WordBreak |
+                TextFormatFlags.NoPadding |
                 TextFormatFlags.NoPrefix);
         }
 
@@ -4981,6 +5273,27 @@ internal static class FirstRunSetup
         private bool _pressed;
         private float _fontScale = 1f;
         private string _largeText = "Large setup";
+
+        private (Rectangle Label, Rectangle Track) ContentBounds()
+        {
+            int trackWidth = ControlDrawing.ScaleLogical(this, 40);
+            int trackHeight = ControlDrawing.ScaleLogical(this, 22);
+            int sidePadding = ControlDrawing.ScaleLogical(this, 8);
+            int gap = ControlDrawing.ScaleLogical(this, 12);
+            Rectangle track = new(Width - sidePadding - trackWidth, (Height - trackHeight) / 2, trackWidth, trackHeight);
+            return (new Rectangle(sidePadding, 0, Math.Max(1, track.Left - gap - sidePadding), Height), track);
+        }
+
+        internal void ValidateContentBounds()
+        {
+            var bounds = ContentBounds();
+            using Font font = new("Segoe UI", Math.Max(8f, 9.2f * _fontScale), FontStyle.Bold);
+            Size label = TextRenderer.MeasureText(_largeText, font, Size.Empty,
+                TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+            if (!ClientRectangle.Contains(bounds.Track) || bounds.Track.Top < ControlDrawing.ScaleLogical(this, 3) ||
+                label.Width > bounds.Label.Width || label.Height > bounds.Label.Height)
+                throw new InvalidOperationException($"Setup view switch or label is cramped/clipped at {Size}.");
+        }
 
         internal SetupViewToggle()
         {
@@ -5151,7 +5464,7 @@ internal static class FirstRunSetup
                     : AccessibleStates.None) |
                 (owner.Enabled ? AccessibleStates.None : AccessibleStates.Unavailable);
 
-            public override string? DefaultAction => "Toggle";
+            public override string? DefaultAction => owner.AccessibleDefaultActionDescription;
 
             public override void DoDefaultAction()
             {
@@ -5178,36 +5491,12 @@ internal static class FirstRunSetup
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             e.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
             Rectangle containerBounds = Rectangle.Inflate(ClientRectangle, -1, -1);
-            using GraphicsPath containerPath = ControlDrawing.RoundedRect(
-                containerBounds,
-                ControlDrawing.ScaleLogical(this, 12));
-            Color containerFill = ControlDrawing.Blend(
-                _palette.MenuBackground,
-                _palette.ControlBackground,
-                168);
-            using SolidBrush containerBrush = new(containerFill);
-            using Pen containerBorder = new(_palette.Border, Math.Max(1f, DeviceDpi / 96f));
-            e.Graphics.FillPath(containerBrush, containerPath);
-            e.Graphics.DrawPath(containerBorder, containerPath);
 
             using Font labelFont = new(
                 "Segoe UI",
                 Math.Max(8f, 9.2f * _fontScale),
                 FontStyle.Bold);
-            int trackWidth = ControlDrawing.ScaleLogical(this, 40);
-            int trackHeight = ControlDrawing.ScaleLogical(this, 22);
-            int sidePadding = ControlDrawing.ScaleLogical(this, 8);
-            int gap = ControlDrawing.ScaleLogical(this, 6);
-            Rectangle trackBounds = new(
-                Math.Max(sidePadding, Width - sidePadding - trackWidth),
-                Math.Max(1, (Height - trackHeight) / 2),
-                trackWidth,
-                trackHeight);
-            Rectangle labelBounds = new(
-                sidePadding,
-                0,
-                Math.Max(1, trackBounds.Left - gap - sidePadding),
-                Height);
+            (Rectangle labelBounds, Rectangle trackBounds) = ContentBounds();
 
             if (_hovered || Focused)
             {
@@ -5229,8 +5518,8 @@ internal static class FirstRunSetup
                 _largeText,
                 labelFont,
                 labelBounds,
-                _palette.Text,
-                TextFormatFlags.Left |
+                Enabled ? _palette.Text : _palette.SecondaryText,
+                TextFormatFlags.Right |
                 TextFormatFlags.VerticalCenter |
                 TextFormatFlags.SingleLine |
                 TextFormatFlags.NoPadding |
@@ -5320,6 +5609,31 @@ internal static class FirstRunSetup
         internal SetupIcon Icon { get; }
         internal bool Compact { get; set; }
         internal bool Prominent { get; set; }
+        internal bool UseWarningAccent { get; set; }
+        private (Rectangle Icon, Rectangle Label) ThemeContentBounds(Graphics graphics, Font font)
+        {
+            int padding = ControlDrawing.ScaleLogical(this, 14);
+            int gap = ControlDrawing.ScaleLogical(this, 6);
+            int labelHeight = TextRenderer.MeasureText(graphics, Title, font, Size.Empty,
+                TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Height;
+            int iconSize = Math.Min(ControlDrawing.ScaleLogical(this, 64),
+                Math.Min((int)(Height * 0.38f), Height - labelHeight - gap - padding));
+            iconSize = Math.Max(1, iconSize);
+            int top = (Height - iconSize - gap - labelHeight) / 2;
+            return (new Rectangle((Width - iconSize) / 2, top, iconSize, iconSize),
+                new Rectangle(padding, top + iconSize + gap, Width - padding * 2, labelHeight));
+        }
+
+        internal void ValidateThemeContentBounds()
+        {
+            using Graphics graphics = CreateGraphics();
+            using Font font = new("Segoe UI", Math.Max(8f, 13.2f * _fontScale), FontStyle.Bold);
+            var bounds = ThemeContentBounds(graphics, font);
+            Size text = TextRenderer.MeasureText(graphics, Title, font, Size.Empty,
+                TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+            if (!ClientRectangle.Contains(bounds.Icon) || !ClientRectangle.Contains(bounds.Label) || text.Width > bounds.Label.Width)
+                throw new InvalidOperationException($"Theme card '{Title}' clips its icon or label at {Size}.");
+        }
         internal bool ShowIdentity { get; set; } = true;
         internal bool Segmented { get; set; }
 
@@ -5503,23 +5817,25 @@ internal static class FirstRunSetup
                     Width - (inset * 2) - 1,
                     Height - (inset * 2) - 1);
                 using GraphicsPath path = ControlDrawing.RoundedRect(bounds, radius);
+                Color selectionAccent = UseWarningAccent && !AccessibilityPreferences.HighContrast
+                    ? _palette.WarningText : _palette.Accent;
                 Color normal = _selected
                     ? ControlDrawing.Blend(
                         _palette.ControlBackground,
-                        _palette.Accent,
+                        selectionAccent,
                         Segmented ? 54 : 34)
                     : _palette.ControlBackground;
                 Color fill = _pressed
                     ? _palette.ButtonPressed
                     : _hovered
-                    ? (_selected ? ControlDrawing.Blend(normal, _palette.Accent, 24) : _palette.ButtonHover)
+                    ? (_selected ? ControlDrawing.Blend(normal, selectionAccent, 24) : _palette.ButtonHover)
                     : normal;
                 using SolidBrush fillBrush = new(fill);
                 e.Graphics.FillPath(fillBrush, path);
                 if (!Segmented || _selected)
                 {
                     using Pen outline = new(
-                        _selected ? _palette.Accent : _palette.Border,
+                        _selected ? selectionAccent : _palette.Border,
                         Math.Max(1f, DeviceDpi / 96f) * (_selected ? 1.6f : 1f));
                     e.Graphics.DrawPath(outline, path);
                 }
@@ -5546,25 +5862,14 @@ internal static class FirstRunSetup
                 int identityGap = ControlDrawing.ScaleLogical(this, Prominent ? 8 : 14);
                 if (Prominent && ShowIdentity)
                 {
-                    int measuredTitleWidth = TextRenderer.MeasureText(
-                        Title,
-                        titleFont,
-                        new Size(32767, 32767),
-                        TextFormatFlags.NoPadding |
-                        TextFormatFlags.SingleLine |
-                        TextFormatFlags.NoPrefix).Width;
-                    int availableGroupWidth = Math.Max(
-                        1,
-                        Width - ControlDrawing.ScaleLogical(this, 28));
-                    iconSize = Math.Min(
-                        iconSize,
-                        Math.Max(
-                            ControlDrawing.ScaleLogical(this, 36),
-                            availableGroupWidth - identityGap - measuredTitleWidth));
-                    int groupWidth = iconSize + identityGap + measuredTitleWidth;
-                    horizontal = Math.Max(
-                        ControlDrawing.ScaleLogical(this, 14),
-                        (Width - groupWidth) / 2);
+                    var contentBounds = ThemeContentBounds(e.Graphics, titleFont);
+                    DrawIdentity(e.Graphics, contentBounds.Icon);
+                    TextRenderer.DrawText(e.Graphics, Title, titleFont, contentBounds.Label,
+                        _palette.Text, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
+                        TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+                    if (ControlDrawing.ShouldDrawFocus(this, ShowFocusCues))
+                        ControlDrawing.DrawFocusRing(e.Graphics, Rectangle.Inflate(bounds, -2, -2), radius - 2, _palette);
+                    return;
                 }
 
                 Rectangle iconBounds = new(horizontal, (Height - iconSize) / 2, iconSize, iconSize);
@@ -5578,7 +5883,7 @@ internal static class FirstRunSetup
                     : horizontal;
                 int rightInset = ControlDrawing.ScaleLogical(this, Prominent ? 14 : 18);
                 int textWidth = Math.Max(1, Width - textLeft - rightInset);
-                if (!ShowIdentity)
+                if (!ShowIdentity && Compact)
                 {
                     TextRenderer.DrawText(
                         e.Graphics,
@@ -5841,6 +6146,10 @@ internal static class FirstRunSetup
 
         private static void DrawMoon(Graphics graphics, Rectangle bounds, Color color, Color cutout)
         {
+            GraphicsState state = graphics.Save();
+            using GraphicsPath clip = new();
+            clip.AddEllipse(bounds);
+            graphics.SetClip(clip, CombineMode.Intersect);
             using SolidBrush moon = new(color);
             using SolidBrush mask = new(cutout);
             graphics.FillEllipse(moon, bounds);
@@ -5850,6 +6159,7 @@ internal static class FirstRunSetup
                 bounds.Width,
                 bounds.Height);
             graphics.FillEllipse(mask, cutoutBounds);
+            graphics.Restore(state);
         }
 
         private static void DrawSystem(Graphics graphics, Rectangle bounds, Pen pen)
@@ -5871,7 +6181,7 @@ internal static class FirstRunSetup
 
     private sealed class SetupWaveTransition : Control
     {
-        private const float DurationMilliseconds = 460f;
+        private const float DurationMilliseconds = 250f;
         private readonly System.Windows.Forms.Timer _timer;
         private Bitmap? _before;
         private Bitmap? _after;
@@ -6018,10 +6328,21 @@ internal static class FirstRunSetup
 
     private sealed class SetupStepIndicator : Control
     {
-        private const int StepCount = 6;
+        private const int StepCount = SetupStepCount;
         private readonly System.Windows.Forms.Timer _pulseTimer;
         private ThemePalette _palette;
+        private float _fontScale = 1f;
         private int _step;
+        internal string Caption { get; set; } = string.Empty;
+
+        public override Size GetPreferredSize(Size proposedSize)
+        {
+            using Font font = new("Segoe UI", 8f * _fontScale);
+            Size[] captions = Translations("Setup.Progress", _step + 1, StepCount).Select(text =>
+                TextRenderer.MeasureText(text, font, Size.Empty,
+                    TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix)).ToArray();
+            return new Size(Math.Max(200, captions.Max(size => size.Width) + 12), 42 + captions.Max(size => size.Height));
+        }
 
         internal SetupStepIndicator()
         {
@@ -6046,7 +6367,7 @@ internal static class FirstRunSetup
             get => _step;
             set
             {
-                _step = Math.Clamp(value, 0, 5);
+                _step = Math.Clamp(value, 0, CompleteStep);
                 if (IsHandleCreated)
                 {
                     AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);
@@ -6071,9 +6392,10 @@ internal static class FirstRunSetup
             }
         }
 
-        internal void ApplyTheme(ThemePalette palette)
+        internal void ApplyTheme(ThemePalette palette, float fontScale)
         {
             _palette = palette;
+            _fontScale = fontScale;
             BackColor = palette.MenuBackground;
             Invalidate();
         }
@@ -6084,6 +6406,9 @@ internal static class FirstRunSetup
             {
                 return;
             }
+
+            if (Width < GetPreferredSize(Size.Empty).Width || Height < GetPreferredSize(Size.Empty).Height)
+                throw new InvalidOperationException("The setup step caption or progress animation is clipped.");
 
             (PointF[] centers, float haloDiameter) = GetPaintGeometry();
             float radius = haloDiameter / 2f;
@@ -6118,7 +6443,7 @@ internal static class FirstRunSetup
             int diameter = 12;
             int activeDiameter = 20;
             (PointF[] centers, _) = GetPaintGeometry();
-            float centerY = Height / 2f;
+            float centerY = centers[0].Y;
 
             for (int index = 0; index < centers.Length - 1; index++)
             {
@@ -6174,6 +6499,11 @@ internal static class FirstRunSetup
                 e.Graphics.FillEllipse(fillBrush, circle);
                 e.Graphics.DrawEllipse(outline, circle);
             }
+            using Font captionFont = new("Segoe UI", 8f * _fontScale);
+            TextRenderer.DrawText(e.Graphics, Caption, captionFont,
+                new Rectangle(0, Math.Max(0, Height - captionFont.Height), Width, captionFont.Height),
+                _palette.SecondaryText, TextFormatFlags.HorizontalCenter | TextFormatFlags.SingleLine |
+                    TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
         }
 
         private (PointF[] Centers, float HaloDiameter) GetPaintGeometry()
@@ -6183,7 +6513,8 @@ internal static class FirstRunSetup
             const float edgeInset = (haloDiameter / 2f) + 1f;
             float usableWidth = Math.Max(0f, Width - (edgeInset * 2f));
             float spacing = usableWidth / (StepCount - 1);
-            float centerY = Height / 2f;
+            using Font captionFont = new("Segoe UI", 8f * _fontScale);
+            float centerY = Math.Max(20f, (Height - captionFont.Height) / 2f);
             var centers = new PointF[StepCount];
             for (int index = 0; index < centers.Length; index++)
             {

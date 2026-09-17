@@ -11,6 +11,41 @@ namespace QuickZoom;
 
 internal static class InstalledAppService
 {
+    internal static IDisposable? TryAcquireInstallTransaction(out string? errorMessage,
+        string? mutexName = null, int timeoutMilliseconds = 3000)
+    {
+        errorMessage = null;
+        Mutex? mutex = null;
+        try
+        {
+            mutex = new Mutex(false, mutexName ?? @"Global\QuickZoom.StartupInstallation");
+            bool acquired;
+            try { acquired = mutex.WaitOne(timeoutMilliseconds); }
+            catch (AbandonedMutexException) { acquired = true; }
+            if (acquired) return new InstallTransaction(mutex);
+            errorMessage = "Another QuickZoom installation is still in progress.";
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+            ErrorLog.Write("InstalledAppService.Lock", ex);
+        }
+        mutex?.Dispose();
+        return null;
+    }
+
+    private sealed class InstallTransaction(Mutex mutex) : IDisposable
+    {
+        private Mutex? _mutex = mutex;
+        public void Dispose()
+        {
+            Mutex? owned = Interlocked.Exchange(ref _mutex, null);
+            if (owned == null) return;
+            try { owned.ReleaseMutex(); }
+            finally { owned.Dispose(); }
+        }
+    }
+
     private static readonly string StateRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "QuickZoom");
@@ -289,16 +324,9 @@ internal static class InstalledAppService
             }
 
             installedExePath = Path.Combine(targetDirectory, Path.GetFileName(sourceExePath));
-            LocalStorage.RequireLocalPath(CurrentInstallPointerPath);
-            string pointerTemp = Path.Combine(InstallRoot, Guid.NewGuid().ToString("N") + ".tmp");
-            using (var pointerStream = new FileStream(pointerTemp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-            using (var writer = new StreamWriter(pointerStream))
-                writer.Write(installedExePath);
-            HardenInstallFile(pointerTemp);
-            File.Move(pointerTemp, CurrentInstallPointerPath, overwrite: true);
-            HardenInstallDirectory(targetDirectory);
-            HardenInstallFile(CurrentInstallPointerPath);
-            CleanupOldManagedVersions(targetDirectory);
+            // Staging must leave the working install and its startup task intact.
+            // Publish the pointer and prune versions only after task registration
+            // has been read back successfully.
             return File.Exists(installedExePath);
         }
         catch (Exception ex)
@@ -306,6 +334,45 @@ internal static class InstalledAppService
             errorMessage = ex.Message;
             ErrorLog.Write("InstalledAppService", ex);
             return false;
+        }
+    }
+
+    internal static bool TryCommitInstalledPayload(string installedExePath, out string? errorMessage)
+    {
+        errorMessage = null;
+        string? pointerTemp = null;
+        try
+        {
+            if (!IsSecureInstallPath(installedExePath))
+                throw new IOException("The staged install is not protected.");
+            string targetDirectory = Path.GetDirectoryName(Path.GetFullPath(installedExePath))!;
+            LocalStorage.RequireLocalPath(CurrentInstallPointerPath);
+            string? previousExePath = ReadInstalledExecutablePointer(CurrentInstallPointerPath, VersionsRoot);
+            string? previousVersionDirectory = previousExePath == null ? null : Path.GetDirectoryName(previousExePath);
+            pointerTemp = Path.Combine(InstallRoot, Guid.NewGuid().ToString("N") + ".tmp");
+            using (var pointerStream = new FileStream(pointerTemp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (var writer = new StreamWriter(pointerStream))
+                writer.Write(installedExePath);
+            HardenInstallFile(pointerTemp);
+            File.Move(pointerTemp, CurrentInstallPointerPath, overwrite: true);
+            HardenInstallDirectory(targetDirectory);
+            HardenInstallFile(CurrentInstallPointerPath);
+            CleanupOldManagedVersions(targetDirectory, previousVersionDirectory);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+            ErrorLog.Write("InstalledAppService", ex);
+            return false;
+        }
+        finally
+        {
+            if (pointerTemp != null)
+            {
+                try { File.Delete(pointerTemp); }
+                catch (Exception ex) { ErrorLog.Write("InstalledAppService.PointerCleanup", ex); }
+            }
         }
     }
 
@@ -441,7 +508,7 @@ internal static class InstalledAppService
         fileInfo.SetAccessControl(CreateInstallFileSecurity());
     }
 
-    private static void CleanupOldManagedVersions(string currentVersionDirectory)
+    private static void CleanupOldManagedVersions(string currentVersionDirectory, string? previousVersionDirectory)
     {
         try
         {
@@ -456,21 +523,8 @@ internal static class InstalledAppService
                 ? null
                 : Path.GetDirectoryName(pointerExePath);
 
-            var removableVersions = new List<DirectoryInfo>();
-            foreach (DirectoryInfo directory in new DirectoryInfo(VersionsRoot).EnumerateDirectories())
-            {
-                string directoryPath = Path.GetFullPath(directory.FullName);
-                if (PathsEqual(directoryPath, currentFullPath) || PathsEqual(directoryPath, pointerDirectory))
-                {
-                    continue;
-                }
-
-                removableVersions.Add(directory);
-            }
-
-            foreach (DirectoryInfo oldVersion in removableVersions
-                .OrderByDescending(directory => directory.LastWriteTimeUtc)
-                .Skip(PreviousManagedVersionRetentionCount))
+            foreach (DirectoryInfo oldVersion in SelectOldManagedVersions(
+                new DirectoryInfo(VersionsRoot).EnumerateDirectories(), currentFullPath, pointerDirectory, previousVersionDirectory))
             {
                 TryDeleteManagedVersionDirectory(oldVersion);
             }
@@ -479,6 +533,18 @@ internal static class InstalledAppService
         {
             ErrorLog.Write("InstalledAppService.Cleanup", ex);
         }
+    }
+
+    private static IEnumerable<DirectoryInfo> SelectOldManagedVersions(
+        IEnumerable<DirectoryInfo> directories, string currentVersionDirectory,
+        string? pointerDirectory, string? previousVersionDirectory)
+    {
+        return directories.Where(directory =>
+                !PathsEqual(directory.FullName, currentVersionDirectory) &&
+                !PathsEqual(directory.FullName, pointerDirectory) &&
+                !PathsEqual(directory.FullName, previousVersionDirectory))
+            .OrderByDescending(directory => directory.LastWriteTimeUtc)
+            .Skip(previousVersionDirectory == null ? PreviousManagedVersionRetentionCount : 0);
     }
 
     private static void TryDeleteManagedVersionDirectory(DirectoryInfo directory)

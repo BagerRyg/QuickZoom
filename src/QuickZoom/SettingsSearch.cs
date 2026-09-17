@@ -181,6 +181,19 @@ internal sealed class SettingsSearchControl : UserControl, IMessageFilter
     }
 
     public event EventHandler<SettingsSearchEntry>? ResultActivated;
+    public event EventHandler? ResultsVisibilityChanged;
+    public bool ShowingResults => _results.Visible || _emptyLabel.Visible;
+    private int _expandedViewportHeight;
+    internal int ExpandedViewportHeight
+    {
+        get => _expandedViewportHeight;
+        set
+        {
+            if (_expandedViewportHeight == value) return;
+            _expandedViewportHeight = value;
+            UpdateExpandedHeight();
+        }
+    }
 
     public bool ContainsSearchFocus => _input.Focused || _results.Focused;
 
@@ -432,6 +445,7 @@ internal sealed class SettingsSearchControl : UserControl, IMessageFilter
 
         UpdateExpandedHeight();
         AccessibilityNotifyClients(AccessibleEvents.Reorder, -1);
+        ResultsVisibilityChanged?.Invoke(this, EventArgs.Empty);
         Invalidate();
     }
 
@@ -628,12 +642,13 @@ internal sealed class SettingsSearchControl : UserControl, IMessageFilter
         _emptyLabel.Visible = false;
         _results.Items.Clear();
         UpdateExpandedHeight();
+        ResultsVisibilityChanged?.Invoke(this, EventArgs.Empty);
         Invalidate();
     }
 
     private void UpdateMetrics()
     {
-        _fieldHeight = ControlDrawing.ScaleLogical(this, 38);
+        _fieldHeight = Math.Max(ControlDrawing.ScaleLogical(this, 38), _input.Font.Height + ControlDrawing.ScaleLogical(this, 14));
         _resultHeight = Math.Max(ControlDrawing.ScaleLogical(this, 48), _titleFont.Height + _detailFont.Height + ControlDrawing.ScaleLogical(this, 12));
         _results.ItemHeight = _resultHeight;
         UpdateExpandedHeight();
@@ -646,7 +661,10 @@ internal sealed class SettingsSearchControl : UserControl, IMessageFilter
         int resultsHeight = 0;
         if (_results.Visible)
         {
-            int visibleResultCount = Math.Min(MaximumVisibleResults, Math.Max(1, _results.Items.Count));
+            int availableRows = _expandedViewportHeight > 0
+                ? Math.Max(1, (_expandedViewportHeight - _fieldHeight - gap - 2) / Math.Max(1, _results.ItemHeight))
+                : MaximumVisibleResults;
+            int visibleResultCount = Math.Min(availableRows, Math.Max(1, _results.Items.Count));
             resultsHeight = (visibleResultCount * Math.Max(1, _results.ItemHeight)) + 2;
         }
         else if (_emptyLabel.Visible)

@@ -14,6 +14,7 @@ publish/
 .dotnet-cli/
 .nuget/
 .tmp/
+/.codex-temp/
 
 # Logs, crash dumps, traces, and local diagnostics
 *.log
@@ -40,6 +41,7 @@ crashpad/
 .idea/
 TestResults/
 /test-validation/
+/assets/[Ss]creenshots/
 
 # Local signing credentials
 *.cer

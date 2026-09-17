@@ -24,7 +24,6 @@
   <a href="https://github.com/BagerRyg/QuickZoom/releases">Download</a> |
   <a href="#features">Features</a> |
   <a href="#settings-reference">Settings Reference</a> |
-  <a href="#screenshots">Screenshots</a> |
   <a href="#shortcuts">Shortcuts</a> |
   <a href="#translations">Translations</a> |
   <a href="#build-from-source">Build from source</a>
@@ -67,7 +66,7 @@ QuickZoom is designed for users who want:
 - Magnification across all active displays.
 - Per-monitor display selection.
 - Dark, light, and system theme support.
-- English, Danish, German, Norwegian, and Swedish interface.
+- English, Danish, Finnish, Norwegian, and Swedish interface.
 - Optional elevated startup support for better compatibility with administrator apps.
 - Portable self-contained release builds.
 
@@ -361,12 +360,13 @@ This row does not change zoom feel directly, but it affects reliability after re
 Provides buttons for the install folder and config folder.  
 These are mainly for troubleshooting, updates, backups, or checking where settings and logs are stored.
 
-#### Debug Logging
+#### Privacy and Troubleshooting Logging
 
-Lets the user open the log file and turn extra diagnostic logging on or off.  
-Crash logs are always kept, but debug logging writes more detail while QuickZoom runs.  
-It is useful when diagnosing broken hooks, startup issues, display changes, or magnification failures.  
-For normal use it can stay off to keep logs quieter.
+Strict Data mode defaults to **off**. Choose it in setup or under **About** to block all application diagnostic and crash logging. Preferences still save locally; existing logs are retained.
+
+Troubleshooting logging also defaults to **off**. With Strict Data off, enable it under **About** for the current app session. It automatically returns to off after restarting QuickZoom. Logs contain timestamps, build and source event identifiers, exception types and error codes—not raw messages, typed keys, screen content or window titles.
+
+Logs stay in the local QuickZoom settings folder and are never uploaded. Two files of up to 1 MB are retained, replacing older entries. Use **Show log file** and review the files before sharing them yourself. There are no application crash logs unless troubleshooting logging is enabled.
 
 #### How to Use
 
@@ -418,20 +418,6 @@ These are the default shortcuts. They can be changed in Settings.
 | Invert colors with mouse | `Alt` + middle mouse button |
 | Invert colors with keyboard | `Alt` + `I` |
 
-## Screenshots
-
-### Tray Menu
-
-![QuickZoom tray menu](assets/screenshots/Build%20229/dark/en/tray-menu.png)
-
-### Cursor Settings
-
-![QuickZoom cursor settings](assets/screenshots/Build%20229/dark/en/settings-cursor.png)
-
-### Keyboard Shortcuts
-
-![QuickZoom shortcut settings](assets/screenshots/Build%20229/dark/en/settings-shortcuts.png)
-
 ## Requirements
 
 - Windows 10 x64 or Windows 11 x64.
@@ -466,13 +452,21 @@ cd QuickZoom
 dotnet build .\QuickZoom.csproj -c Release
 ```
 
-Create a self-contained Windows x64 build:
+Run the release checks with .NET 10 SDK 10.0.401 or newer and PowerShell 7.6 or newer. `global.json` enforces this SDK baseline so self-contained releases include the serviced .NET 10.0.12 runtime or newer:
+
+```powershell
+pwsh -NoProfile -File .\scripts\Test-Release.ps1
+```
+
+The checks use isolated test files and do not take screenshots or register startup tasks. Add `-NoRestore` after restoring all projects to avoid restoring again. Add `-IncludeNative` on an interactive Windows desktop to also exercise hidden magnifier controls and input-hook cleanup.
+
+Create a self-contained Windows x64 build after these checks pass:
 
 ```powershell
 .\build.bat
 ```
 
-Each run increments the build number and creates the standalone executable at `Builds\Build N\QuickZoom.exe`.
+Each run increments the build number, runs the release checks, and creates the standalone executable at `Builds\Build N\QuickZoom.exe` only if validation succeeds.
 
 ## Elevated startup support
 

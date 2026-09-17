@@ -86,7 +86,10 @@ internal sealed partial class TrayContext
         _applyingCursorEnhancement = true;
         try
         {
-            RestoreSystemCursorScheme(reapplyCursorEnhancement: false);
+            if (!RestoreSystemCursorScheme(reapplyCursorEnhancement: false))
+            {
+                return;
+            }
 
             int baseWidth = Math.Max(16, GetSystemMetrics(SM_CXCURSOR));
             int baseHeight = Math.Max(16, GetSystemMetrics(SM_CYCURSOR));

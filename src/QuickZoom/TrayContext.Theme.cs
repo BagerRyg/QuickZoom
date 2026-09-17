@@ -39,6 +39,7 @@ internal sealed partial class TrayContext
         }
 
         bool accessibilityChanged = e.Category == UserPreferenceCategory.Accessibility;
+        if (accessibilityChanged) ControlDrawing.RefreshWindowsTextScale();
         RunOnUiThread("UserPreferenceChanged", () => ApplyThemePreference(force: accessibilityChanged));
     }
 

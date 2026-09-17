@@ -27,6 +27,9 @@ internal sealed partial class TrayContext
     private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
     private const uint KEYEVENTF_KEYUP = 0x0002;
     private static readonly IntPtr ShortcutReplayExtraInfo = new(unchecked((long)0x515A535550505245UL));
+    private readonly HashSet<int> _pressedEnableKeys = new();
+    private readonly HashSet<int> _pressedControlKeys = new();
+    private Func<Array, uint>? _keyboardInputSender = null;
 
     private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
     private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
@@ -125,9 +128,7 @@ internal sealed partial class TrayContext
         _hook = SetWindowsHookEx(WH_MOUSE_LL, _proc, GetModuleHandle(curModule.ModuleName!), 0);
         if (_hook == IntPtr.Zero)
         {
-            ErrorLog.Write("InstallHook", new Win32Exception(Marshal.GetLastWin32Error(), "Failed to set the low-level mouse hook."));
-            MessageBox.Show(L("Error.MouseHookFailed"), L("Common.AppName"), MessageBoxButtons.OK, MessageBoxIcon.Error);
-            ExitThread();
+            throw new Win32Exception(Marshal.GetLastWin32Error(), L("Error.MouseHookFailed"));
         }
     }
 
@@ -140,14 +141,13 @@ internal sealed partial class TrayContext
         _kbdHook = SetWindowsHookEx(WH_KEYBOARD_LL, _kbdProc, GetModuleHandle(curModule.ModuleName!), 0);
         if (_kbdHook == IntPtr.Zero)
         {
-            ErrorLog.Write("InstallKeyboardHook", new Win32Exception(Marshal.GetLastWin32Error(), "Failed to set the low-level keyboard hook."));
-            MessageBox.Show(L("Error.KeyboardHookFailed"), L("Common.AppName"), MessageBoxButtons.OK, MessageBoxIcon.Error);
-            ExitThread();
+            throw new Win32Exception(Marshal.GetLastWin32Error(), L("Error.KeyboardHookFailed"));
         }
     }
 
     private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
+        if (_runtimeStopped) return CallNextHookEx(_hook, nCode, wParam, lParam);
         try
         {
             return HookCallbackCore(nCode, wParam, lParam);
@@ -222,13 +222,14 @@ internal sealed partial class TrayContext
 
     private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
+        if (_runtimeStopped) return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
         try
         {
             return KeyboardHookCallbackCore(nCode, wParam, lParam);
         }
         catch (Exception ex)
         {
-            _enableKeyPressed = false;
+            ResetTrackedModifierKeys();
             _invertKeyPressed = false;
             _followCursorKeyPressed = false;
             _zoomModeCycleKeyPressed = false;
@@ -266,6 +267,7 @@ internal sealed partial class TrayContext
         {
             if (IsControlKey(vk))
             {
+                _pressedControlKeys.Add(vk);
                 _controlKeyPressed = true;
             }
 
@@ -282,6 +284,11 @@ internal sealed partial class TrayContext
 
             if (_altGrPressed)
             {
+                if (_suppressedShortcutKeyUps.Contains(vk))
+                {
+                    return (IntPtr)1;
+                }
+
                 return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
             }
 
@@ -294,16 +301,28 @@ internal sealed partial class TrayContext
 
             if (IsEnableKeyMatch(_enableKey, vk))
             {
-                bool wasAlreadyPressed = _enableKeyPressed;
+                bool firstKeyDown = _pressedEnableKeys.Add(vk);
                 _enableKeyPressed = true;
 
                 if (_suppressShortcutKeystrokes)
                 {
-                    if (!_enableKeyDownSuppressed)
+                    if (_enableKeyDownSuppressed && vk != _suppressedEnableVirtualKey)
+                    {
+                        // Suppression belongs to one physical key. Preserve the
+                        // other modifier's own down/up pair and track both sides.
+                        if (!_enableKeyUsedByQuickZoom)
+                        {
+                            _ = TryReplaySuppressedEnableKeyDown();
+                        }
+
+                        return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
+                    }
+
+                    if (!_enableKeyDownSuppressed && firstKeyDown)
                     {
                         BeginEnableKeySuppression(data);
                     }
-                    else if (wasAlreadyPressed &&
+                    else if (!firstKeyDown &&
                              !_enableKeyUsedByQuickZoom &&
                              !_replayedEnableKeyDown &&
                              TryReplaySuppressedEnableKeyDown())
@@ -406,6 +425,13 @@ internal sealed partial class TrayContext
                 }
             }
 
+            // A shortcut key remains ours until its physical release, even if
+            // the enable key was released first or shortcuts were disabled.
+            if (_suppressedShortcutKeyUps.Contains(vk))
+            {
+                return (IntPtr)1;
+            }
+
             if (_enableKeyPressed &&
                 _enableKeyDownSuppressed &&
                 !_enableKeyUsedByQuickZoom &&
@@ -420,41 +446,38 @@ internal sealed partial class TrayContext
             if (vk == (int)Keys.RMenu && _altGrPressed)
             {
                 _altGrPressed = false;
-                return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
-            }
-
-            if (_altGrPressed)
-            {
-                if (IsControlKey(vk))
-                {
-                    _controlKeyPressed = false;
-                }
-
-                return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
             }
 
             if (IsControlKey(vk))
             {
-                _controlKeyPressed = false;
+                _pressedControlKeys.Remove(vk);
+                _controlKeyPressed = _pressedControlKeys.Count > 0;
             }
 
-            if (_enableKeyPressed && IsEnableKeyMatch(_enableKey, vk))
+            if (IsEnableKeyMatch(_enableKey, vk))
             {
-                bool keyDownWasSuppressed = _enableKeyDownSuppressed;
-                bool keyDownWasReplayed = _replayedEnableKeyDown;
-                bool keyWasUsedByQuickZoom = _enableKeyUsedByQuickZoom;
-                _enableKeyPressed = false;
-                _wheelDeltaRemainder = 0;
-
-                if (keyDownWasSuppressed && !keyDownWasReplayed && !keyWasUsedByQuickZoom)
+                _pressedEnableKeys.Remove(vk);
+                _enableKeyPressed = _pressedEnableKeys.Count > 0;
+                if (!_enableKeyPressed)
                 {
-                    _ = TryReplaySuppressedEnableKeyPress();
+                    _wheelDeltaRemainder = 0;
                 }
 
-                ResetEnableKeySuppressionState();
-                if (keyDownWasSuppressed && !keyDownWasReplayed)
+                if (_enableKeyDownSuppressed && vk == _suppressedEnableVirtualKey)
                 {
-                    return (IntPtr)1;
+                    if (!_replayedEnableKeyDown && !_enableKeyUsedByQuickZoom)
+                    {
+                        _ = TryReplaySuppressedEnableKeyPress();
+                    }
+
+                    // A partial tap replay inserted only key-down. Let this
+                    // physical key-up complete it instead of leaving it stuck.
+                    bool suppressKeyUp = !_replayedEnableKeyDown;
+                    ResetEnableKeySuppressionState();
+                    if (suppressKeyUp)
+                    {
+                        return (IntPtr)1;
+                    }
                 }
             }
 
@@ -539,6 +562,15 @@ internal sealed partial class TrayContext
         _suppressedEnableExtended = false;
     }
 
+    private void ResetTrackedModifierKeys()
+    {
+        _pressedEnableKeys.Clear();
+        _pressedControlKeys.Clear();
+        _enableKeyPressed = false;
+        _controlKeyPressed = false;
+        _altGrPressed = false;
+    }
+
     private bool TryReplaySuppressedEnableKeyDown()
     {
         if (!_enableKeyDownSuppressed || _replayedEnableKeyDown)
@@ -546,17 +578,17 @@ internal sealed partial class TrayContext
             return false;
         }
 
-        bool sent = TrySendKeyboardInputs(CreateKeyboardInput(
+        uint sent = SendKeyboardInputs(CreateKeyboardInput(
             _suppressedEnableVirtualKey,
             _suppressedEnableScanCode,
             _suppressedEnableExtended,
             keyUp: false));
-        if (sent)
+        if (sent > 0)
         {
             _replayedEnableKeyDown = true;
         }
 
-        return sent;
+        return sent == 1;
     }
 
     private bool TryReplaySuppressedEnableKeyWith(KBDLLHOOKSTRUCT currentKey)
@@ -566,7 +598,7 @@ internal sealed partial class TrayContext
             return false;
         }
 
-        bool sent = TrySendKeyboardInputs(
+        uint sent = SendKeyboardInputs(
             CreateKeyboardInput(
                 _suppressedEnableVirtualKey,
                 _suppressedEnableScanCode,
@@ -577,12 +609,12 @@ internal sealed partial class TrayContext
                 (int)currentKey.scanCode,
                 (currentKey.flags & LLKHF_EXTENDED) != 0,
                 keyUp: false));
-        if (sent)
+        if (sent > 0)
         {
             _replayedEnableKeyDown = true;
         }
 
-        return sent;
+        return sent == 2;
     }
 
     private bool TryReplaySuppressedEnableKeyPress()
@@ -592,7 +624,7 @@ internal sealed partial class TrayContext
             return false;
         }
 
-        return TrySendKeyboardInputs(
+        uint sent = SendKeyboardInputs(
             CreateKeyboardInput(
                 _suppressedEnableVirtualKey,
                 _suppressedEnableScanCode,
@@ -603,6 +635,8 @@ internal sealed partial class TrayContext
                 _suppressedEnableScanCode,
                 _suppressedEnableExtended,
                 keyUp: true));
+        _replayedEnableKeyDown = sent == 1;
+        return sent == 2;
     }
 
     private static INPUT CreateKeyboardInput(int virtualKey, int scanCode, bool extended, bool keyUp)
@@ -629,18 +663,20 @@ internal sealed partial class TrayContext
         };
     }
 
-    private static bool TrySendKeyboardInputs(params INPUT[] inputs)
+    private uint SendKeyboardInputs(params INPUT[] inputs)
     {
-        uint sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        uint sent = _keyboardInputSender != null
+            ? _keyboardInputSender(inputs)
+            : SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
         if (sent == inputs.Length)
         {
-            return true;
+            return sent;
         }
 
         ErrorLog.WriteThrottled(
             "ShortcutSuppression.SendInput",
             new Win32Exception(Marshal.GetLastWin32Error(), "Could not replay a non-QuickZoom keyboard shortcut."));
-        return false;
+        return sent;
     }
 
     private static bool IsQuickZoomForeground()

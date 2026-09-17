@@ -27,15 +27,28 @@ internal static class FilePersistence
         {
             using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             using (var writer = new StreamWriter(stream, Utf8NoBom))
+            {
                 writer.Write(content);
-
-            if (File.Exists(path))
-            {
-                File.Replace(tempPath, path, destinationBackupFileName: null, ignoreMetadataErrors: true);
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
             }
-            else
+
+            for (int attempt = 0; ; attempt++)
             {
-                File.Move(tempPath, path);
+                try
+                {
+                    if (File.Exists(path))
+                        File.Replace(tempPath, path, destinationBackupFileName: null, ignoreMetadataErrors: true);
+                    else
+                        File.Move(tempPath, path);
+                    break;
+                }
+                catch (IOException ex) when (attempt < 4 && (ex.HResult & 0xFFFF) is 32 or 33)
+                {
+                    // Antivirus and readers can briefly deny replacement. Keep
+                    // the original intact and retry only sharing/lock failures.
+                    System.Threading.Thread.Sleep(25 << attempt);
+                }
             }
         }
         finally

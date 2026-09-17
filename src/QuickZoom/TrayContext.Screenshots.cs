@@ -9,7 +9,7 @@ namespace QuickZoom;
 
 internal sealed partial class TrayContext
 {
-    internal static void CaptureUiScreenshots(string outputDirectory)
+    internal static void CaptureUiScreenshots(string outputDirectory, string? languageFilter = null, string? fontFilter = null)
     {
         Directory.CreateDirectory(outputDirectory);
         bool previousFollowWindowsTextScale = ControlDrawing.FollowWindowsTextScale;
@@ -24,10 +24,14 @@ internal sealed partial class TrayContext
             {
                 foreach (UiLanguage language in Enum.GetValues<UiLanguage>())
                 {
+                    if (languageFilter != null && LocalizationManager.GetLanguageCode(language) != languageFilter) continue;
                     foreach (UiFontSize fontSize in Enum.GetValues<UiFontSize>())
                     {
+                        if (fontFilter != null && GetUiFontSizeDirectoryName(fontSize) != fontFilter) continue;
                         context.CaptureUiScreenshotSet(outputDirectory, language, useDarkTheme, fontSize);
                     }
+                    if (language is UiLanguage.English or UiLanguage.Danish && (fontFilter == null || fontFilter == "text-225"))
+                        context.CaptureUiScreenshotSet(outputDirectory, language, useDarkTheme, UiFontSize.Default, textScale: 2.25f);
                 }
             }
         }
@@ -78,7 +82,8 @@ internal sealed partial class TrayContext
         string outputDirectory,
         UiLanguage language,
         bool useDarkTheme,
-        UiFontSize fontSize)
+        UiFontSize fontSize,
+        float textScale = 1f)
     {
         _ = AppThemeBootstrap.TryApplyNativeColorMode(useDarkTheme ? AppThemeBootstrap.Dark : AppThemeBootstrap.Light);
         _language = language;
@@ -86,28 +91,24 @@ internal sealed partial class TrayContext
         _useDarkTheme = useDarkTheme;
         _uiFontSize = fontSize;
         ApplyUiFontScale();
+        ControlDrawing.UiFontScale *= textScale;
 
         string languageCode = LocalizationManager.GetLanguageCode(language);
         string themeName = useDarkTheme ? "dark" : "light";
-        string legacyVariantDirectory = Path.Combine(outputDirectory, themeName, languageCode);
-        string variantDirectory = Path.Combine(legacyVariantDirectory, GetUiFontSizeDirectoryName(fontSize));
+        string variantDirectory = Path.Combine(outputDirectory, themeName, languageCode, textScale > 1f
+            ? $"text-{(int)(textScale * 100)}" : GetUiFontSizeDirectoryName(fontSize));
         Directory.CreateDirectory(variantDirectory);
 
         CaptureSettingsPages(variantDirectory);
         CaptureTrayMenu(variantDirectory);
 
-        // Keep the original theme/language paths as the stable baseline used by
-        // existing documentation and visual-review tooling.
-        if (fontSize == UiFontSize.Default)
-        {
-            MirrorScreenshotSet(variantDirectory, legacyVariantDirectory);
-        }
     }
 
     private void CaptureSettingsPages(string outputDirectory)
     {
         SettingsForm? form = null;
         bool previousDebugLoggingEnabled = _debugLoggingEnabled;
+        bool previousStrictDataMode = _strictDataMode;
         try
         {
             _resetDefaultsButton = new ModernButton
@@ -129,7 +130,8 @@ internal sealed partial class TrayContext
                 BuildSettingsSearchEntries(),
                 L("Settings.SearchPlaceholder"),
                 L("Settings.SearchNoResults"),
-                L("Settings.SearchAccessibleDescription"));
+                L("Settings.SearchAccessibleDescription"),
+                L("Settings.NavigationLabels"));
 
             form.CaptureMode = true;
             form.ShowInTaskbar = false;
@@ -168,6 +170,7 @@ internal sealed partial class TrayContext
             form.ActiveControl = null;
             foreach (bool debugLoggingEnabled in new[] { false, true })
             {
+                _strictDataMode = false;
                 _debugLoggingEnabled = debugLoggingEnabled;
                 form.RebuildPage(typeof(AboutSettingsPageView));
                 form.ShowPage(typeof(AboutSettingsPageView));
@@ -176,6 +179,14 @@ internal sealed partial class TrayContext
                     form,
                     Path.Combine(outputDirectory, debugLoggingEnabled ? "settings-about-debug-on.png" : "settings-about-debug-off.png"));
             }
+
+            _strictDataMode = true;
+            _debugLoggingEnabled = false;
+            form.RebuildPage(typeof(AboutSettingsPageView));
+            form.ShowPage(typeof(AboutSettingsPageView));
+            WaitForUi(900);
+            CaptureWindow(form, Path.Combine(outputDirectory, "settings-about-strict-on.png"));
+            _strictDataMode = false;
 
             ModernButton? hoveredAboutButton = FindControl<ModernButton>(form, L("About.OpenLog"));
             if (hoveredAboutButton != null)
@@ -195,6 +206,7 @@ internal sealed partial class TrayContext
         {
             ControlDrawing.FocusCaptureTarget = null;
             _debugLoggingEnabled = previousDebugLoggingEnabled;
+            _strictDataMode = previousStrictDataMode;
             if (form != null)
             {
                 form.Hide();
@@ -476,6 +488,9 @@ internal sealed partial class TrayContext
             int rightLimit = form.ClientSize.Width + ControlDrawing.ScaleLogical(form, 1);
             foreach (Control control in EnumerateDescendants(form))
             {
+                if (control is ModernButton { Text: "☰", Visible: true } navigation &&
+                    navigation.Parent is Control parent && !parent.ClientRectangle.Contains(navigation.Bounds))
+                    throw new InvalidOperationException("The compact navigation button is clipped.");
                 if (!control.Visible || control is not (SettingsRow or ToggleSwitchControl or ModernDropdown or ModernSlider))
                 {
                     continue;
@@ -773,8 +788,11 @@ internal sealed partial class TrayContext
                 throw new InvalidOperationException($"Dropdown '{accessibleName}' rendered outside the working area.");
             }
 
-            if (dropdown.Height > ControlDrawing.ScaleLogical(dropdown, 36) ||
-                menuCapture.ItemHeight > ControlDrawing.ScaleLogical(dropdown, 30))
+            int preferredFieldHeight = dropdown.GetPreferredSize(Size.Empty).Height;
+            int maximumItemHeight = Math.Max(ControlDrawing.ScaleLogical(dropdown, 30),
+                dropdown.Font.Height + ControlDrawing.ScaleLogical(dropdown, 12));
+            if (dropdown.Height < dropdown.Font.Height + ControlDrawing.ScaleLogical(dropdown, 8) ||
+                dropdown.Height > preferredFieldHeight + 2 || menuCapture.ItemHeight > maximumItemHeight)
             {
                 throw new InvalidOperationException($"Dropdown '{accessibleName}' exceeded compact sizing limits.");
             }
@@ -847,6 +865,12 @@ internal sealed partial class TrayContext
 
             WaitForUi(250);
             CaptureWindow(_trayPopup, Path.Combine(outputDirectory, "tray-menu.png"));
+            if (_trayPopup.ScrollForCapture(toBottom: true))
+            {
+                WaitForUi(80);
+                CaptureWindow(_trayPopup, Path.Combine(outputDirectory, "tray-menu-scrolled.png"));
+                _trayPopup.ScrollForCapture(toBottom: false);
+            }
             if (_magnifyRow != null)
             {
                 CaptureTrayFocusTarget(
@@ -906,16 +930,6 @@ internal sealed partial class TrayContext
         UiFontSize.ExtraLarge => "font-extra-large",
         _ => "font-default"
     };
-
-    private static void MirrorScreenshotSet(string sourceDirectory, string destinationDirectory)
-    {
-        Directory.CreateDirectory(destinationDirectory);
-        foreach (string sourcePath in Directory.GetFiles(sourceDirectory, "*.png", SearchOption.TopDirectoryOnly))
-        {
-            string destinationPath = Path.Combine(destinationDirectory, Path.GetFileName(sourcePath));
-            File.Copy(sourcePath, destinationPath, overwrite: true);
-        }
-    }
 
     private static void PlaceCaptureWindow(Form form)
     {

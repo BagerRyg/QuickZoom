@@ -13,7 +13,8 @@ internal static class AccessibilityPreferences
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SystemParametersInfo(uint uiAction, uint uiParam, out bool pvParam, uint fWinIni);
 
-    internal static bool HighContrast => SystemInformation.HighContrast;
+    internal static bool CaptureHighContrast { get; set; }
+    internal static bool HighContrast => CaptureHighContrast || SystemInformation.HighContrast;
 
     internal static bool AnimationsEnabled
     {

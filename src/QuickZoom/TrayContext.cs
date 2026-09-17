@@ -123,6 +123,8 @@ internal sealed partial class TrayContext : ApplicationContext
     private NotifyIcon _tray = null!;
     private Icon? _iconRef;
     private Control _uiInvoker = null!;
+    private SettingsActivation? _settingsActivation;
+    private IDisposable? _startupReadyMarker;
     private TrayPopupWindow? _trayPopup;
     private bool _useDarkTheme;
     private ThemeMode _themeMode = ThemeMode.AutoSystem;
@@ -142,7 +144,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private int _zoomPercent = 100;
     private const int MinPercent = 100;
     private int _maxPercent = 400;
-    private int _stepPercent = 25;
+    private int _stepPercent = 30;
     private bool _enabled = true;
     private bool _followCursor = true;
     private bool _autoSwitchMonitor = true;
@@ -156,6 +158,7 @@ internal sealed partial class TrayContext : ApplicationContext
     private bool _centerCursor;
     private bool _suppressShortcutKeystrokes;
     private bool _debugLoggingEnabled;
+    private bool _strictDataMode;
     private bool _wiggleSpotlightEnabled = true;
     private bool _cursorEnhancementEnabled;
     private int _cursorScale = 100;
@@ -231,8 +234,12 @@ internal sealed partial class TrayContext : ApplicationContext
     private System.Windows.Forms.Timer? _settingsSaveTimer;
     private readonly object _settingsSaveSync = new();
     private readonly object _settingsWriteSync = new();
-    private Settings? _pendingSettingsSave;
+    private SettingsWrite? _pendingSettingsSave;
+    private long _settingsSaveRevision;
+    private long _settingsWrittenRevision;
     private Task? _settingsSaveTask;
+    private bool _settingsLoadFailed;
+    private int _settingsSaveFailureNotified;
     private bool _pendingResetDefaultsConfirmation;
 
     // Refresh rate
@@ -293,40 +300,65 @@ internal sealed partial class TrayContext : ApplicationContext
         _startupReadyEventName = startupReadyEventName;
         _screenshotMode = screenshotMode;
         _setupPracticeMode = setupPracticeMode;
-        LoadSettings();
-        if (screenshotMode)
+        try
         {
-            _uiInvoker = new Control();
-            _uiInvoker.CreateControl();
-            return;
-        }
+            LoadSettings();
+            if (screenshotMode)
+            {
+                _uiInvoker = new Control();
+                _uiInvoker.CreateControl();
+                return;
+            }
 
-        if (setupPracticeMode)
-        {
-            _enableKey = setupPracticeKey == Keys.None ? Keys.Menu : setupPracticeKey;
-            _enabled = true;
-            _invertEnabled = true;
-            _invertColors = false;
-            _shortcutInputMode = ShortcutInputMode.Both;
-            _suppressShortcutKeystrokes = true;
-            _zoomMode = ZoomMode.Fullscreen;
-            _zoomPercent = 100;
-            _animTargetPercent = 100;
-            _autoDisableAt100 = true;
+            if (setupPracticeMode)
+            {
+                _enableKey = setupPracticeKey == Keys.None ? Keys.Menu : setupPracticeKey;
+                _enabled = true;
+                _invertEnabled = true;
+                _invertColors = false;
+                _shortcutInputMode = ShortcutInputMode.Both;
+                _suppressShortcutKeystrokes = true;
+                _zoomMode = ZoomMode.Fullscreen;
+                _zoomPercent = 100;
+                _animTargetPercent = 100;
+                _autoDisableAt100 = true;
+                _uiInvoker = new Control();
+                _uiInvoker.CreateControl();
+                InitializeCoreRuntime();
+                return;
+            }
+
+            RestoreSystemCursorScheme(reapplyCursorEnhancement: false);
+            ApplyCursorEnhancementIfNeeded();
             _uiInvoker = new Control();
             _uiInvoker.CreateControl();
             InitializeCoreRuntime();
-            return;
+            InitializeShellIntegration();
+            if (_settingsLoadFailed)
+                StartupDialogs.ShowWarning(L("Common.AppName"), L("Settings.ReadFailedTitle"), L("Settings.ReadFailedBody"));
+            try
+            {
+                _settingsActivation = new SettingsActivation(() => RunOnUiThread("Settings.Activate", () =>
+                {
+                    if (!_runtimeStopped) ShowSettingsWindow();
+                }));
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Tray access remains available when another process owns the signal.
+            }
+            catch (WaitHandleCannotBeOpenedException)
+            {
+                // An unavailable activation signal must not prevent normal startup.
+            }
+            SubscribePowerAndSessionChanges();
+            StartDeferredStartupIfNeeded();
         }
-
-        RestoreSystemCursorScheme(reapplyCursorEnhancement: false);
-        ApplyCursorEnhancementIfNeeded();
-        _uiInvoker = new Control();
-        _uiInvoker.CreateControl();
-        InitializeCoreRuntime();
-        InitializeShellIntegration();
-        SubscribePowerAndSessionChanges();
-        StartDeferredStartupIfNeeded();
+        catch
+        {
+            StopRuntime();
+            throw;
+        }
     }
 
     protected override void ExitThreadCore()
@@ -338,6 +370,18 @@ internal sealed partial class TrayContext : ApplicationContext
         finally
         {
             base.ExitThreadCore();
+        }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        try
+        {
+            if (disposing) StopRuntime();
+        }
+        finally
+        {
+            base.Dispose(disposing);
         }
     }
 
@@ -357,68 +401,83 @@ internal sealed partial class TrayContext : ApplicationContext
         }
 
         _runtimeStopped = true;
+        RunGuarded("Shutdown.ReadyMarker", () => _startupReadyMarker?.Dispose());
+        _startupReadyMarker = null;
+        RunGuarded("Shutdown.Activation", () => _settingsActivation?.Dispose());
+        _settingsActivation = null;
         _recentCursorSamples.Clear();
-        DisableMagAndReset();
+        RunGuarded("Shutdown.Magnification", DisableMagAndReset);
 
-        if (_hook != IntPtr.Zero)
+        RunGuarded("Shutdown.MouseHook", () =>
         {
-            UnhookWindowsHookEx(_hook);
-            _hook = IntPtr.Zero;
-        }
-
-        if (_kbdHook != IntPtr.Zero)
-        {
-            UnhookWindowsHookEx(_kbdHook);
-            _kbdHook = IntPtr.Zero;
-        }
-
-        _followTimer?.Stop();
-        _followTimer?.Dispose();
-        _animTimer?.Stop();
-        _animTimer?.Dispose();
-        _cursorSpotlightTimer?.Stop();
-        _cursorSpotlightTimer?.Dispose();
-        _startupTimer?.Stop();
-        _startupTimer?.Dispose();
-        _trayRecoveryTimer?.Stop();
-        _trayRecoveryTimer?.Dispose();
-        _trayOverlayActivationGuardTimer?.Stop();
-        _trayOverlayActivationGuardTimer?.Dispose();
-        FlushSettingsSave();
-        _settingsSaveTimer?.Stop();
-        _settingsSaveTimer?.Dispose();
-        _cursorScaleApplyTimer?.Stop();
-        _cursorScaleApplyTimer?.Dispose();
-        _shellMessageWindow?.Dispose();
-        RestoreSystemCursorVisibility();
-        RestoreSystemCursorScheme(reapplyCursorEnhancement: false);
-        _cursorSpotlightOverlay?.HideSpotlight();
-        _cursorSpotlightOverlay?.Dispose();
-        CloseTrayPopup();
-        if (_settingsWindow != null && !_settingsWindow.IsDisposed)
-        {
-            if (_settingsWindow is SettingsForm settingsForm)
+            if (_hook != IntPtr.Zero)
             {
-                settingsForm.ClosePermanently();
+                UnhookWindowsHookEx(_hook);
+                _hook = IntPtr.Zero;
             }
-            else
-            {
-                _settingsWindow.Close();
-            }
-            _settingsWindow.Dispose();
-        }
+        });
 
-        if (_tray != null)
+        RunGuarded("Shutdown.KeyboardHook", () =>
         {
-            _tray.Visible = false;
-            _tray.Dispose();
-        }
+            if (_kbdHook != IntPtr.Zero)
+            {
+                UnhookWindowsHookEx(_kbdHook);
+                _kbdHook = IntPtr.Zero;
+            }
+        });
 
-        UnsubscribePowerAndSessionChanges();
-        UnsubscribeThemeChanges();
-        UnsubscribeDisplayChanges();
-        _iconRef?.Dispose();
-        _uiInvoker.Dispose();
+        RunGuarded("Shutdown.SettingsSave", FlushSettingsSave);
+        foreach (var timer in new[] { _followTimer, _animTimer, _cursorSpotlightTimer, _startupTimer,
+            _trayRecoveryTimer, _trayOverlayActivationGuardTimer, _settingsSaveTimer, _cursorScaleApplyTimer,
+            _resetDefaultsConfirmTimer, _settingsZoomModeApplyTimer })
+            RunGuarded("Shutdown.Timer", () => timer?.Dispose());
+        RunGuarded("Shutdown.Shell", () => _shellMessageWindow?.Dispose());
+        if (!_screenshotMode && (_coreRuntimeInitialized || _cursorEnhancementApplied || _cursorSpotlightOverridesSystemCursors))
+            RunGuarded("Shutdown.Cursor", RestoreSystemCursorAtShutdown);
+        RunGuarded("Shutdown.Spotlight", () => _cursorSpotlightOverlay?.Dispose());
+        RunGuarded("Shutdown.TrayPopup", CloseTrayPopup);
+        RunGuarded("Shutdown.SettingsWindow", () =>
+        {
+            if (_settingsWindow != null && !_settingsWindow.IsDisposed)
+            {
+                Form window = _settingsWindow;
+                if (window is SettingsForm settingsForm)
+                {
+                    settingsForm.ClosePermanently();
+                }
+                else
+                {
+                    window.Close();
+                }
+                window.Dispose();
+            }
+        });
+
+        RunGuarded("Shutdown.TrayIcon", () =>
+        {
+            if (_tray != null)
+            {
+                _tray.Visible = false;
+                _tray.Dispose();
+            }
+        });
+
+        RunGuarded("Shutdown.Power", UnsubscribePowerAndSessionChanges);
+        RunGuarded("Shutdown.Theme", UnsubscribeThemeChanges);
+        RunGuarded("Shutdown.Displays", UnsubscribeDisplayChanges);
+        RunGuarded("Shutdown.Icon", () => _iconRef?.Dispose());
+        RunGuarded("Shutdown.Dispatcher", () => _uiInvoker?.Dispose());
+    }
+
+    private void RestoreSystemCursorAtShutdown()
+    {
+        // The recovery timer has stopped; give transient native failures a
+        // bounded retry before this process can no longer restore the cursor.
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            if (RestoreSystemCursorScheme(reapplyCursorEnhancement: false)) return;
+            if (attempt < 2) Thread.Sleep(25 << attempt);
+        }
     }
 
     private sealed class ShellMessageWindow : NativeWindow, IDisposable
@@ -458,7 +517,7 @@ internal sealed partial class TrayContext : ApplicationContext
     {
         try
         {
-            if (_uiInvoker.IsDisposed)
+            if (_runtimeStopped || _uiInvoker.IsDisposed)
             {
                 return;
             }
@@ -467,7 +526,7 @@ internal sealed partial class TrayContext : ApplicationContext
             {
                 try
                 {
-                    action();
+                    if (!_runtimeStopped) action();
                 }
                 catch (Exception ex)
                 {
@@ -504,14 +563,14 @@ internal sealed partial class TrayContext : ApplicationContext
     {
         try
         {
-            if (_uiInvoker.IsDisposed)
+            if (_runtimeStopped || _uiInvoker.IsDisposed)
             {
                 return;
             }
 
             void RunSafely()
             {
-                RunGuarded(source, action);
+                if (!_runtimeStopped) RunGuarded(source, action);
             }
 
             if (_uiInvoker.InvokeRequired)

@@ -5,6 +5,14 @@ namespace QuickZoom;
 
 internal readonly struct ThemePalette
 {
+    public Color WarningText => AccessibilityPreferences.HighContrast ? SystemColors.WindowText :
+        MenuBackground.GetBrightness() < 0.5f ? Color.FromArgb(245, 158, 11) : Color.FromArgb(133, 77, 14);
+    public Color SuccessText => AccessibilityPreferences.HighContrast ? SystemColors.WindowText :
+        MenuBackground.GetBrightness() < 0.5f ? Accent : Color.FromArgb(22, 101, 52);
+    public Color ErrorText => AccessibilityPreferences.HighContrast ? SystemColors.WindowText :
+        MenuBackground.GetBrightness() < 0.5f ? Color.FromArgb(248, 113, 113) : Color.FromArgb(185, 28, 28);
+    public Color InformationText => AccessibilityPreferences.HighContrast ? SystemColors.WindowText :
+        MenuBackground.GetBrightness() < 0.5f ? Color.FromArgb(96, 165, 250) : Color.FromArgb(29, 78, 216);
     public required Color MenuBackground { get; init; }
     public required Color HoverBackground { get; init; }
     public required Color Text { get; init; }

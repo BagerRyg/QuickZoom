@@ -11,7 +11,8 @@ namespace QuickZoom;
 
 internal static class ControlDrawing
 {
-    private static readonly float WindowsTextScale = AccessibilityPreferences.WindowsTextScale;
+    private static float WindowsTextScale = AccessibilityPreferences.WindowsTextScale;
+    internal static void RefreshWindowsTextScale() => WindowsTextScale = AccessibilityPreferences.WindowsTextScale;
     private static float _userUiFontScale = 1f;
 
     internal static GraphicsPath RoundedRect(Rectangle bounds, int radius)
@@ -308,7 +309,7 @@ internal static class ControlContrast
         ? SystemColors.WindowText
         : palette.MenuBackground.GetBrightness() < 0.5f
         ? Color.FromArgb(82, 94, 112)
-        : Color.FromArgb(142, 156, 174);
+        : Color.FromArgb(106, 122, 142);
 
     internal static Color SubtleTrack(ThemePalette palette) => AccessibilityPreferences.HighContrast
         ? SystemColors.ControlDark
@@ -1706,7 +1707,7 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
 
         int fontScaleAwareLogicalHeight()
         {
-            return 44 + (int)Math.Round((ControlDrawing.UiFontScale - 1f) * 18f);
+            return 36 + (int)Math.Round((ControlDrawing.UiFontScale - 1f) * 24f);
         }
     }
 
@@ -2519,6 +2520,7 @@ internal sealed class ModernButton : Control, IButtonControl
         TabStop = true;
         Cursor = Cursors.Hand;
         AccessibleRole = AccessibleRole.PushButton;
+        Font = ControlDrawing.UiFont("Segoe UI", 9f, FontStyle.Regular);
         Resize += (_, _) => Invalidate();
     }
 
@@ -3413,7 +3415,7 @@ internal sealed class ModernTabBar : Panel
 
 internal sealed class ModernDropdown : Control, ISurfaceBackgroundProvider
 {
-    private const int LogicalFieldHeight = 32;
+    private const int LogicalFieldHeight = 38;
     private const int LogicalItemHeight = 26;
     private const int LogicalItemVerticalPadding = 6;
     private const int LogicalMenuBorderHeight = 2;
@@ -3539,7 +3541,8 @@ internal sealed class ModernDropdown : Control, ISurfaceBackgroundProvider
         int horizontalChrome = ControlDrawing.ScaleLogical(this, 52);
         int minimumWidth = ControlDrawing.ScaleLogical(this, 160);
         int preferredWidth = Math.Max(minimumWidth, widestText + horizontalChrome);
-        int preferredHeight = Math.Max(Height, ControlDrawing.ScaleLogical(this, LogicalFieldHeight));
+        int preferredHeight = Math.Max(ControlDrawing.ScaleLogical(this, LogicalFieldHeight),
+            Font.Height + ControlDrawing.ScaleLogical(this, 12));
         return new Size(preferredWidth, preferredHeight);
     }
 
@@ -3754,44 +3757,57 @@ internal sealed class ModernDropdown : Control, ISurfaceBackgroundProvider
         MenuLayout layout = CalculateMenuLayout();
         ContextMenuStrip menu = CreateMenu(layout);
         _activeMenu = menu;
-        menu.Closed += (_, _) =>
-        {
-            if (_activeMenu != menu)
-            {
-                return;
-            }
+        menu.Closed += (_, _) => ScheduleMenuDisposal(menu);
+        menu.Show(layout.AnchorPoint, layout.Direction);
+    }
 
-            _activeMenu = null;
-            if (IsHandleCreated && !IsDisposed)
+    private void ScheduleMenuDisposal(ContextMenuStrip menu)
+    {
+        if (_activeMenu != menu)
+        {
+            return;
+        }
+
+        // Retain ownership until disposal completes: a queued callback is lost
+        // when rebuilding the settings window destroys this control's handle.
+        if (IsHandleCreated && !IsDisposed)
+        {
+            try
             {
-                try
+                BeginInvoke((MethodInvoker)(() =>
                 {
-                    BeginInvoke((MethodInvoker)(() =>
+                    try
                     {
-                        try
+                        if (!menu.IsDisposed)
                         {
-                            if (!menu.IsDisposed)
-                            {
-                                menu.Dispose();
-                            }
+                            menu.Dispose();
                         }
-                        catch (Exception ex)
+
+                        if (_activeMenu == menu)
                         {
-                            ErrorLog.WriteThrottled("ModernDropdown.DisposeMenu", ex);
+                            _activeMenu = null;
                         }
-                    }));
-                }
-                catch (Exception ex)
-                {
-                    ErrorLog.WriteThrottled("ModernDropdown.BeginDisposeMenu", ex);
-                }
+                    }
+                    catch (Exception ex)
+                    {
+                        ErrorLog.WriteThrottled("ModernDropdown.DisposeMenu", ex);
+                    }
+                }));
             }
-            else if (!menu.IsDisposed)
+            catch (Exception ex)
+            {
+                ErrorLog.WriteThrottled("ModernDropdown.BeginDisposeMenu", ex);
+            }
+        }
+        else
+        {
+            if (!menu.IsDisposed)
             {
                 menu.Dispose();
             }
-        };
-        menu.Show(layout.AnchorPoint, layout.Direction);
+
+            _activeMenu = null;
+        }
     }
 
     private MenuLayout CalculateMenuLayout(Rectangle? anchorBoundsOverride = null, Rectangle? workingAreaOverride = null)
@@ -4303,8 +4319,7 @@ internal sealed class ModernSlider : Control
         e.Graphics.FillPath(fillBrush, fillPath);
 
         int knobSize = Math.Min(ControlDrawing.ScaleLogical(this, 24), Math.Max(18, Height - 8));
-        int knobX = Math.Clamp(trackRect.X + (int)Math.Round((trackRect.Width - knobSize) * ratio), trackRect.X, trackRect.Right - knobSize);
-        Rectangle knobRect = new(knobX, (Height - knobSize) / 2, knobSize, knobSize);
+        Rectangle knobRect = CalculateKnobBounds(trackRect, knobSize, Height, ratio);
         using SolidBrush knobBrush = new(Color.FromArgb(244, 246, 249));
         using Pen knobBorder = new(Color.FromArgb(56, 60, 66));
         e.Graphics.FillEllipse(knobBrush, knobRect);
@@ -4338,6 +4353,13 @@ internal sealed class ModernSlider : Control
             : ControlDrawing.EffectiveBackColor(this);
         using SolidBrush brush = new(backColor);
         pevent.Graphics.FillRectangle(brush, ClientRectangle);
+    }
+
+    internal static Rectangle CalculateKnobBounds(Rectangle trackRect, int preferredSize, int controlHeight, float ratio)
+    {
+        int knobSize = Math.Max(1, Math.Min(preferredSize, trackRect.Width));
+        int knobX = trackRect.X + (int)Math.Round(Math.Max(0, trackRect.Width - knobSize) * Math.Clamp(ratio, 0f, 1f));
+        return new Rectangle(knobX, (controlHeight - knobSize) / 2, knobSize, knobSize);
     }
 
     private void UpdateValueFromX(int x)
@@ -4527,7 +4549,7 @@ internal sealed class SettingsRow : ModernSurfacePanel
         _right.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         _right.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         control.Margin = new Padding(10, 0, 0, 0);
-        control.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        control.Anchor = AnchorStyles.Right;
         _right.Controls.Add(control, 0, 0);
 
         _left.Controls.Add(_titleLabel, 0, 0);
@@ -4704,7 +4726,7 @@ internal sealed class SettingsRow : ModernSurfacePanel
                 _left.Padding = new Padding(0, 2, 12, 2);
                 _right.Padding = new Padding(0, 2, 0, 0);
                 _accessoryControl.Margin = new Padding(10, 0, 0, 0);
-                _accessoryControl.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+                _accessoryControl.Anchor = AnchorStyles.Right;
             }
 
             _grid.ResumeLayout(performLayout: true);
@@ -4921,7 +4943,9 @@ internal sealed class SettingsSection : Panel
             return;
         }
 
-        int targetWidth = Math.Max(360, ClientSize.Width);
+        int targetWidth = Math.Max(1, ClientSize.Width);
+        _titleLabel.MaximumSize = new Size(targetWidth, 0);
+        _descriptionLabel.MaximumSize = new Size(targetWidth, 0);
         foreach (Control row in _rows.Controls)
         {
             if (row.Width != targetWidth)
@@ -5031,7 +5055,9 @@ internal class SettingsPageView : UserControl
             return;
         }
 
-        int targetWidth = Math.Max(400, ClientSize.Width);
+        int targetWidth = Math.Max(1, ClientSize.Width);
+        _titleLabel.MaximumSize = new Size(targetWidth, 0);
+        _descriptionLabel.MaximumSize = new Size(targetWidth, 0);
         Size maximumSize = new(targetWidth, int.MaxValue);
         if (_layout.MaximumSize != maximumSize)
         {
@@ -5342,13 +5368,13 @@ internal sealed class SettingsContentHost : Panel
         SuspendLayout();
         try
         {
-            int pageWidth = Math.Max(400, ClientSize.Width);
+            int pageWidth = Math.Max(1, Math.Min(ClientSize.Width, ControlDrawing.ScaleLogical(this, 960)));
             int pageHeight = LayoutPage(pageWidth);
             int overflowTolerance = ControlDrawing.ScaleLogical(this, 2);
             bool needsScrollBar = pageHeight > ClientSize.Height + overflowTolerance;
             if (needsScrollBar)
             {
-                pageWidth = Math.Max(400, ClientSize.Width - _verticalScrollBar.Width - GetScrollBarGap());
+                pageWidth = Math.Max(1, Math.Min(ClientSize.Width - _verticalScrollBar.Width - GetScrollBarGap(), ControlDrawing.ScaleLogical(this, 960)));
                 pageHeight = LayoutPage(pageWidth);
             }
 
@@ -5428,7 +5454,8 @@ internal sealed class SettingsContentHost : Panel
             return;
         }
 
-        Point nextLocation = new(0, -ScrollY);
+        int viewportWidth = ClientSize.Width - (_verticalScrollBar.Visible ? _verticalScrollBar.Width + GetScrollBarGap() : 0);
+        Point nextLocation = new(Math.Max(0, (viewportWidth - _activePage.Width) / 2), -ScrollY);
         if (_activePage.Location != nextLocation)
         {
             _activePage.Location = nextLocation;
@@ -5509,7 +5536,8 @@ internal sealed class SettingsForm : Form
         IReadOnlyList<SettingsSearchEntry> searchEntries,
         string searchPlaceholder,
         string searchNoResults,
-        string searchAccessibleDescription)
+        string searchAccessibleDescription,
+        string navigationLabel)
     {
         _palette = palette;
         _searchHighlightTimer.Tick += (_, _) => ClearSearchTargetHighlight();
@@ -5572,7 +5600,7 @@ internal sealed class SettingsForm : Form
         var sidebarHeader = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
-            ColumnCount = 1,
+            ColumnCount = 2,
             RowCount = 1,
             Margin = new Padding(0, 0, 0, 6),
             Padding = new Padding(0),
@@ -5581,6 +5609,8 @@ internal sealed class SettingsForm : Form
             BackColor = Color.Transparent
         };
         sidebarHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        sidebarHeader.BackColor = sidebarSurface.BackColor;
+        sidebarHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 0));
         var appNameLabel = new Label
         {
             Text = appName,
@@ -5591,6 +5621,21 @@ internal sealed class SettingsForm : Form
             BackColor = Color.Transparent
         };
         sidebarHeader.Controls.Add(appNameLabel, 0, 0);
+        bool expandedCompactNavigation = false;
+        var navigationButton = new ModernButton
+        {
+            Text = "☰",
+            AccessibleName = navigationLabel,
+            AccessibleDescription = navigationLabel,
+            Dock = DockStyle.Fill,
+            AutoSize = false,
+            Size = new Size(ControlDrawing.ScaleLogical(this, 40), ControlDrawing.ScaleLogical(this, 40)),
+            MinimumSize = Size.Empty,
+            Margin = Padding.Empty,
+            Visible = false
+        };
+        navigationButton.ApplyTheme(palette);
+        sidebarHeader.Controls.Add(navigationButton, 1, 0);
 
         var navHost = new FlowLayoutPanel
         {
@@ -5686,6 +5731,7 @@ internal sealed class SettingsForm : Form
             TabIndex = 0
         };
         _searchControl.ResultActivated += (_, entry) => NavigateToSearchResult(entry);
+        _searchControl.ResultsVisibilityChanged += (_, _) => _contentHost.Visible = !_searchControl.ShowingResults;
 
         var footer = new FlowLayoutPanel
         {
@@ -5707,7 +5753,8 @@ internal sealed class SettingsForm : Form
         };
         resetButton.AutoSize = false;
         resetButton.MinimumSize = Size.Empty;
-        closeButton.ApplySuccessOutlineTheme(palette);
+        closeButton.ApplyTheme(palette, emphasis: true);
+        resetButton.ApplyTheme(palette);
         closeButton.Click += (_, _) => Close();
         footer.Controls.Add(closeButton);
         footer.Controls.Add(resetButton);
@@ -5732,23 +5779,11 @@ internal sealed class SettingsForm : Form
                 resetButton.Font,
                 Size.Empty,
                 TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
-            int buttonWidth = Math.Max(
-                minimumWidth,
-                Math.Max(doneTextSize.Width, resetTextSize.Width) + horizontalPadding);
             int buttonHeight = Math.Max(
                 minimumHeight,
                 Math.Max(doneTextSize.Height, resetTextSize.Height) + ControlDrawing.ScaleLogical(this, 18));
-            Size buttonSize = new(buttonWidth, buttonHeight);
-
-            if (closeButton.Size != buttonSize)
-            {
-                closeButton.Size = buttonSize;
-            }
-
-            if (resetButton.Size != buttonSize)
-            {
-                resetButton.Size = buttonSize;
-            }
+            closeButton.Size = new Size(Math.Max(minimumWidth, doneTextSize.Width + horizontalPadding), buttonHeight);
+            resetButton.Size = new Size(Math.Max(minimumWidth, resetTextSize.Width + horizontalPadding), buttonHeight);
         }
 
         resetButton.TextChanged += (_, _) => UpdateFooterButtonMetrics();
@@ -5770,6 +5805,13 @@ internal sealed class SettingsForm : Form
         rightLayout.Controls.Add(_searchControl, 0, 0);
         rightLayout.Controls.Add(_contentHost, 0, 1);
         rightLayout.Controls.Add(footer, 0, 2);
+        void UpdateSearchViewport()
+        {
+            _searchControl.ExpandedViewportHeight = Math.Max(1,
+                rightLayout.ClientSize.Height - footer.Height - footer.Margin.Vertical);
+        }
+        rightLayout.SizeChanged += (_, _) => UpdateSearchViewport();
+        footer.SizeChanged += (_, _) => UpdateSearchViewport();
 
         root.Controls.Add(sidebarSurface, 0, 0);
         root.Controls.Add(rightLayout, 1, 0);
@@ -5786,7 +5828,9 @@ internal sealed class SettingsForm : Form
             updatingSidebarMetrics = true;
             try
             {
-                bool nextCompactLayout = ClientSize.Width < ControlDrawing.ScaleLogical(this, 700);
+                bool narrow = ClientSize.Width < ControlDrawing.ScaleLogical(this, 700);
+                navigationButton.Visible = narrow;
+                bool nextCompactLayout = narrow && !expandedCompactNavigation;
                 if (compactLayout != nextCompactLayout)
                 {
                     compactLayout = nextCompactLayout;
@@ -5801,7 +5845,7 @@ internal sealed class SettingsForm : Form
                         ControlDrawing.ScaleLogical(this, compactLayout ? 4 : 6),
                         ControlDrawing.ScaleLogical(this, compactLayout ? 2 : 5),
                         ControlDrawing.ScaleLogical(this, compactLayout ? 4 : 6));
-                    sidebarHeader.Visible = !compactLayout;
+                    appNameLabel.Visible = !compactLayout;
                     foreach (SettingsSidebarItem item in _navItems.Values)
                     {
                         item.Compact = compactLayout;
@@ -5813,10 +5857,21 @@ internal sealed class SettingsForm : Form
 
                 int sidebarWidth = compactLayout
                     ? ControlDrawing.ScaleLogical(this, 64)
-                    : Math.Clamp(
+                    : Math.Max(TextRenderer.MeasureText(appNameLabel.Text, appNameLabel.Font).Width +
+                        ControlDrawing.ScaleLogical(this, 24), Math.Clamp(
                         (int)Math.Round(ClientSize.Width * 0.24),
                         ControlDrawing.ScaleLogical(this, 190),
-                        ControlDrawing.ScaleLogical(this, 230));
+                        ControlDrawing.ScaleLogical(this, 230)));
+                sidebarWidth = Math.Min(sidebarWidth, ClientSize.Width * 45 / 100);
+                appNameLabel.Visible = !compactLayout &&
+                    TextRenderer.MeasureText(appNameLabel.Text, appNameLabel.Font).Width +
+                    ControlDrawing.ScaleLogical(this, 16) <= sidebarWidth;
+                int headerWidth = Math.Max(1, sidebarWidth - sidebarSurface.Margin.Horizontal - sidebarSurface.Padding.Horizontal);
+                sidebarHeader.MaximumSize = new Size(headerWidth, 0);
+                sidebarHeader.ColumnStyles[0].SizeType = appNameLabel.Visible ? SizeType.Percent : SizeType.Absolute;
+                sidebarHeader.ColumnStyles[0].Width = appNameLabel.Visible ? 100 : 0;
+                sidebarHeader.ColumnStyles[1].Width = navigationButton.Visible
+                    ? Math.Min(headerWidth, ControlDrawing.ScaleLogical(this, 40)) : 0;
                 if ((int)Math.Round(root.ColumnStyles[0].Width) != sidebarWidth)
                 {
                     root.ColumnStyles[0].Width = sidebarWidth;
@@ -5830,6 +5885,11 @@ internal sealed class SettingsForm : Form
             }
         }
 
+        navigationButton.Click += (_, _) =>
+        {
+            expandedCompactNavigation = !expandedCompactNavigation;
+            ApplySidebarMetrics();
+        };
         ResizeBegin += (_, _) =>
         {
             _contentHost.BeginInteractiveResize();
@@ -6001,7 +6061,9 @@ internal sealed class SettingsForm : Form
                 input.AcceptsValueText((input.MinimumValue - 1).ToString(CultureInfo.CurrentCulture)) ||
                 input.AcceptsValueText((input.MaximumValue + 1).ToString(CultureInfo.CurrentCulture)) ||
                 input.Parent == null ||
-                input.Parent.Width > 92 ||
+                input.Height < input.Font.Height ||
+                input.Width < TextRenderer.MeasureText(input.Text, input.Font, Size.Empty,
+                    TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width ||
                 Math.Abs(topInset - bottomInset) > 1)
             {
                 throw new InvalidOperationException(
@@ -7307,9 +7369,16 @@ internal sealed class TrayPopupWindow : Form
     internal void LayoutForCapture(Point anchor)
     {
         _ = Handle;
-        LayoutAnchored(anchor);
+        LayoutAnchored(anchor, positionWindow: false);
         ContentHost.PerformLayout();
         PerformLayout();
+    }
+
+    internal bool ScrollForCapture(bool toBottom)
+    {
+        if (!_scrollHost.VerticalScroll.Visible) return false;
+        _scrollHost.AutoScrollPosition = new Point(0, toBottom ? ContentHost.Height : 0);
+        return true;
     }
 
     internal void ShowForCapture()
@@ -7329,7 +7398,7 @@ internal sealed class TrayPopupWindow : Form
         LayoutAnchored(anchor);
     }
 
-    private void LayoutAnchored(Point anchor)
+    private void LayoutAnchored(Point anchor, bool positionWindow = true)
     {
         Rectangle area = Screen.FromPoint(anchor).WorkingArea;
         int maxClientHeight = Math.Max(ControlDrawing.ScaleLogical(this, 220), area.Height - ControlDrawing.ScaleLogical(this, 24));
@@ -7398,7 +7467,7 @@ internal sealed class TrayPopupWindow : Form
             y = area.Bottom - Height;
         }
 
-        Location = new Point(x, y);
+        if (positionWindow) Location = new Point(x, y);
     }
 
     private int GetRequestedContentWidth()

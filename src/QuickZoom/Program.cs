@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Security.Principal;
@@ -20,9 +19,11 @@ internal static class Program
 {
     private const string SingleInstanceMutexName = @"Local\QuickZoom2.SingleInstance";
     private static Mutex? _singleInstanceMutex;
+    private static IDisposable? _startupYieldingMarker;
     // Per-monitor v2 gives physical pixel coordinates across mixed-DPI setups.
     private static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new(-4);
-    private const string StartupTaskInstallFlag = "--install-startup-task";
+    // Keep older shortcuts compatible, but always open the current wizard.
+    private const string StartupSetupFlag = "--install-startup-task";
     internal const string SetupStartupTaskInstallFlag = "--setup-install-startup-task";
     private const string StartupReadyEventFlag = "--startup-ready-event";
     private const string StartupTaskUserFlag = "--startup-task-user";
@@ -74,7 +75,6 @@ internal static class Program
         }
     }
 
-    private const int ERROR_CANCELLED = 1223;
     private const string ElevatedFlag = "--quickzoom-elevated";
 
     private static UiLanguage StartupLanguage => UiText.GetStartupLanguage();
@@ -97,18 +97,18 @@ internal static class Program
         }
         string? exePath = GetExecutablePath();
         bool isElevatedLaunch = HasArg(args, ElevatedFlag);
-        bool shouldInstallStartupTask = HasArg(args, StartupTaskInstallFlag);
+        bool shouldRunStartupSetup = HasArg(args, StartupSetupFlag);
         bool shouldInstallSetupStartupTask = HasArg(args, SetupStartupTaskInstallFlag);
         string? startupReadyEventName = GetArgValue(args, StartupReadyEventFlag);
         string? startupTaskUser = GetArgValue(args, StartupTaskUserFlag);
         bool shouldCaptureUiScreenshots = HasArg(args, CaptureUiScreenshotsFlag);
         bool shouldCaptureSettingsSmoke = HasArg(args, CaptureSettingsSmokeFlag);
         bool shouldCaptureSetupSmoke = HasArg(args, CaptureSetupSmokeFlag);
+        AccessibilityPreferences.CaptureHighContrast = HasArg(args, "--capture-high-contrast") &&
+            (shouldCaptureSetupSmoke || shouldCaptureUiScreenshots || shouldCaptureSettingsSmoke);
         bool shouldRunSetup = HasArg(args, SetupFlag) || HasArg(args, LongSetupFlag);
-        bool acquiredMutex = false;
         bool setupFlowWasShown = false;
 
-        ConfigureErrorLoggingFromSettings();
         EnablePerMonitorDpiAwareness();
         try { Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); } catch { }
         Application.EnableVisualStyles();
@@ -119,7 +119,7 @@ internal static class Program
         bool internalStartupMode = shouldCaptureUiScreenshots ||
             shouldCaptureSettingsSmoke ||
             shouldCaptureSetupSmoke ||
-            shouldInstallStartupTask ||
+            shouldRunStartupSetup ||
             shouldInstallSetupStartupTask ||
             startupReadyEventName != null;
         if (shouldRunSetup || (!internalStartupMode && FirstRunSetup.ShouldRunAutomatically()))
@@ -133,7 +133,6 @@ internal static class Program
         if (!shouldCaptureUiScreenshots &&
             !shouldCaptureSettingsSmoke &&
             !shouldCaptureSetupSmoke &&
-            !shouldInstallStartupTask &&
             !shouldInstallSetupStartupTask &&
             startupReadyEventName == null)
         {
@@ -147,8 +146,6 @@ internal static class Program
                 ShowLatestAlreadyRunningDialog();
                 return;
             }
-
-            acquiredMutex = true;
         }
 
         ErrorLog.WriteAlways("Startup", $"Launching {AppInfo.DisplayVersion} from {AppContext.BaseDirectory}");
@@ -156,23 +153,22 @@ internal static class Program
         if (shouldCaptureUiScreenshots)
         {
             string workingDirectory = Directory.GetCurrentDirectory();
-            string screenshotsRoot = Path.Combine(
-                workingDirectory,
-                "test-validation",
-                "Auto-screenshot",
-                "UI Screenshots");
-            TrayContext.CaptureUiScreenshots(Path.Combine(screenshotsRoot, $"Build {AppInfo.BuildNumber}"));
+            string screenshotsRoot = GetArgValue(args, "--capture-output") ?? Path.Combine(
+                workingDirectory, "test-validation", $"Build {AppInfo.BuildNumber}", "Interface");
+            try { TrayContext.CaptureUiScreenshots(screenshotsRoot, GetArgValue(args, "--capture-language"), GetArgValue(args, "--capture-font")); }
+            catch (Exception ex) { Console.Error.WriteLine(ex); Environment.ExitCode = 1; }
             return;
         }
 
         if (shouldCaptureSettingsSmoke)
         {
             string workingDirectory = Directory.GetCurrentDirectory();
-            TrayContext.CaptureSettingsSmoke(Path.Combine(
-                workingDirectory,
-                "test-validation",
-                "Auto-screenshot",
-                "Settings Smoke Test"));
+            try
+            {
+                TrayContext.CaptureSettingsSmoke(GetArgValue(args, "--capture-output") ?? Path.Combine(
+                    workingDirectory, "test-validation", $"Build {AppInfo.BuildNumber}", "Settings"));
+            }
+            catch (Exception ex) { Console.Error.WriteLine(ex); Environment.ExitCode = 1; }
             return;
         }
 
@@ -181,19 +177,14 @@ internal static class Program
             try
             {
                 string workingDirectory = Directory.GetCurrentDirectory();
-                FirstRunSetup.CaptureSmoke(Path.Combine(
-                    workingDirectory,
-                    "test-validation",
-                    "Auto-screenshot",
-                    "First Run Setup"));
-                StartupDialogs.CaptureAlreadyRunningSmoke(Path.Combine(
-                    workingDirectory,
-                    "test-validation",
-                    "Auto-screenshot",
-                    "Already Running"));
+                string captureRoot = GetArgValue(args, "--capture-output") ?? Path.Combine(
+                    workingDirectory, "test-validation", $"Build {AppInfo.BuildNumber}", "Setup");
+                FirstRunSetup.CaptureSmoke(captureRoot, GetArgValue(args, "--capture-language"));
+                StartupDialogs.CaptureSmoke(Path.Combine(captureRoot, "startup-messages"), GetArgValue(args, "--capture-language"));
             }
             catch (Exception ex)
             {
+                Console.Error.WriteLine(ex);
                 ErrorLog.WriteAlways("Program.CaptureSetupSmoke", ex.ToString());
                 Environment.ExitCode = 1;
             }
@@ -210,116 +201,17 @@ internal static class Program
             return;
         }
 
-        if (!shouldInstallStartupTask)
+        _ = Task.Run(() =>
         {
-            _ = Task.Run(() =>
+            if (!StartupTaskService.IsReadyForCurrentBuild(out _)) return;
+            TryCleanupLegacyUserStartupEntries(exePath);
+            if (isAdmin)
             {
-                TryCleanupLegacyUserStartupEntries(exePath);
-                if (isAdmin)
-                {
-                    TryCleanupLegacyScheduledTasks(exePath);
-                }
-            });
-        }
-
-        if (shouldInstallStartupTask)
-        {
-            if (!isAdmin)
-            {
-                StartupDialogs.ShowInfo(
-                    T("Common.AppName"),
-                    T("Startup.AdminRequiredHeading"),
-                    T("Startup.AdminRequiredBody"));
-                return;
+                TryCleanupLegacyScheduledTasks(exePath);
             }
+        });
 
-            string setupTargetUser = !string.IsNullOrWhiteSpace(startupTaskUser)
-                ? startupTaskUser
-                : GetCurrentWindowsUserName();
-            var setupStopwatch = Stopwatch.StartNew();
-            (bool installed, string installedExePath, string? installError, bool taskReady, bool launchedInstalledCopy) = StartupDialogs.ShowProgress(
-                T("Common.AppName"),
-                T("Startup.SetupProgressHeading"),
-                T("Startup.SetupProgressBody"),
-                () =>
-                {
-                    TryCleanupLegacyUserStartupEntries(exePath);
-                    TryCleanupLegacyScheduledTasks(exePath);
-
-                    if (!TryPrepareInstalledQuickZoom(out string progressInstalledExePath, out string? progressInstallError))
-                    {
-                        return (false, progressInstalledExePath, progressInstallError, false, false);
-                    }
-
-                    if (!TryRegisterElevatedStartupTask(progressInstalledExePath, setupTargetUser, out progressInstallError))
-                    {
-                        return (false, progressInstalledExePath, progressInstallError, false, false);
-                    }
-
-                    bool progressTaskReady = StartupTaskService.WaitUntilReady(progressInstalledExePath, setupTargetUser);
-                    bool progressLaunchedInstalledCopy = !PathsEqual(exePath, progressInstalledExePath) &&
-                        TryLaunchInstalledCopyAndWaitUntilReady(progressInstalledExePath, timeoutMs: 8000, ElevatedFlag);
-                    return (true, progressInstalledExePath, progressInstallError, progressTaskReady, progressLaunchedInstalledCopy);
-                });
-            ErrorLog.Write("StartupTaskInstall", $"Startup-service setup flow finished in {ErrorLog.FormatElapsed(setupStopwatch.Elapsed)}. Installed={installed}; TaskReady={taskReady}; LaunchedInstalledCopy={launchedInstalledCopy}.");
-
-            if (!installed)
-            {
-                StartupDialogs.ShowWarning(
-                    T("Common.AppName"),
-                    T("Startup.SetupIncompleteHeading"),
-                    string.IsNullOrWhiteSpace(installError)
-                        ? T("Startup.SetupCopyFailedBody")
-                        : installError);
-            }
-            else
-            {
-                if (!taskReady)
-                {
-                    StartupDialogs.ShowWarning(
-                        T("Common.AppName"),
-                        T("Startup.SetupIncompleteHeading"),
-                        T("Startup.SetupTaskNotReadyBody", installedExePath));
-                }
-                else
-                {
-                    if (!launchedInstalledCopy)
-                    {
-                        StartupDialogs.ShowTimedSuccess(
-                            T("Common.AppName"),
-                            T("Startup.SetupSuccessHeading"),
-                            T("Startup.SetupSuccessBody"),
-                            8);
-                    }
-                }
-            }
-
-            shouldInstallStartupTask = false;
-            isElevatedLaunch = true;
-
-            if (launchedInstalledCopy)
-            {
-                return;
-            }
-
-            if (!PathsEqual(exePath, installedExePath) && TryLaunchInstalledCopyAndWaitUntilReady(installedExePath, timeoutMs: 8000, ElevatedFlag))
-            {
-                return;
-            }
-
-            if (!acquiredMutex)
-            {
-                if (!TryAcquireSingleInstanceMutex(clearExistingProcesses: true, currentExePath: exePath))
-                {
-                    ErrorLog.Write("Startup", "The elevated startup-service helper finished setup, but another QuickZoom instance was already active. Exiting helper process.");
-                    return;
-                }
-
-                acquiredMutex = true;
-            }
-        }
-
-        if (isAdmin && isManagedInstall && needsSecureInstallMigration && !shouldInstallStartupTask)
+        if (isAdmin && isManagedInstall && needsSecureInstallMigration)
         {
             if (TryInstallElevatedScheduledTask(out string migratedExePath, out string? migrationError))
             {
@@ -343,49 +235,33 @@ internal static class Program
             !isElevatedLaunch &&
             setupFlowWasShown &&
             StartupTaskService.GetStatus() == StartupTaskStatus.Ready &&
-            TryStartElevatedScheduledTaskAndVerify(exePath))
+            StartElevatedScheduledTaskAndVerify() != StartupTaskLaunchResult.Failed)
         {
             return;
         }
 
-        bool suppressLegacyStartupSetup =
+        bool suppressStartupSetup =
             FirstRunSetup.StartupServiceWasSkipped() ||
             setupFlowWasShown;
-        if (!isAdmin && !isElevatedLaunch && !suppressLegacyStartupSetup)
+        if ((shouldRunStartupSetup && !setupFlowWasShown) ||
+            (!isAdmin && !isElevatedLaunch && !suppressStartupSetup))
         {
-            if (shouldOfferInstallOrUpdate)
+            if (!shouldRunStartupSetup &&
+                !shouldOfferInstallOrUpdate &&
+                StartupTaskService.GetStatus() == StartupTaskStatus.Ready &&
+                StartElevatedScheduledTaskAndVerify() != StartupTaskLaunchResult.Failed)
             {
-                bool wantsManagedInstall = PromptToInstallPermanentStartupCopy(StartupTaskService.GetStatus() == StartupTaskStatus.Ready);
-                if (wantsManagedInstall && TryRelaunchAsAdministrator(args, StartupTaskInstallFlag))
-                {
-                    return;
-                }
-
-                StartupDialogs.ShowWarning(
-                    T("Common.AppName"),
-                    T("Startup.TempLocationHeading"),
-                    T("Startup.TempLocationBody"));
+                return;
             }
-            else
+
+            // A setup offered at launch always starts at the language screen.
+            // Only the explicit autostart action in Settings uses the short flow.
+            FirstRunSetup.Show(allowLivePractice: !HasOtherQuickZoomInstance(expectedExePath: null));
+            if (!isAdmin &&
+                StartupTaskService.IsReadyForCurrentBuild(out _) &&
+                StartElevatedScheduledTaskAndVerify() != StartupTaskLaunchResult.Failed)
             {
-                StartupTaskStatus startupTaskStatus = StartupTaskService.GetStatus();
-                if (startupTaskStatus == StartupTaskStatus.Ready && TryStartElevatedScheduledTaskAndVerify(exePath))
-                {
-                    return;
-                }
-
-                bool wantsStartupTaskSetup = PromptToInstallPermanentStartupCopy(startupTaskStatus is StartupTaskStatus.Ready or StartupTaskStatus.Broken);
-                if (wantsStartupTaskSetup && TryRelaunchAsAdministrator(args, StartupTaskInstallFlag))
-                {
-                    return;
-                }
-
-                StartupDialogs.ShowWarning(
-                    T("Common.AppName"),
-                    T("Startup.NotElevatedHeading"),
-                    wantsStartupTaskSetup
-                        ? T("Startup.NotElevatedAfterFailedSetupBody")
-                        : T("Startup.NotElevatedBody"));
+                return;
             }
         }
 
@@ -397,11 +273,14 @@ internal static class Program
 
         try
         {
-            Application.Run(new TrayContext(startupReadyEventName));
+            using var context = new TrayContext(startupReadyEventName);
+            Application.Run(context);
         }
         catch (Exception ex)
         {
             ErrorLog.WriteCrash("ApplicationRun", ex);
+            Environment.ExitCode = 1;
+            MessageBox.Show(T("Error.MagnifierInit"), T("Common.AppName"), MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
@@ -410,7 +289,7 @@ internal static class Program
         }
     }
 
-    private static bool TryAcquireSingleInstanceMutex(bool clearExistingProcesses = false, string? currentExePath = null)
+    private static bool TryAcquireSingleInstanceMutex()
     {
         try
         {
@@ -421,13 +300,6 @@ internal static class Program
             {
                 mutex.Dispose();
                 _singleInstanceMutex = null;
-                if (clearExistingProcesses)
-                {
-                    TryTerminateOtherQuickZoomProcesses("StartupMutex", currentExePath);
-                    Thread.Sleep(250);
-                    return TryAcquireSingleInstanceMutex(clearExistingProcesses: false, currentExePath);
-                }
-
                 return false;
             }
 
@@ -435,9 +307,8 @@ internal static class Program
         }
         catch
         {
-            // If mutex creation fails, do not block startup.
-            ErrorLog.Write("Startup", "Could not create the single-instance mutex. Continuing without duplicate-instance protection.");
-            return true;
+            ErrorLog.Write("Startup", "Could not acquire the single-instance mutex. Startup was stopped to avoid duplicate runtimes.");
+            return false;
         }
     }
 
@@ -463,7 +334,7 @@ internal static class Program
     {
         for (int attempt = 0; attempt < 12; attempt++)
         {
-            if (TryAcquireSingleInstanceMutex(clearExistingProcesses: false, currentExePath))
+            if (TryAcquireSingleInstanceMutex())
             {
                 return true;
             }
@@ -522,6 +393,8 @@ internal static class Program
                     continue;
                 }
 
+                if (StartupHandoff.IsYielding(otherProcess)) continue;
+
                 bool otherIsInstalledPreferred = InstalledAppService.IsCurrentInstalledExecutablePath(otherExePath);
                 InstancePreference preference = CompareInstancePreference(
                     normalizedCurrentPath,
@@ -571,64 +444,11 @@ internal static class Program
         }
     }
 
-    private static bool PromptToInstallPermanentStartupCopy(bool isUpdate)
-    {
-        return StartupDialogs.ShowYesNo(
-            T("Common.AppName"),
-            isUpdate
-                ? T("Startup.InstallPromptUpdateHeading")
-                : T("Startup.InstallPromptInstallHeading"),
-            isUpdate
-                ? T("Startup.InstallPromptUpdateBody")
-                : T("Startup.InstallPromptInstallBody"));
-    }
-
-    private static bool TryRelaunchAsAdministrator(string[] args, params string[] extraFlags)
-    {
-        string? exePath = GetExecutablePath();
-        if (string.IsNullOrWhiteSpace(exePath))
-        {
-            return false;
-        }
-
-        string[] effectiveExtraFlags = extraFlags;
-        if (ContainsArg(extraFlags, StartupTaskInstallFlag) && !HasArg(args, StartupTaskUserFlag))
-        {
-            string currentUser = GetCurrentWindowsUserName();
-            if (!string.IsNullOrWhiteSpace(currentUser))
-            {
-                effectiveExtraFlags = [.. extraFlags, StartupTaskUserFlag, currentUser];
-            }
-        }
-
-        string elevatedArgs = BuildArguments(args, effectiveExtraFlags);
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = exePath,
-            UseShellExecute = true,
-            Verb = "runas",
-            Arguments = elevatedArgs
-        };
-
-        try
-        {
-            TryTerminateOtherQuickZoomProcesses("StartupSetupRelaunch", exePath);
-            Process.Start(startInfo);
-            return true;
-        }
-        catch (Win32Exception ex) when (ex.NativeErrorCode == ERROR_CANCELLED)
-        {
-            return false;
-        }
-        catch (Exception ex)
-        {
-            ErrorLog.Write("Elevation", ex);
-            return false;
-        }
-    }
-
     private static bool TryInstallElevatedScheduledTask(out string installedExePath, out string? errorMessage)
     {
+        installedExePath = GetExecutablePath() ?? string.Empty;
+        using IDisposable? transaction = InstalledAppService.TryAcquireInstallTransaction(out errorMessage);
+        if (transaction == null) return false;
         if (StartupTaskService.IsReadyForCurrentBuild(out string? readyExePath) &&
             !string.IsNullOrWhiteSpace(readyExePath))
         {
@@ -643,7 +463,10 @@ internal static class Program
             return false;
         }
 
-        return TryRegisterElevatedStartupTask(installedExePath, targetUser: null, out errorMessage);
+        if (!TryRegisterElevatedStartupTask(installedExePath, targetUser: null, out errorMessage) ||
+            !InstalledAppService.TryCommitInstalledPayload(installedExePath, out errorMessage)) return false;
+        TryCleanupLegacyScheduledTasks(installedExePath);
+        return true;
     }
 
     private static bool TryInstallStartupTaskForSetup(string? sourceExePath, string? targetUser)
@@ -656,9 +479,12 @@ internal static class Program
 
         try
         {
-            TryCleanupLegacyUserStartupEntries(sourceExePath);
-            TryCleanupLegacyScheduledTasks(sourceExePath);
-
+            using IDisposable? transaction = InstalledAppService.TryAcquireInstallTransaction(out string? transactionError);
+            if (transaction == null)
+            {
+                ErrorLog.Write("FirstRunSetup.Startup", transactionError ?? "Could not acquire the installation lock.");
+                return false;
+            }
             if (!TryPrepareInstalledQuickZoom(out string installedExePath, out string? errorMessage))
             {
                 ErrorLog.Write("FirstRunSetup.Startup", errorMessage ?? "Could not prepare the managed install.");
@@ -670,6 +496,15 @@ internal static class Program
                 ErrorLog.Write("FirstRunSetup.Startup", errorMessage ?? "Could not register the startup task.");
                 return false;
             }
+
+            if (!InstalledAppService.TryCommitInstalledPayload(installedExePath, out errorMessage))
+            {
+                ErrorLog.Write("FirstRunSetup.Startup", errorMessage ?? "Could not commit the managed install.");
+                return false;
+            }
+
+            TryCleanupLegacyUserStartupEntries(sourceExePath);
+            TryCleanupLegacyScheduledTasks(installedExePath);
 
             bool ready = StartupTaskService.WaitUntilReady(installedExePath, targetUser);
             ErrorLog.Write(
@@ -727,24 +562,12 @@ internal static class Program
             return true;
         }
 
-        TryCleanupLegacyScheduledTasks(installedExePath);
-
         try
         {
             if (!InstalledAppService.IsSecureInstallPath(installedExePath))
                 throw new InvalidOperationException("The startup executable is not in a protected managed install.");
             taskDefinitionPath = Path.Combine(Path.GetDirectoryName(installedExePath)!, Guid.NewGuid().ToString("N") + ".task.xml");
-            using var taskDefinitionStream = new FileStream(taskDefinitionPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read);
-            var writerSettings = new XmlWriterSettings
-            {
-                Encoding = Encoding.Unicode,
-                Indent = true
-            };
-            using (XmlWriter writer = XmlWriter.Create(taskDefinitionStream, writerSettings))
-            {
-                CreateStartupTaskDefinition(installedExePath, currentUser).Save(writer);
-            }
-            taskDefinitionStream.Flush(flushToDisk: true);
+            WriteStartupTaskDefinition(taskDefinitionPath, installedExePath, currentUser);
 
             var startInfo = new ProcessStartInfo
             {
@@ -765,24 +588,13 @@ internal static class Program
                 return false;
             }
 
-            if (!process.WaitForExit(15000))
+            if (!ProcessOutput.TryRead(process, 15000, out string output, out string error))
             {
-                try
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-                catch
-                {
-                    // Best effort.
-                }
-
                 errorMessage = T("Startup.ErrorTaskRegistrationTimeout");
                 ErrorLog.Write("StartupTaskInstall", $"{errorMessage} Elapsed={ErrorLog.FormatElapsed(stopwatch.Elapsed)}.");
                 return false;
             }
 
-            string output = process.StandardOutput.ReadToEnd().Trim();
-            string error = process.StandardError.ReadToEnd().Trim();
             bool success = process.ExitCode == 0;
             if (!success)
             {
@@ -799,7 +611,6 @@ internal static class Program
                 return false;
             }
 
-            TryCleanupLegacyScheduledTasks(installedExePath);
             ErrorLog.Write("StartupTaskInstall", $"Startup task registration completed and verified in {ErrorLog.FormatElapsed(stopwatch.Elapsed)}. {DescribeStartupTask(verifiedInfo)}");
             return true;
         }
@@ -823,6 +634,19 @@ internal static class Program
                 }
             }
         }
+    }
+
+    private static void WriteStartupTaskDefinition(string path, string installedExePath, string currentUser)
+    {
+        // Finish and close the writer before schtasks.exe opens the XML. A live
+        // write handle causes ERROR_SHARING_VIOLATION even with FileShare.Read.
+        using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        var settings = new XmlWriterSettings { Encoding = Encoding.Unicode, Indent = true };
+        using (XmlWriter writer = XmlWriter.Create(stream, settings))
+        {
+            CreateStartupTaskDefinition(installedExePath, currentUser).Save(writer);
+        }
+        stream.Flush(flushToDisk: true);
     }
 
     private static XDocument CreateStartupTaskDefinition(string installedExePath, string currentUser)
@@ -849,6 +673,7 @@ internal static class Program
                     new XElement(taskNamespace + "DisallowStartIfOnBatteries", false),
                     new XElement(taskNamespace + "StopIfGoingOnBatteries", false),
                     new XElement(taskNamespace + "StartWhenAvailable", true),
+                    new XElement(taskNamespace + "ExecutionTimeLimit", "PT0S"),
                     new XElement(taskNamespace + "Priority", StartupTaskPriority)),
                 new XElement(taskNamespace + "Actions",
                     new XAttribute("Context", "Author"),
@@ -877,23 +702,12 @@ internal static class Program
                 return false;
             }
 
-            if (!process.WaitForExit(3000))
+            if (!ProcessOutput.TryRead(process, 3000, out string output, out string error))
             {
-                try
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-                catch
-                {
-                    // Best effort.
-                }
-
                 ErrorLog.Write("StartupTaskRun", "Timed out while starting the elevated scheduled task.");
                 return false;
             }
 
-            string output = process.StandardOutput.ReadToEnd().Trim();
-            string error = process.StandardError.ReadToEnd().Trim();
             bool success = process.ExitCode == 0;
             if (!success)
             {
@@ -909,32 +723,63 @@ internal static class Program
         }
     }
 
-    private static bool TryStartElevatedScheduledTaskAndVerify(string? currentExePath)
+    private enum StartupTaskLaunchResult
     {
+        Failed,
+        Ready,
+        Pending
+    }
+
+    private static StartupTaskLaunchResult StartElevatedScheduledTaskAndVerify()
+    {
+        if (!StartupTaskService.IsReadyForCurrentBuild(out string? targetExePath)) return StartupTaskLaunchResult.Failed;
+        IDisposable? yielding = StartupHandoff.MarkYielding();
+        if (yielding == null) return StartupTaskLaunchResult.Failed;
+        bool replacementReady = false;
+        bool launcherOwnsMutex = false;
         ReleaseSingleInstanceMutex();
         try
         {
-            StartupTaskInfo taskInfo = StartupTaskService.GetStatusInfo(forceRefresh: true);
-            if (!TryStartElevatedScheduledTask())
-            {
-                return false;
-            }
-
-            if (WaitForOtherQuickZoomInstance(taskInfo.ExecutePath, timeoutMs: 15000, pollMs: 250))
-            {
-                return true;
-            }
-
-            ErrorLog.Write("StartupTaskRun", "The elevated startup task was accepted by Task Scheduler, but no replacement QuickZoom process appeared.");
-            return false;
+            replacementReady = TryStartElevatedScheduledTask() &&
+                WaitForOtherQuickZoomInstance(targetExePath, timeoutMs: 15000, pollMs: 250);
+            if (!replacementReady)
+                ErrorLog.Write("StartupTaskRun", "The startup task did not signal a ready replacement within the launch deadline.");
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("StartupTaskRun", ex);
         }
         finally
         {
-            if (_singleInstanceMutex == null)
+            if (!replacementReady && _singleInstanceMutex == null)
             {
-                _ = TryAcquireSingleInstanceMutex(clearExistingProcesses: false, currentExePath);
+                launcherOwnsMutex = TryAcquireSingleInstanceMutex();
             }
+            CompleteStartupYielding(yielding, replacementReady, launcherOwnsMutex);
         }
+
+        StartupTaskLaunchResult result = GetStartupTaskLaunchResult(replacementReady, launcherOwnsMutex);
+        if (result == StartupTaskLaunchResult.Pending)
+            ErrorLog.Write("StartupTaskRun", "Another QuickZoom process still owns startup. The launcher is exiting without starting a duplicate runtime.");
+        return result;
+    }
+
+    private static StartupTaskLaunchResult GetStartupTaskLaunchResult(bool replacementReady, bool launcherOwnsMutex)
+        => replacementReady ? StartupTaskLaunchResult.Ready :
+            launcherOwnsMutex ? StartupTaskLaunchResult.Failed : StartupTaskLaunchResult.Pending;
+
+    private static void CompleteStartupYielding(IDisposable marker, bool replacementReady, bool launcherOwnsMutex)
+    {
+        if (replacementReady || launcherOwnsMutex)
+        {
+            marker.Dispose();
+            return;
+        }
+
+        // The pending child may still be approaching its last arbitration check.
+        // Keep this launcher marked as yielding until Windows closes the handle
+        // on process exit, so neither process can mistake it for a runtime owner.
+        _startupYieldingMarker = marker;
     }
 
     private static string? GetExecutablePath()
@@ -946,72 +791,6 @@ internal static class Program
         }
 
         return string.IsNullOrWhiteSpace(exePath) ? null : exePath;
-    }
-
-    private static string BuildArguments(string[] args, params string[] extraFlags)
-    {
-        var sb = new StringBuilder();
-        for (int i = 0; i < args.Length; i++)
-        {
-            if (string.Equals(args[i], ElevatedFlag, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (string.Equals(args[i], StartupTaskInstallFlag, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (string.Equals(args[i], StartupReadyEventFlag, StringComparison.OrdinalIgnoreCase))
-            {
-                i++;
-                continue;
-            }
-
-            if (string.Equals(args[i], StartupTaskUserFlag, StringComparison.OrdinalIgnoreCase))
-            {
-                i++;
-                continue;
-            }
-
-            if (sb.Length > 0)
-            {
-                sb.Append(' ');
-            }
-
-            sb.Append(QuoteArgument(args[i]));
-        }
-
-        foreach (string flag in extraFlags)
-        {
-            if (string.IsNullOrWhiteSpace(flag))
-            {
-                continue;
-            }
-
-            if (sb.Length > 0)
-            {
-                sb.Append(' ');
-            }
-
-            sb.Append(QuoteArgument(flag));
-        }
-
-        return sb.ToString();
-    }
-
-    private static bool ContainsArg(IEnumerable<string> args, string value)
-    {
-        foreach (string arg in args)
-        {
-            if (string.Equals(arg, value, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static bool HasArg(string[] args, string value)
@@ -1102,103 +881,12 @@ internal static class Program
         return quoted.ToString();
     }
 
-    private static bool TryLaunchInstalledCopyAndWaitUntilReady(string installedExePath, int timeoutMs, params string[] extraFlags)
-    {
-        var stopwatch = Stopwatch.StartNew();
-        string readyEventName = @"Local\QuickZoom2.StartupReady." + Guid.NewGuid().ToString("N");
-        try
-        {
-            TryTerminateOtherQuickZoomProcesses("StartupInstalledLaunch", preferredExePath: installedExePath, keepPreferredExePath: true);
-
-            using var readyEvent = new EventWaitHandle(false, EventResetMode.ManualReset, readyEventName);
-            string[] launchFlags = new string[extraFlags.Length + 2];
-            Array.Copy(extraFlags, launchFlags, extraFlags.Length);
-            launchFlags[^2] = StartupReadyEventFlag;
-            launchFlags[^1] = readyEventName;
-
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = installedExePath,
-                UseShellExecute = false,
-                Arguments = BuildArguments(Array.Empty<string>(), launchFlags)
-            };
-
-            using Process? process = Process.Start(startInfo);
-            if (process == null)
-            {
-                ErrorLog.Write("Startup", $"Could not launch the installed QuickZoom copy after startup-service setup. Elapsed={ErrorLog.FormatElapsed(stopwatch.Elapsed)}.");
-                return false;
-            }
-
-            bool ready = readyEvent.WaitOne(timeoutMs);
-            if (!ready)
-            {
-                ErrorLog.Write("Startup", $"Installed QuickZoom copy launched but did not signal tray readiness before timeout. Elapsed={ErrorLog.FormatElapsed(stopwatch.Elapsed)}. Path: {installedExePath}");
-            }
-            else
-            {
-                ErrorLog.Write("Startup", $"Installed QuickZoom copy launched and tray was ready in {ErrorLog.FormatElapsed(stopwatch.Elapsed)}. Path: {installedExePath}");
-            }
-
-            return ready;
-        }
-        catch (Exception ex)
-        {
-            ErrorLog.Write("Startup", $"Installed QuickZoom launch failed after {ErrorLog.FormatElapsed(stopwatch.Elapsed)}. {ex}");
-            return false;
-        }
-    }
-
-    private static void TryTerminateOtherQuickZoomProcesses(string source, string? preferredExePath = null, bool keepPreferredExePath = false)
-    {
-        Process currentProcess = Process.GetCurrentProcess();
-        string? winningExePath = !string.IsNullOrWhiteSpace(preferredExePath)
-            ? Path.GetFullPath(preferredExePath)
-            : GetExecutablePath();
-
-        foreach (Process otherProcess in Process.GetProcessesByName(currentProcess.ProcessName))
-        {
-            using (otherProcess)
-            {
-                if (!TryGetSameSessionQuickZoomProcessPath(currentProcess, otherProcess, out string? otherExePath))
-                {
-                    continue;
-                }
-
-                if (keepPreferredExePath && PathsEqual(otherExePath, preferredExePath))
-                {
-                    continue;
-                }
-
-                if (!CanReplaceProcessWithPreferredExecutable(winningExePath, otherExePath))
-                {
-                    ErrorLog.Write(source, "Leaving existing QuickZoom process alone because it is not older or less preferred. " + DescribeProcessInstance(otherProcess, otherExePath));
-                    continue;
-                }
-
-                try
-                {
-                    ErrorLog.Write(source, "Stopping replaceable QuickZoom process. " + DescribeProcessInstance(otherProcess, otherExePath));
-                    otherProcess.Kill(entireProcessTree: true);
-                    if (!otherProcess.WaitForExit(3000))
-                    {
-                        ErrorLog.Write(source, "Existing QuickZoom process did not exit within the timeout. " + DescribeProcessInstance(otherProcess, otherExePath));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    ErrorLog.Write(source, "Could not stop existing QuickZoom process at " + otherExePath + ". " + ex.Message);
-                }
-            }
-        }
-    }
-
     private static bool WaitForOtherQuickZoomInstance(string? expectedExePath, int timeoutMs, int pollMs)
     {
         var stopwatch = Stopwatch.StartNew();
         while (stopwatch.ElapsedMilliseconds <= timeoutMs)
         {
-            if (HasOtherQuickZoomInstance(expectedExePath))
+            if (HasOtherQuickZoomInstance(expectedExePath, requireReady: true))
             {
                 return true;
             }
@@ -1209,7 +897,7 @@ internal static class Program
         return false;
     }
 
-    private static bool HasOtherQuickZoomInstance(string? expectedExePath)
+    private static bool HasOtherQuickZoomInstance(string? expectedExePath, bool requireReady = false)
     {
         Process currentProcess = Process.GetCurrentProcess();
         foreach (Process otherProcess in Process.GetProcessesByName(currentProcess.ProcessName))
@@ -1227,7 +915,7 @@ internal static class Program
                     continue;
                 }
 
-                return true;
+                if (!requireReady || StartupHandoff.IsReady(otherProcess)) return true;
             }
         }
 
@@ -1264,37 +952,6 @@ internal static class Program
         return true;
     }
 
-    private static bool CanReplaceProcessWithPreferredExecutable(string? preferredExePath, string otherExePath)
-    {
-        if (string.IsNullOrWhiteSpace(preferredExePath))
-        {
-            return true;
-        }
-
-        int preferredBuild = TryGetExecutableBuildNumber(preferredExePath);
-        int otherBuild = TryGetExecutableBuildNumber(otherExePath);
-        if (preferredBuild > 0 && otherBuild > 0)
-        {
-            if (preferredBuild != otherBuild)
-            {
-                return preferredBuild > otherBuild;
-            }
-
-            bool preferredIsInstalled = InstalledAppService.IsCurrentInstalledExecutablePath(preferredExePath);
-            bool otherIsInstalled = InstalledAppService.IsCurrentInstalledExecutablePath(otherExePath);
-            return preferredIsInstalled || !otherIsInstalled;
-        }
-
-        DateTime preferredWriteTime = TryGetExecutableWriteTimeUtc(preferredExePath);
-        DateTime otherWriteTime = TryGetExecutableWriteTimeUtc(otherExePath);
-        if (preferredWriteTime != DateTime.MinValue && otherWriteTime != DateTime.MinValue)
-        {
-            return preferredWriteTime >= otherWriteTime;
-        }
-
-        return true;
-    }
-
     private static bool ShouldYieldToNewerInstance(string? exePath)
     {
         if (string.IsNullOrWhiteSpace(exePath))
@@ -1315,6 +972,8 @@ internal static class Program
                 {
                     continue;
                 }
+
+                if (StartupHandoff.IsYielding(otherProcess)) continue;
 
                 bool otherIsInstalledPreferred = InstalledAppService.IsCurrentInstalledExecutablePath(otherExePath);
                 InstancePreference preference = CompareInstancePreference(
@@ -1403,13 +1062,6 @@ internal static class Program
             currentWriteTimeUtc != otherWriteTimeUtc)
         {
             return currentWriteTimeUtc > otherWriteTimeUtc
-                ? InstancePreference.CurrentWins
-                : InstancePreference.OtherWins;
-        }
-
-        if (PathsEqual(currentExePath, otherExePath))
-        {
-            return currentProcess.StartTime <= otherProcess.StartTime
                 ? InstancePreference.CurrentWins
                 : InstancePreference.OtherWins;
         }
@@ -1572,29 +1224,6 @@ internal static class Program
         ErrorLog.WriteCrash(source, exception);
     }
 
-    private static void ConfigureErrorLoggingFromSettings()
-    {
-        bool debugLoggingEnabled = false;
-        try
-        {
-            if (File.Exists(AppPaths.SettingsPath))
-            {
-                using JsonDocument document = JsonDocument.Parse(File.ReadAllText(AppPaths.SettingsPath));
-                if (document.RootElement.TryGetProperty("DebugLoggingEnabled", out JsonElement value) &&
-                    value.ValueKind is JsonValueKind.True or JsonValueKind.False)
-                {
-                    debugLoggingEnabled = value.GetBoolean();
-                }
-            }
-        }
-        catch
-        {
-            // Crash logging still works even if settings cannot be read.
-        }
-
-        ErrorLog.Configure(debugLoggingEnabled, AppInfo.VersionHash);
-    }
-
     private static void TryCleanupLegacyUserStartupEntries(string? currentExePath)
     {
         try
@@ -1752,21 +1381,11 @@ internal static class Program
             yield break;
         }
 
-        if (!process.WaitForExit(5000))
+        if (!ProcessOutput.TryRead(process, 5000, out string output, out _))
         {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-                // Best effort.
-            }
-
             yield break;
         }
 
-        string output = process.StandardOutput.ReadToEnd();
         foreach (string line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
         {
             string taskName = ParseFirstCsvField(line).TrimStart('\\');
@@ -1829,23 +1448,12 @@ internal static class Program
             return false;
         }
 
-        if (!process.WaitForExit(4000))
+        if (!ProcessOutput.TryRead(process, 4000, out string output, out string error))
         {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-                // Best effort.
-            }
-
             ErrorLog.Write("StartupCleanup.Task", "Timed out while deleting scheduled task '" + taskName + "'.");
             return false;
         }
 
-        string output = process.StandardOutput.ReadToEnd().Trim();
-        string error = process.StandardError.ReadToEnd().Trim();
         bool success = process.ExitCode == 0;
         if (!success && LooksLikeMissingScheduledTask(output + Environment.NewLine + error))
         {

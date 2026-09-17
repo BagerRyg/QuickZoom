@@ -7,10 +7,19 @@ namespace QuickZoom;
 
 internal static class LocalStorage
 {
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetShellWindow();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern SafeProcessHandle OpenProcess(uint access, bool inheritHandle, uint processId);
+
     [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetTokenInformation(IntPtr token, int informationClass,
-        out IntPtr information, int length, out int returnedLength);
+    private static extern bool OpenProcessToken(SafeProcessHandle process, uint access,
+        out SafeAccessTokenHandle token);
 
     internal static void RequireLocalPath(string path)
     {
@@ -45,18 +54,32 @@ internal static class LocalStorage
             return;
         }
 
-        const int TokenLinkedToken = 19;
-        if (!GetTokenInformation(identity.Token, TokenLinkedToken, out IntPtr linked,
-            IntPtr.Size, out _) || linked == IntPtr.Zero)
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "Profile writes require a standard user token.");
+        // A UAC linked token can be identification-only: querying its user works,
+        // but file access fails with ERROR_BAD_IMPERSONATION_LEVEL. Use the desktop
+        // shell's primary token, with only the access required for impersonation.
+        IntPtr shellWindow = GetShellWindow();
+        if (shellWindow == IntPtr.Zero ||
+            GetWindowThreadProcessId(shellWindow, out uint shellProcessId) == 0)
+            throw new UnauthorizedAccessException("Profile writes require the user's desktop shell.");
 
-        using var token = new SafeAccessTokenHandle(linked);
-        WindowsIdentity.RunImpersonated(token, () =>
+        const uint ProcessQueryLimitedInformation = 0x1000;
+        const uint TokenQueryAndDuplicate = 0x0008 | 0x0002;
+        using SafeProcessHandle shellProcess = OpenProcess(ProcessQueryLimitedInformation, false, shellProcessId);
+        if (shellProcess.IsInvalid)
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "The desktop shell could not be opened.");
+        if (!OpenProcessToken(shellProcess, TokenQueryAndDuplicate, out SafeAccessTokenHandle token))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "The standard user token could not be opened.");
+
+        using (token)
         {
-            using WindowsIdentity filtered = WindowsIdentity.GetCurrent();
-            if (new WindowsPrincipal(filtered).IsInRole(WindowsBuiltInRole.Administrator))
-                throw new UnauthorizedAccessException("Profile writes require a standard user token.");
-            action();
-        });
+            WindowsIdentity.RunImpersonated(token, () =>
+            {
+                using WindowsIdentity filtered = WindowsIdentity.GetCurrent();
+                if (identity.User == null || filtered.User != identity.User ||
+                    new WindowsPrincipal(filtered).IsInRole(WindowsBuiltInRole.Administrator))
+                    throw new UnauthorizedAccessException("Profile writes require the same user's standard token.");
+                action();
+            });
+        }
     }
 }

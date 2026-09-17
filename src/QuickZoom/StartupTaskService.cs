@@ -48,7 +48,7 @@ internal static class StartupTaskService
                 return _cachedInfo;
             }
 
-            StartupTaskInfo info = QueryStatusInfo(ElevatedStartupTaskName);
+            StartupTaskInfo info = ForCurrentUser(QueryStatusInfo(ElevatedStartupTaskName));
             _cachedInfo = info;
             _cachedInfoAtUtc = DateTime.UtcNow;
             return info;
@@ -66,7 +66,9 @@ internal static class StartupTaskService
 
     internal static bool IsReadyForCurrentBuild(string expectedExePath, string? expectedUser, out StartupTaskInfo info)
     {
-        info = GetStatusInfo(forceRefresh: true);
+        // A newly staged payload is verified before it becomes current. Do not
+        // publish it merely to make task verification accept its path.
+        info = QueryStatusInfo(ElevatedStartupTaskName, expectedExePath);
         return info.Status == StartupTaskStatus.Ready &&
                !string.IsNullOrWhiteSpace(info.ExecutePath) &&
                PathsEqual(info.ExecutePath, expectedExePath) &&
@@ -93,7 +95,11 @@ internal static class StartupTaskService
         var stopwatch = Stopwatch.StartNew();
         while (stopwatch.ElapsedMilliseconds <= timeoutMs)
         {
-            StartupTaskInfo info = GetStatusInfo(forceRefresh: true);
+            // An elevated helper may run under a different administrator account;
+            // verify the explicitly requested interactive user in that case.
+            StartupTaskInfo info = string.IsNullOrWhiteSpace(expectedUser)
+                ? GetStatusInfo(forceRefresh: true)
+                : QueryStatusInfo(ElevatedStartupTaskName, expectedExePath);
             bool ready = info.Status == StartupTaskStatus.Ready;
             if (!string.IsNullOrWhiteSpace(expectedExePath))
             {
@@ -145,7 +151,7 @@ internal static class StartupTaskService
         };
     }
 
-    private static StartupTaskInfo QueryStatusInfo(string taskName)
+    private static StartupTaskInfo QueryStatusInfo(string taskName, string? expectedExePath = null)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -169,17 +175,8 @@ internal static class StartupTaskService
                 };
             }
 
-            if (!process.WaitForExit(4000))
+            if (!ProcessOutput.TryRead(process, 4000, out string output, out string error))
             {
-                try
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-                catch
-                {
-                    // Best effort.
-                }
-
                 ErrorLog.Write("StartupTaskService", "Timed out while querying the scheduled startup task.");
                 return new StartupTaskInfo
                 {
@@ -188,11 +185,9 @@ internal static class StartupTaskService
                 };
             }
 
-            string output = process.StandardOutput.ReadToEnd();
-            string error = process.StandardError.ReadToEnd();
             if (process.ExitCode == 0)
             {
-                return ParseTaskXml(output);
+                return ParseTaskXmlCore(output, expectedExePath);
             }
 
             string combined = (output + Environment.NewLine + error).Trim();
@@ -224,6 +219,9 @@ internal static class StartupTaskService
     }
 
     private static StartupTaskInfo ParseTaskXml(string xml)
+        => ParseTaskXmlCore(xml, expectedExePath: null);
+
+    private static StartupTaskInfo ParseTaskXmlCore(string xml, string? expectedExePath)
     {
         try
         {
@@ -246,7 +244,8 @@ internal static class StartupTaskService
                 principal.Element(ns + "RunLevel")?.Value == "HighestAvailable" &&
                 principal.Element(ns + "LogonType")?.Value == "InteractiveToken" &&
                 triggers?.Elements().Count() == 1 && trigger != null &&
-                trigger.Element(ns + "Enabled")?.Value == "true" &&
+                IsEnabled(trigger.Element(ns + "Enabled")) &&
+                IsEnabled(root?.Element(ns + "Settings")?.Element(ns + "Enabled")) &&
                 !string.IsNullOrWhiteSpace(userId) && !string.IsNullOrWhiteSpace(trigger.Element(ns + "UserId")?.Value) &&
                 UserMatches(userId, trigger.Element(ns + "UserId")?.Value);
 
@@ -278,7 +277,7 @@ internal static class StartupTaskService
                 };
             }
 
-            string? currentInstalledExePath = InstalledAppService.GetCurrentInstalledExecutablePath();
+            string? currentInstalledExePath = expectedExePath ?? InstalledAppService.GetCurrentInstalledExecutablePath();
             if (!string.IsNullOrWhiteSpace(currentInstalledExePath) &&
                 !PathsEqual(executePath, currentInstalledExePath))
             {
@@ -323,6 +322,10 @@ internal static class StartupTaskService
         }
     }
 
+    // Task Scheduler omits true (the schema default) when saving a task.
+    // Explicitly disabled tasks or triggers must still fail verification.
+    private static bool IsEnabled(XElement? enabledElement) => (bool?)enabledElement ?? true;
+
     private static bool LooksLikeMissingTask(string combined)
     {
         return combined.IndexOf("cannot find", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -366,6 +369,25 @@ internal static class StartupTaskService
         SecurityIdentifier? expectedSid = TryResolveSid(normalizedExpectedUser) ??
                                           GetCurrentUserSidIfMatches(normalizedExpectedUser);
         return taskSid != null && expectedSid != null && taskSid.Equals(expectedSid);
+    }
+
+    private static StartupTaskInfo ForCurrentUser(StartupTaskInfo info)
+    {
+        if (info.Status != StartupTaskStatus.Ready) return info;
+        try
+        {
+            using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+            if (identity.User != null && UserMatches(info.UserId, identity.User.Value)) return info;
+        }
+        catch (Exception ex) { ErrorLog.Write("StartupTaskService.User", ex); }
+        return new StartupTaskInfo
+        {
+            Status = StartupTaskStatus.Broken,
+            ExecutePath = info.ExecutePath,
+            Arguments = info.Arguments,
+            UserId = info.UserId,
+            Details = "The startup task is configured for a different Windows user."
+        };
     }
 
     private static SecurityIdentifier? GetCurrentUserSidIfMatches(string expectedUser)

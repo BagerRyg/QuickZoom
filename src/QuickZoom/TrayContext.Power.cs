@@ -62,14 +62,22 @@ internal sealed partial class TrayContext
             _enableKeyPressed = false;
             _invertKeyPressed = false;
             _followCursorKeyPressed = false;
+            _zoomModeCycleKeyPressed = false;
+            _leftMouseButtonPressed = false;
+            _rightMouseButtonPressed = false;
+            _zoomModeMouseChordTriggered = false;
+            _suppressLeftMouseButtonUp = false;
+            _suppressRightMouseButtonUp = false;
             _controlKeyPressed = false;
             _altGrPressed = false;
+            ResetTrackedModifierKeys();
             ResetEnableKeySuppressionState();
             _suppressedShortcutKeyUps.Clear();
             _wheelDeltaRemainder = 0;
             _animAnchorValid = false;
             _animTimer?.Stop();
             _monitorLayoutDirty = true;
+            InvalidateMonitorCaches(topologyChanged: true);
 
             EnsureSelectedMonitorsValid();
             EnsureLockedScreenStillValid();

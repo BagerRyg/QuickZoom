@@ -93,9 +93,7 @@ internal static partial class FluentTrayIcons
         float offsetX = target.X + ((target.Width - (sourceBounds.Width * scale)) / 2f) - (sourceBounds.X * scale);
         float offsetY = target.Y + ((target.Height - (sourceBounds.Height * scale)) / 2f) - (sourceBounds.Y * scale);
 
-        using Matrix matrix = new();
-        matrix.Scale(scale, scale);
-        matrix.Translate(offsetX / scale, offsetY / scale, MatrixOrder.Append);
+        using Matrix matrix = new(scale, 0, 0, scale, offsetX, offsetY);
         iconPath.Transform(matrix);
 
         using SolidBrush fill = new(color);

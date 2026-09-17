@@ -16,6 +16,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
+where pwsh >nul 2>nul
+if errorlevel 1 (
+  echo ERROR: PowerShell 7.6 or newer is required for release validation.
+  pause
+  exit /b 1
+)
+
 echo Using:
 where dotnet
 for /f "delims=" %%v in ('dotnet --version') do set SDKVER=%%v
@@ -41,18 +48,10 @@ if errorlevel 1 (
 )
 echo.
 
-echo Restoring...
-dotnet restore
+echo Building and validating (Release, without screenshots)...
+pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0scripts\Test-Release.ps1"
 if errorlevel 1 (
-  echo ERROR: Restore failed.
-  pause
-  exit /b 1
-)
-
-echo Building (Release)...
-dotnet build -c Release
-if errorlevel 1 (
-  echo ERROR: Build failed.
+  echo ERROR: Release validation failed. No release will be published.
   pause
   exit /b 1
 )

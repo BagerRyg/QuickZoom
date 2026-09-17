@@ -104,13 +104,8 @@ internal sealed partial class TrayContext
             return;
         }
 
-        bool exists = Screen.AllScreens.Any(screen =>
+        _lockedScreen = Screen.AllScreens.FirstOrDefault(screen =>
             string.Equals(screen.DeviceName, _lockedScreen.DeviceName, StringComparison.OrdinalIgnoreCase));
-
-        if (!exists)
-        {
-            _lockedScreen = null;
-        }
     }
 
     private void PopulateDisplayOptionsHost()
