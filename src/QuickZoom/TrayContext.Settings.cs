@@ -68,6 +68,7 @@ internal sealed partial class TrayContext
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public int DockZoomPercent { get; set; }
         public int TrackingSource { get; set; } = (int)TrayContext.TrackingSource.MouseCursor;
+        public int TrackingMode { get; set; } = (int)QuickZoom.TrackingMode.Automatic;
     }
 
     internal static bool IsKnownSetting(string name) => typeof(Settings).GetProperty(name) != null;
@@ -167,6 +168,8 @@ internal sealed partial class TrayContext
         _dockPosition = Enum.IsDefined(typeof(DockPosition), s.DockPosition) ? (DockPosition)s.DockPosition : DockPosition.Top;
         _dockSizePercent = NormalizeDockSizePercent(s.DockSizePercent);
         _trackingSource = Enum.IsDefined(typeof(TrackingSource), s.TrackingSource) ? (TrackingSource)s.TrackingSource : TrackingSource.MouseCursor;
+        _trackingMode = Enum.IsDefined(typeof(TrackingMode), s.TrackingMode) ? (TrackingMode)s.TrackingMode : TrackingMode.Automatic;
+        ResetActivityTracking();
         if (!_invertEnabled)
         {
             _invertColors = false;
@@ -387,7 +390,8 @@ internal sealed partial class TrayContext
             LensShape = (int)_lensShape,
             DockPosition = (int)_dockPosition,
             DockSizePercent = _dockSizePercent,
-            TrackingSource = (int)_trackingSource
+            TrackingSource = (int)_trackingSource,
+            TrackingMode = (int)_trackingMode
         };
     }
 

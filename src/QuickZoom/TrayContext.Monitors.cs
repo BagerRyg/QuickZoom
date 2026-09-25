@@ -93,6 +93,7 @@ internal sealed partial class TrayContext
         _dynamicSelectedScreens.Clear();
         if (topologyChanged)
         {
+            ResetActivityTracking();
             _cachedOrderedScreens = null;
         }
     }
@@ -330,7 +331,9 @@ internal sealed partial class TrayContext
             }
             else if (GetCursorPos(out var pt))
             {
-                selectedScreen = Screen.FromPoint(new Point(pt.X, pt.Y));
+                Point point = _tracking.KeyboardActive && _lastTrackingPoint.HasValue
+                    ? _lastTrackingPoint.Value : new Point(pt.X, pt.Y);
+                selectedScreen = Screen.FromPoint(point);
                 if (!_autoSwitchMonitor)
                 {
                     _lockedScreen = selectedScreen;

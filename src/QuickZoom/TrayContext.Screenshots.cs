@@ -865,6 +865,30 @@ internal sealed partial class TrayContext
 
             WaitForUi(250);
             CaptureWindow(_trayPopup, Path.Combine(outputDirectory, "tray-menu.png"));
+            SetFollowOptionsExpanded(true);
+            try
+            {
+                if (_followOptionsMenu != null) _followOptionsMenu.AutoClose = false;
+                WaitForUi(80);
+                CaptureFollowOptions(Path.Combine(outputDirectory, "tray-follow-options.png"));
+            }
+            finally
+            {
+                if (_followOptionsMenu != null) _followOptionsMenu.AutoClose = true;
+            }
+            bool wasFollowing = _followCursor;
+            try
+            {
+                _followCursor = false;
+                SetFollowOptionsExpanded(false);
+                WaitForUi(80);
+                CaptureWindow(_trayPopup, Path.Combine(outputDirectory, "tray-follow-paused.png"));
+            }
+            finally
+            {
+                _followCursor = wasFollowing;
+                UpdateFollowingUi();
+            }
             if (_trayPopup.ScrollForCapture(toBottom: true))
             {
                 WaitForUi(80);
@@ -930,6 +954,24 @@ internal sealed partial class TrayContext
         UiFontSize.ExtraLarge => "font-extra-large",
         _ => "font-default"
     };
+
+    private void CaptureFollowOptions(string path)
+    {
+        if (_trayPopup == null || _followRow == null || _followOptionsMenu == null) return;
+        FollowingOptionsMenu menu = _followOptionsMenu;
+        SimulatedCaptureLayout layout = GetSimulatedCaptureLayout(_trayPopup, _followRow, placeAtBottom: true);
+        Rectangle area = layout.WorkingArea;
+        bool above = area.Bottom - layout.ControlBounds.Bottom < menu.Height + menu.Gap &&
+            layout.ControlBounds.Top - area.Top > area.Bottom - layout.ControlBounds.Bottom;
+        var menuBounds = new Rectangle(
+            Math.Clamp(layout.ControlBounds.Right - menu.Width, area.Left, Math.Max(area.Left, area.Right - menu.Width)),
+            Math.Clamp(above ? layout.ControlBounds.Top - menu.Height - menu.Gap : layout.ControlBounds.Bottom + menu.Gap,
+                area.Top, Math.Max(area.Top, area.Bottom - menu.Height)), menu.Width, menu.Height);
+        var bitmap = new Bitmap(menu.Width, menu.Height);
+        menu.DrawToBitmap(bitmap, menu.ClientRectangle);
+        using var overlay = new ModernDropdown.MenuCapture(bitmap, menuBounds, above, menu.Items[0].Height);
+        CaptureWindow(_trayPopup, path, overlay, layout.TargetBounds);
+    }
 
     private static void PlaceCaptureWindow(Form form)
     {

@@ -315,7 +315,11 @@ internal sealed partial class TrayContext
         Add(SettingsPage.Zoom, "Settings.MaxZoom", "Settings.MaxZoomHelp");
         Add(SettingsPage.Zoom, "Settings.RefreshRate", "Settings.RefreshRateHelp", LocalizedFpsValues());
 
+        Add(SettingsPage.Cursor, "Settings.TrackingMode", "Settings.TrackingModeHelp", LocalizedText(
+            "Settings.TrackingAutomatic", "Settings.TrackingMouseOnly", "Settings.TrackingKeyboard"));
         Add(SettingsPage.Cursor, "Settings.WiggleSpotlight", "Settings.WiggleSpotlightHelp");
+        Add(SettingsPage.Cursor, "Tray.PauseFollowing", "Settings.PauseFollowingHelp",
+            LocalizedText("Tray.ResumeFollowing", "Tray.FollowingPaused"), ["pause", "resume", "freeze", "hold view"]);
         Add(SettingsPage.Cursor, "Settings.CursorEnhancement", "Settings.CursorEnhancementHelp");
         Add(SettingsPage.Cursor, "Settings.CursorSize", "Settings.CursorSizeHelp");
         Add(SettingsPage.Cursor, "Settings.CursorFillColor", "Settings.CursorFillColorHelp", LocalizedText(CursorColorNameKeys));
@@ -339,7 +343,6 @@ internal sealed partial class TrayContext
         Add(SettingsPage.About, "Settings.AboutLocations", "Settings.AboutLocationsHelp");
         Add(SettingsPage.About, "Settings.StrictDataMode", "Settings.StrictDataModeHelp");
         Add(SettingsPage.About, "Settings.DebugLogging", "Settings.DebugLoggingHelp");
-        Add(SettingsPage.About, "Settings.UsageHelp", "About.HowToUseDetailed");
 
         return entries;
     }
@@ -747,6 +750,26 @@ internal sealed partial class TrayContext
         ThemePalette palette = CurrentTheme;
         var page = new CursorSettingsPageView(palette, L("Settings.CursorTitle"), L("Settings.CursorDescription"));
         var section = new SettingsSection(palette, string.Empty, string.Empty);
+        var trackingDropdown = new ModernDropdown(palette)
+        {
+            AccessibleName = L("Settings.TrackingMode"),
+            AccessibleDescription = L("Settings.TrackingModeHelp")
+        };
+        foreach (TrackingMode mode in Enum.GetValues<TrackingMode>()) trackingDropdown.Items.Add(TrackingModeLabel(mode));
+        trackingDropdown.Size = trackingDropdown.GetPreferredSize(Size.Empty);
+        trackingDropdown.SelectedIndex = (int)_trackingMode;
+        trackingDropdown.SelectedIndexChanged += (_, _) =>
+        {
+            if (!_updatingFollowingUi) SetTrackingMode((TrackingMode)trackingDropdown.SelectedIndex);
+        };
+        _settingsTrackingDropdown = trackingDropdown;
+        _settingsTrackingRow = new SettingsRow(palette, L("Settings.TrackingMode"), L("Settings.TrackingModeHelp"),
+            trackingDropdown, Math.Max(300, trackingDropdown.Width + ControlDrawing.ScaleLogical(trackingDropdown, 24)));
+        section.AddRow(_settingsTrackingRow);
+        section.AddRow(CreateToggleRow(L("Tray.PauseFollowing"), L("Settings.PauseFollowingHelp"), !_followCursor,
+            paused => { if (!_updatingFollowingUi) SetFollowCursor(!paused); },
+            onCreated: (toggle, _) => _settingsPauseFollowingToggle = toggle));
+        UpdateFollowingUi();
         var preview = new CursorPreviewControl(
             palette,
             Color.FromArgb(_cursorFillColorArgb),
@@ -1048,10 +1071,6 @@ internal sealed partial class TrayContext
                 ThemeEngineStatusText(),
                 string.Empty));
         }
-        overviewSection.AddRow(CreateTextTileRow(
-            L("Settings.UsageHelp"),
-            L("About.HowToUseDetailed")));
-
         page.AddSection(overviewSection);
         page.AddSection(BuildDiagnosticsSection(page));
         StartAboutLoad(page, overviewSection);
@@ -1251,9 +1270,6 @@ internal sealed partial class TrayContext
                     AlignLocationActions();
                 }
                 overviewSection.AddRow(locationsRow);
-                overviewSection.AddRow(CreateTextTileRow(
-                    L("Settings.UsageHelp"),
-                    L("About.HowToUseDetailed")));
             }
             finally
             {
@@ -1860,7 +1876,7 @@ internal sealed partial class TrayContext
             AccessibleColorNames = BuildCursorColorAccessibleNames()
         };
         paletteControl.ColorSelected += (_, color) => onChanged(Color.FromArgb(255, color));
-        return new SettingsRow(CurrentTheme, title, description, paletteControl, rightColumnWidth: 620);
+        return new SettingsRow(CurrentTheme, title, description, paletteControl, rightColumnWidth: 620, fullWidthControl: true);
     }
 
     private SettingsRow CreateKeybindRow(
@@ -2351,7 +2367,19 @@ internal sealed partial class TrayContext
         Color.FromArgb(251, 207, 232),
         Color.FromArgb(254, 202, 202),
         Color.FromArgb(209, 213, 219),
-        Color.FromArgb(120, 113, 108)
+        Color.FromArgb(120, 113, 108),
+        Color.FromArgb(156, 163, 175),
+        Color.FromArgb(71, 85, 105),
+        Color.FromArgb(146, 64, 14),
+        Color.FromArgb(214, 180, 140),
+        Color.FromArgb(254, 243, 199),
+        Color.FromArgb(190, 242, 100),
+        Color.FromArgb(77, 124, 15),
+        Color.FromArgb(21, 128, 61),
+        Color.FromArgb(15, 118, 110),
+        Color.FromArgb(30, 58, 138),
+        Color.FromArgb(107, 33, 168),
+        Color.FromArgb(136, 19, 55)
     ];
 
     private static double GetContrastRatio(Color first, Color second)
@@ -2411,7 +2439,19 @@ internal sealed partial class TrayContext
         "Accessibility.ColorName.LightPink",
         "Accessibility.ColorName.PaleRed",
         "Accessibility.ColorName.LightGray",
-        "Accessibility.ColorName.StoneGray"
+        "Accessibility.ColorName.StoneGray",
+        "Accessibility.ColorName.Silver",
+        "Accessibility.ColorName.Slate",
+        "Accessibility.ColorName.Brown",
+        "Accessibility.ColorName.Sand",
+        "Accessibility.ColorName.Cream",
+        "Accessibility.ColorName.LightLime",
+        "Accessibility.ColorName.Olive",
+        "Accessibility.ColorName.DarkGreen",
+        "Accessibility.ColorName.DarkTeal",
+        "Accessibility.ColorName.Navy",
+        "Accessibility.ColorName.DeepPurple",
+        "Accessibility.ColorName.Burgundy"
     ];
 
     private string[] BuildCursorColorAccessibleNames()

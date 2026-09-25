@@ -54,14 +54,21 @@ internal static class FirstRunSetup
         return true;
     }
 
-    internal static void Show(bool allowLivePractice)
+    internal static void Show(bool allowLivePractice, Func<bool, Task> prepareRuntime)
     {
         FirstRunSetupSelection initial = ReadInitialSelection();
-        FirstRunSetupSelection? selection;
         try
         {
-            using var form = new FirstRunSetupForm(initial, allowLivePractice: allowLivePractice);
-            selection = form.ShowStagedDialog() ? form.Selection : null;
+            using var form = new FirstRunSetupForm(initial, allowLivePractice: allowLivePractice,
+                prepareRuntime: async selection =>
+                {
+                    // The runtime (including an elevated replacement) must read the
+                    // chosen shortcuts and appearance before reporting readiness.
+                    SaveSelection(selection);
+                    WriteCompletionState(selection.StartupServiceSkipped, selection.ViewMode);
+                    await prepareRuntime(selection.StartupServiceSkipped);
+                });
+            form.ShowStagedDialog();
         }
         catch (Exception ex)
         {
@@ -70,26 +77,6 @@ internal static class FirstRunSetup
                 UiText.Get(initial.Language, "Common.AppName"),
                 UiText.Get(initial.Language, "Setup.SaveFailedTitle"),
                 UiText.Get(initial.Language, "Setup.SaveFailedBody"));
-            return;
-        }
-
-        if (selection is null)
-        {
-            return;
-        }
-
-        try
-        {
-            SaveSelection(selection);
-            WriteCompletionState(selection.StartupServiceSkipped, selection.ViewMode);
-        }
-        catch (Exception ex)
-        {
-            ErrorLog.Write("FirstRunSetup.Save", ex);
-            StartupDialogs.ShowWarning(
-                UiText.Get(selection.Language, "Common.AppName"),
-                UiText.Get(selection.Language, "Setup.SaveFailedTitle"),
-                UiText.Get(selection.Language, "Setup.SaveFailedBody"));
         }
     }
 
@@ -680,6 +667,8 @@ internal static class FirstRunSetup
     {
         private const int WmNcHitTest = 0x0084;
         private const int WmNcLeftButtonDown = 0x00A1;
+        private const int WmDisplayChange = 0x007E;
+        private const int WmDpiChanged = 0x02E0;
         private const int HtClient = 1;
         private const int HtCaption = 2;
         private const int BaseAccessibleContentWidth = 1200;
@@ -692,6 +681,12 @@ internal static class FirstRunSetup
 
         [DllImport("user32.dll")]
         private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct NativeRectangle
+        {
+            internal int Left, Top, Right, Bottom;
+        }
 
         private readonly TableLayoutPanel _root;
         private readonly Panel _header;
@@ -728,8 +723,14 @@ internal static class FirstRunSetup
         private SetupStartupState _startupState = SetupStartupState.Checking;
         private readonly bool _startupOnly;
         private readonly bool _allowLivePractice;
+        private readonly Func<FirstRunSetupSelection, Task>? _prepareRuntime;
+        private bool _preparingRuntime;
+        private bool _runtimePreparationFailed;
         private bool _startupStatusChecked;
         private Process? _startupHelper;
+        private Func<ProcessStartInfo, Task<Process?>> _launchStartupHelper = LaunchStartupHelperAsync;
+        private Func<Process, Task<int>> _waitForStartupHelper = WaitForStartupHelperAsync;
+        private Func<Task<bool>> _verifyStartupService = VerifyStartupServiceAsync;
         private bool _captureMode;
         private bool _startupServiceSkipped;
         private bool _accepted;
@@ -738,13 +739,20 @@ internal static class FirstRunSetup
         private bool _updatingViewLayout;
         private float? _captureWindowsTextScale;
         private float _windowsTextScale = AccessibilityPreferences.WindowsTextScale;
+        private bool _windowsHighContrast = AccessibilityPreferences.HighContrast;
+        private int[] _windowsSystemColors = ReadSystemColors();
+        private bool _systemPreferencesPending;
+        private bool _displayChangePending;
+        private bool _systemRefreshQueued;
+        private (IntPtr Dpi, NativeRectangle Bounds)? _pendingDpiChange;
         private float? _fittedFontScale;
 
         internal FirstRunSetupForm(
             FirstRunSetupSelection initial,
             bool startupOnly = false,
             bool allowLivePractice = false,
-            float? captureWindowsTextScale = null)
+            float? captureWindowsTextScale = null,
+            Func<FirstRunSetupSelection, Task>? prepareRuntime = null)
         {
             _language = initial.Language;
             _themeMode = ThemeAuto;
@@ -756,6 +764,7 @@ internal static class FirstRunSetup
             _startupServiceSkipped = initial.StartupServiceSkipped;
             _startupOnly = startupOnly;
             _allowLivePractice = allowLivePractice;
+            _prepareRuntime = prepareRuntime;
             _useDarkTheme = AppThemeBootstrap.ShouldUseDarkPalette(ThemeAuto);
             _palette = _useDarkTheme ? ThemePalettes.Dark : ThemePalettes.Light;
 
@@ -949,18 +958,76 @@ internal static class FirstRunSetup
                 BeginInvoke((MethodInvoker)(() =>
                 {
                     if (IsDisposed || Disposing) return;
-                    _windowsTextScale = AccessibilityPreferences.WindowsTextScale;
-                    ApplyVisuals();
+                    _systemPreferencesPending = true;
+                    QueueSystemRefresh();
                 }));
             }
             catch (InvalidOperationException) { /* Window closed while the system notification was queued. */ }
         }
+
+        private void QueueSystemRefresh()
+        {
+            if (_systemRefreshQueued || StartupActionBlocksNavigation || !IsHandleCreated || IsDisposed || Disposing) return;
+            if (!_systemPreferencesPending && !_displayChangePending && !_pendingDpiChange.HasValue) return;
+            _systemRefreshQueued = true;
+            BeginInvoke((MethodInvoker)(() =>
+            {
+                _systemRefreshQueued = false;
+                if (IsDisposed || Disposing || StartupActionBlocksNavigation) return;
+
+                // Secure-desktop return can broadcast unchanged preferences. Do
+                // not restart the fitted layout (or the initial reveal) for it.
+                if (_pendingDpiChange is { } dpiChange)
+                {
+                    _pendingDpiChange = null;
+                    IntPtr bounds = Marshal.AllocHGlobal(Marshal.SizeOf<NativeRectangle>());
+                    try
+                    {
+                        Marshal.StructureToPtr(dpiChange.Bounds, bounds, false);
+                        _ = SendMessage(Handle, WmDpiChanged, dpiChange.Dpi, bounds);
+                    }
+                    finally { Marshal.FreeHGlobal(bounds); }
+                }
+
+                if (_displayChangePending)
+                {
+                    _displayChangePending = false;
+                    _targetWorkingArea = Screen.FromRectangle(Bounds).WorkingArea;
+                    Rectangle nextBounds = _viewMode == SetupViewMode.Accessible
+                        ? _targetWorkingArea : ConstrainToWorkingArea(Bounds, _targetWorkingArea);
+                    if (Bounds != nextBounds) Bounds = nextBounds;
+                }
+
+                if (!_systemPreferencesPending) return;
+                _systemPreferencesPending = false;
+                float textScale = AccessibilityPreferences.WindowsTextScale;
+                bool highContrast = AccessibilityPreferences.HighContrast;
+                bool darkTheme = AppThemeBootstrap.ShouldUseDarkPalette(_themeMode);
+                int[] systemColors = ReadSystemColors();
+                if (_windowsTextScale == textScale && _windowsHighContrast == highContrast && _useDarkTheme == darkTheme &&
+                    _windowsSystemColors.SequenceEqual(systemColors)) return;
+                _windowsTextScale = textScale;
+                _windowsHighContrast = highContrast;
+                _windowsSystemColors = systemColors;
+                _useDarkTheme = darkTheme;
+                ApplyVisuals();
+            }));
+        }
+
+        private static int[] ReadSystemColors() =>
+        [
+            SystemColors.Window.ToArgb(), SystemColors.WindowText.ToArgb(),
+            SystemColors.Highlight.ToArgb(), SystemColors.HighlightText.ToArgb(),
+            SystemColors.Control.ToArgb(), SystemColors.ControlText.ToArgb(),
+            SystemColors.ControlDark.ToArgb(), SystemColors.HotTrack.ToArgb(), SystemColors.GrayText.ToArgb()
+        ];
 
         protected override bool ShowWithoutActivation => _captureMode;
 
         private void BeginWindowDrag(object? sender, MouseEventArgs e)
         {
             if (_viewMode == SetupViewMode.Accessible ||
+                StartupActionBlocksNavigation ||
                 e.Button != MouseButtons.Left ||
                 sender == _root && e.Y > ControlDrawing.ScaleLogical(this, 100))
             {
@@ -973,8 +1040,29 @@ internal static class FirstRunSetup
 
         protected override void WndProc(ref Message message)
         {
+            if (message.Msg == WmDpiChanged && Visible && StartupActionBlocksNavigation)
+            {
+                // Keep the approval/install page fixed until both the helper
+                // and its verification finish; then apply the latest DPI once.
+                _pendingDpiChange = (message.WParam, Marshal.PtrToStructure<NativeRectangle>(message.LParam));
+                message.Result = IntPtr.Zero;
+                return;
+            }
+            int previousDpi = message.Msg == WmDpiChanged ? DeviceDpi : 0;
             base.WndProc(ref message);
+            if (message.Msg == WmDpiChanged && DeviceDpi != previousDpi)
+            {
+                // WinForms finishes scaling child controls after its resize
+                // callbacks. Fit the header and content to that settled DPI.
+                UpdateResponsiveLayout(rebuildContent: false);
+            }
+            if (message.Msg == WmDisplayChange && Visible)
+            {
+                _displayChangePending = true;
+                QueueSystemRefresh();
+            }
             if (_viewMode == SetupViewMode.Accessible ||
+                StartupActionBlocksNavigation ||
                 message.Msg != WmNcHitTest ||
                 message.Result != new IntPtr(HtClient))
             {
@@ -1894,6 +1982,12 @@ internal static class FirstRunSetup
 
         private void Continue()
         {
+            if (StartupActionInProgress && _step == StartupStep) return;
+            if (_runtimePreparationFailed)
+            {
+                _ = PrepareCompletionAsync();
+                return;
+            }
             if (_step == 2 && HasShortcutErrors())
             {
                 UpdateHotkeyRows();
@@ -1921,7 +2015,7 @@ internal static class FirstRunSetup
                 else
                 {
                     _startupServiceSkipped = false;
-                    ShowStep(CompleteStep);
+                    _ = PrepareCompletionAsync();
                 }
                 return;
             }
@@ -1935,16 +2029,45 @@ internal static class FirstRunSetup
         private void CompleteSetup(bool startupServiceSkipped)
         {
             _startupServiceSkipped = startupServiceSkipped;
-            Selection = new FirstRunSetupSelection(
+            Selection = CurrentSelection();
+            _accepted = true;
+            Close();
+        }
+
+        private FirstRunSetupSelection CurrentSelection() => new(
                 _language,
                 _themeMode,
                 _fontSize,
                 _enableKey,
-                startupServiceSkipped,
+                _startupServiceSkipped,
                 _viewMode,
                 _strictDataMode);
-            _accepted = true;
-            Close();
+
+        private async Task PrepareCompletionAsync()
+        {
+            if (_preparingRuntime) return;
+            _preparingRuntime = true;
+            _runtimePreparationFailed = false;
+            try
+            {
+                UpdateStartupServiceContent();
+                // Paint the waiting state before starting the local runtime.
+                await Task.Yield();
+                if (_prepareRuntime != null) await _prepareRuntime(CurrentSelection());
+                if (IsDisposed || Disposing) return;
+                _preparingRuntime = false;
+                ShowStep(CompleteStep);
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Write("FirstRunSetup.Runtime", ex);
+                _runtimePreparationFailed = true;
+            }
+            finally
+            {
+                _preparingRuntime = false;
+                if (!IsDisposed && !Disposing) UpdateStartupServiceContent();
+            }
         }
 
         private void SkipStartupService()
@@ -1961,7 +2084,7 @@ internal static class FirstRunSetup
             }
 
             _startupServiceSkipped = true;
-            ShowStep(CompleteStep);
+            _ = PrepareCompletionAsync();
         }
 
         private void ShowStep(int step, bool animate = true)
@@ -2729,7 +2852,7 @@ internal static class FirstRunSetup
             }
         }
 
-        private bool StartupActionInProgress =>
+        private bool StartupActionInProgress => _preparingRuntime ||
             _startupState is SetupStartupState.Checking or
                 SetupStartupState.AwaitingApproval or
                 SetupStartupState.Installing or
@@ -2786,13 +2909,16 @@ internal static class FirstRunSetup
             if (string.IsNullOrWhiteSpace(exePath))
             {
                 _startupState = SetupStartupState.Failed;
-                UpdateStartupServiceContent();
+                UpdateStartupServiceContent(relayout: false);
                 return;
             }
 
             _startupState = SetupStartupState.AwaitingApproval;
             UpdateStartupServiceContent(relayout: false);
-            await Task.Yield();
+            // Paint this same surface before the shell switches to the secure
+            // desktop. The UI thread must keep pumping while approval is open.
+            _startupServiceTile?.Update();
+            _footer.Update();
 
             Process? helper;
             try
@@ -2805,11 +2931,13 @@ internal static class FirstRunSetup
                 {
                     helper?.Dispose();
                     _startupHelper = null;
-                    helper = Process.Start(new ProcessStartInfo
+                    helper = await _launchStartupHelper(new ProcessStartInfo
                     {
                         FileName = exePath,
                         UseShellExecute = true,
                         Verb = "runas",
+                        WindowStyle = ProcessWindowStyle.Hidden,
+                        ErrorDialogParentHandle = Handle,
                         Arguments = Program.SetupStartupTaskInstallFlag +
                             " --startup-task-user " +
                             QuoteProcessArgument(currentUser)
@@ -2820,21 +2948,21 @@ internal static class FirstRunSetup
             catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
             {
                 _startupState = SetupStartupState.Declined;
-                UpdateStartupServiceContent();
+                UpdateStartupServiceContent(relayout: false);
                 return;
             }
             catch (Exception ex)
             {
                 ErrorLog.Write("FirstRunSetup.StartupLaunch", ex);
                 _startupState = SetupStartupState.Failed;
-                UpdateStartupServiceContent();
+                UpdateStartupServiceContent(relayout: false);
                 return;
             }
 
             if (helper == null)
             {
                 _startupState = SetupStartupState.Failed;
-                UpdateStartupServiceContent();
+                UpdateStartupServiceContent(relayout: false);
                 return;
             }
 
@@ -2845,9 +2973,7 @@ internal static class FirstRunSetup
                 {
                     // A stuck elevated helper must not permanently trap the user
                     // on this page. A retry observes the same running helper.
-                    if (!await ProcessOutput.WaitForExitAsync(helper, TimeSpan.FromMinutes(3)))
-                        throw new TimeoutException("The startup helper did not finish within three minutes.");
-                    int exitCode = helper.ExitCode;
+                    int exitCode = await _waitForStartupHelper(helper);
                     if (IsDisposed || Disposing)
                     {
                         return;
@@ -2855,8 +2981,7 @@ internal static class FirstRunSetup
 
                     _startupState = SetupStartupState.Verifying;
                     UpdateStartupServiceContent(relayout: false);
-                    StartupTaskService.InvalidateCache();
-                    bool ready = await Task.Run(() => StartupTaskService.IsReadyForCurrentBuild(out _));
+                    bool ready = await _verifyStartupService();
                     if (IsDisposed || Disposing)
                     {
                         return;
@@ -2907,6 +3032,32 @@ internal static class FirstRunSetup
             }
         }
 
+        private static Task<Process?> LaunchStartupHelperAsync(ProcessStartInfo startInfo)
+        {
+            var result = new TaskCompletionSource<Process?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var thread = new System.Threading.Thread(() =>
+            {
+                try { result.SetResult(Process.Start(startInfo)); }
+                catch (Exception ex) { result.SetException(ex); }
+            }) { IsBackground = true, Name = "QuickZoom setup approval" };
+            thread.SetApartmentState(System.Threading.ApartmentState.STA);
+            thread.Start();
+            return result.Task;
+        }
+
+        private static async Task<int> WaitForStartupHelperAsync(Process helper)
+        {
+            if (!await ProcessOutput.WaitForExitAsync(helper, TimeSpan.FromMinutes(3)))
+                throw new TimeoutException("The startup helper did not finish within three minutes.");
+            return helper.ExitCode;
+        }
+
+        private static Task<bool> VerifyStartupServiceAsync() => Task.Run(() =>
+        {
+            StartupTaskService.InvalidateCache();
+            return StartupTaskService.IsReadyForCurrentBuild(out _);
+        });
+
         private void UpdateStartupServiceContent(bool relayout = true)
         {
             if (_step != StartupStep)
@@ -2918,10 +3069,15 @@ internal static class FirstRunSetup
                 UpdateViewSelectorAvailability();
                 UpdateAccessibilityText();
                 UpdateResponsiveLayout(rebuildContent: false);
+                QueueSystemRefresh();
                 return;
             }
 
-            string statusText = T(_startupState switch
+            // Runtime readiness is a separate check; verified autostart must
+            // stay green instead of restarting its installation animation.
+            bool showRuntimeProgress = _preparingRuntime && _startupState != SetupStartupState.Ready;
+            string statusText = T(showRuntimeProgress ? "Setup.RuntimeStarting" :
+                _runtimePreparationFailed ? "Setup.RuntimeFailed" : _startupState switch
             {
                 SetupStartupState.Checking => "Setup.StartupStatusChecking",
                 SetupStartupState.NotConfigured => "Setup.StartupStatusNotConfigured",
@@ -2939,8 +3095,10 @@ internal static class FirstRunSetup
                 T("Setup.StartupBenefitElevated"),
                 T("Setup.StartupBenefitApproval"),
                 statusText,
-                _startupState);
-            if (_startupServiceTile != null) _startupServiceTile.SlowStatus = T("Setup.StartupStatusSlow");
+                showRuntimeProgress ? SetupStartupState.Verifying :
+                    _runtimePreparationFailed ? SetupStartupState.Failed : _startupState);
+            if (_startupServiceTile != null) _startupServiceTile.SlowStatus = T(
+                _preparingRuntime ? "Setup.RuntimeStarting" : "Setup.StartupStatusSlow");
 
             bool busy = StartupActionInProgress;
             _continueButton.Text = T(ContinueTextKey);
@@ -2948,12 +3106,13 @@ internal static class FirstRunSetup
                 _viewMode == SetupViewMode.Accessible ? 9.2f : 10.5f,
                 FontStyle.Bold);
             _continueButton.Enabled = !busy;
-            _backButton.Enabled = !busy;
-            _skipButton.Visible = !busy && _startupState != SetupStartupState.Ready;
+            _backButton.Enabled = !busy && !_runtimePreparationFailed;
+            _skipButton.Visible = !busy && !_runtimePreparationFailed && _startupState != SetupStartupState.Ready;
             _skipButton.Enabled = !busy;
             UpdateViewSelectorAvailability();
             UpdateAccessibilityText();
             if (relayout) UpdateResponsiveLayout(rebuildContent: false);
+            QueueSystemRefresh();
         }
 
         private void UpdateViewSelectorAvailability()
@@ -3032,7 +3191,8 @@ internal static class FirstRunSetup
                 .SelectMany(key => Translations(key))
             : Translations(ContinueTextKey);
 
-        private string ContinueTextKey => _step != StartupStep
+        private string ContinueTextKey => _preparingRuntime ? "Setup.StartupPleaseWait" :
+            _runtimePreparationFailed ? "Setup.StartupRetry" : _step != StartupStep
             ? (_step == CompleteStep ? "Setup.Finish" : "Setup.Continue")
             : _startupState switch
             {
@@ -3074,7 +3234,7 @@ internal static class FirstRunSetup
                 T("Setup.ViewAccessible"));
             _backButton.Text = T("Setup.Back");
             _skipButton.Text = T("Setup.StartupSkip");
-            _backButton.Visible = _step > 0 && !_startupOnly;
+            _backButton.Visible = _step > 0 && _step != CompleteStep && !_startupOnly;
             _skipButton.Visible = _step == StartupStep && _startupState != SetupStartupState.Ready;
 
             if (_headingLabel != null)
@@ -3567,7 +3727,8 @@ internal static class FirstRunSetup
         private Rectangle _progressBounds;
         private bool _completingProgress;
         private static readonly string[] StatusKeys = Enum.GetNames<SetupStartupState>()
-            .Select(state => "Setup.StartupStatus" + state).Append("Setup.StartupStatusSlow").ToArray();
+            .Select(state => "Setup.StartupStatus" + state).Concat(new[]
+                { "Setup.StartupStatusSlow", "Setup.RuntimeStarting", "Setup.RuntimeFailed" }).ToArray();
 
         public override Size GetPreferredSize(Size proposedSize)
         {

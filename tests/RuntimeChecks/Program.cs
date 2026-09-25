@@ -11,6 +11,12 @@ internal static class RuntimeChecks
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Contains("--per-monitor-dpi"))
+        {
+            Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+        }
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
         try
         {
@@ -27,6 +33,21 @@ internal static class RuntimeChecks
 
     private static void Run(string[] args)
     {
+        if (args.Contains("--setup-startup"))
+        {
+            SetupStartupChecks.Run(Assembly.Load("QuickZoom"), args[0]);
+            return;
+        }
+        if (args.Contains("--tracking-ui"))
+        {
+            TrackingUiChecks.Run(Assembly.Load("QuickZoom"), args[0], capture: true);
+            return;
+        }
+        if (args.Contains("--tracking-native"))
+        {
+            TrackingChecks.RunNative(Assembly.Load("QuickZoom"));
+            return;
+        }
         if (args.Contains("--native-only"))
         {
             NativeChecks.Run(Assembly.Load("QuickZoom"));
@@ -212,11 +233,14 @@ internal static class RuntimeChecks
 
     private static void RunReleaseChecks(Assembly assembly, string root)
     {
+        TrackingChecks.Run(assembly);
+        TrackingUiChecks.Run(assembly, root);
         PersistenceReleaseChecks.Run(assembly, root);
         UiReleaseChecks.Run(assembly, root);
         NativeRecoveryChecks.Run(assembly, root);
         InputReleaseChecks.Run(assembly, root);
         StartupReleaseChecks.Run(assembly, root);
+        SetupStartupChecks.Run(assembly, root);
     }
 
     private static IEnumerable<Control> Descendants(Control control)

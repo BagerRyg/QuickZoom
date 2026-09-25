@@ -45,6 +45,7 @@ internal sealed partial class TrayContext
         InstallHook();
         InstallKeyboardHook();
         InitTimers();
+        _focusTracking = new FocusTrackingWorker();
         UpdateMenuLabels();
         _coreRuntimeInitialized = true;
     }
@@ -77,6 +78,19 @@ internal sealed partial class TrayContext
             });
         };
         _startupTimer.Start();
+    }
+
+    internal bool IsStartupReady => _coreRuntimeInitialized && _startupInitialized && !_runtimeStopped;
+
+    internal async Task WaitForStartupReadyAsync()
+    {
+        long deadline = Environment.TickCount64 + 15000;
+        while (!IsStartupReady)
+        {
+            if (_runtimeStopped || Environment.TickCount64 >= deadline)
+                throw new TimeoutException("QuickZoom's tray and input hooks are not ready.");
+            await Task.Delay(50);
+        }
     }
 
     private void CompleteStartupInitialization()
@@ -272,7 +286,7 @@ internal sealed partial class TrayContext
             _exitRow = null;
             _magnifyToggle = null;
             _invertToggle = null;
-            _followToggle = null;
+            DisposeFollowOptionsMenu();
             _displayRow = null;
             _fullscreenModeButton = null;
             _lensModeButton = null;
@@ -312,11 +326,9 @@ internal sealed partial class TrayContext
         _invertRow.ActionRequested += (_, _) => ExecuteTrayAction(() => SetInvertEnabledState(!_invertEnabled));
         quickActions.Controls.Add(_invertRow);
 
-        _followToggle = CreateLocalizedToggle(palette, _followCursor, L("Tray.ToggleFollow"));
-        _followRow = new TrayMenuRow(palette, L("Tray.ToggleFollow"), toggle: _followToggle, icon: TrayFluentIcon.FollowCursor);
-        _followRow.Width = trayContentWidth;
-        _followRow.ActionRequested += (_, _) => ExecuteTrayAction(() => SetFollowCursor(!_followCursor));
-        quickActions.Controls.Add(_followRow);
+        AddTrayFollowingControls(quickActions, palette, trayContentWidth);
+        popup.CollapseExpandedSection = CollapseFollowOptions;
+        popup.HasOpenChildMenu = () => _followOptionsMenu?.Visible == true || _followMenuRestoringFocus;
 
         root.Controls.Add(quickActions);
 
@@ -475,7 +487,7 @@ internal sealed partial class TrayContext
         [
             L("Tray.ToggleMagnify"),
             L("Tray.ToggleInvert"),
-            L("Tray.ToggleFollow"),
+            L("Settings.TrackingMode"),
             L("Tray.MagnifiedDisplays"),
             L("Tray.KeyBinds"),
             L("Tray.Settings"),
@@ -491,7 +503,12 @@ internal sealed partial class TrayContext
             new Size(int.MaxValue, int.MaxValue),
             TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width);
         int accessoryAllowance = ControlDrawing.ScaleLogical(scaleOwner, 132);
-        int requested = Math.Max(baseline, widestLabel + accessoryAllowance);
+        using Font valueFont = ControlDrawing.UiFont("Segoe UI", 9.75f, FontStyle.Regular);
+        int followingWidth = TextRenderer.MeasureText(L("Settings.TrackingMode"), rowFont).Width +
+            Enum.GetValues<TrackingMode>().Select(mode => TrackingModeLabel(mode, compact: true))
+                .Append(L("Tray.FollowPaused")).Max(text => TextRenderer.MeasureText(text, valueFont).Width) +
+            ControlDrawing.ScaleLogical(scaleOwner, 120);
+        int requested = Math.Max(Math.Max(baseline, widestLabel + accessoryAllowance), followingWidth);
         int available = Math.Max(
             ControlDrawing.ScaleLogical(scaleOwner, 280),
             Screen.FromPoint(Cursor.Position).WorkingArea.Width - ControlDrawing.ScaleLogical(scaleOwner, 32));
@@ -773,11 +790,7 @@ internal sealed partial class TrayContext
             _invertRow.ApplyTheme(palette);
         }
 
-        if (_followRow != null && _followToggle != null)
-        {
-            _followToggle.IsOn = _followCursor;
-            _followRow.ApplyTheme(palette);
-        }
+        UpdateFollowingUi();
 
         if (_displayRow != null)
         {
@@ -896,11 +909,7 @@ internal sealed partial class TrayContext
             _invertRow.ApplyTheme(palette);
         }
 
-        if (_followRow != null && _followToggle != null)
-        {
-            _followToggle.IsOn = _followCursor;
-            _followRow.ApplyTheme(palette);
-        }
+        UpdateFollowingUi();
     }
 
     private void InitTimers()
@@ -968,7 +977,7 @@ internal sealed partial class TrayContext
         return !_runtimeStopped && _enabled &&
                _magActive &&
                _zoomPercent > 100 &&
-               (_followCursor || _zoomMode != ZoomMode.Fullscreen);
+               _followCursor;
     }
 
     private void UpdateFollowTimerState()
@@ -1382,9 +1391,12 @@ internal sealed partial class TrayContext
     {
         ResetExitConfirmation();
         _followCursor = followCursor;
+        if (followCursor) ResetActivityTracking();
+        else _focusTracking?.Clear();
         UpdateFollowTimerState();
 
         SaveSettings();
+        UpdateFollowingUi();
         UpdateTrayQuickToggleState();
     }
 

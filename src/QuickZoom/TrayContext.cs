@@ -216,7 +216,6 @@ internal sealed partial class TrayContext : ApplicationContext
     private TrayMenuRow? _exitRow;
     private ToggleSwitchControl? _magnifyToggle;
     private ToggleSwitchControl? _invertToggle;
-    private ToggleSwitchControl? _followToggle;
     private TrayMenuRow? _displayRow;
     private TrayModeButton? _fullscreenModeButton;
     private TrayModeButton? _lensModeButton;
@@ -401,6 +400,8 @@ internal sealed partial class TrayContext : ApplicationContext
         }
 
         _runtimeStopped = true;
+        RunGuarded("Shutdown.Tracking", () => _focusTracking?.Dispose());
+        _focusTracking = null;
         RunGuarded("Shutdown.ReadyMarker", () => _startupReadyMarker?.Dispose());
         _startupReadyMarker = null;
         RunGuarded("Shutdown.Activation", () => _settingsActivation?.Dispose());

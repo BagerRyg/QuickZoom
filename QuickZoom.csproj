@@ -8,8 +8,8 @@
     <PlatformTarget>x64</PlatformTarget>
     <RollForward>Major</RollForward>
     <Version>3.0.0</Version>
-    <FileVersion>3.0.0.345</FileVersion>
-    <InformationalVersion>3.0.0.345</InformationalVersion>
+    <FileVersion>3.0.0.354</FileVersion>
+    <InformationalVersion>3.0.0.354</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <AssemblyVersion>3.0.0.0</AssemblyVersion>
     <ApplicationIcon>assets\icons\magnifier-dark.ico</ApplicationIcon>

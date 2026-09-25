@@ -6,7 +6,6 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Windows.Automation;
 using System.Windows.Forms;
 
 namespace QuickZoom;
@@ -76,15 +75,6 @@ internal sealed partial class TrayContext
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern bool EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
 
-    [DllImport("user32.dll")]
-    private static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO lpgui);
-
-    [DllImport("user32.dll")]
-    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-
-    [DllImport("user32.dll")]
-    private static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
-
     private const uint SPI_SETCURSORS = 0x0057;
     private const uint LWA_ALPHA = 0x00000002;
     private const int WS_CHILD = 0x40000000;
@@ -133,19 +123,6 @@ internal sealed partial class TrayContext
         public uint dmPanningHeight;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct GUITHREADINFO
-    {
-        public int cbSize;
-        public int flags;
-        public IntPtr hwndActive;
-        public IntPtr hwndFocus;
-        public IntPtr hwndCapture;
-        public IntPtr hwndMenuOwner;
-        public IntPtr hwndMoveSize;
-        public IntPtr hwndCaret;
-        public RECT rcCaret;
-    }
     private const int WS_EX_NOACTIVATE = 0x08000000;
     private const int WS_EX_TOPMOST = 0x00000008;
     private const int WS_CLIPCHILDREN = 0x02000000;
@@ -1106,6 +1083,7 @@ internal sealed partial class TrayContext
         }
 
         long frameStartTicks = Stopwatch.GetTimestamp();
+        pt = ResolveActivityTracking(pt);
 
         if (_zoomMode != ZoomMode.Fullscreen)
         {
@@ -1238,13 +1216,17 @@ internal sealed partial class TrayContext
 
     private void ApplyOverlayTransform(POINT fallbackPoint)
     {
-        Point anchor = GetTrackingPoint(new Point(fallbackPoint.X, fallbackPoint.Y));
+        Point anchor = new(fallbackPoint.X, fallbackPoint.Y);
         Screen screen = Screen.FromPoint(anchor);
+        Size overlaySize = _zoomMode == ZoomMode.Docked ? BuildDockBounds(screen.Bounds, anchor).Size
+            : GetLensDimensions(screen.Bounds);
+        float mag = PercentToMag(_zoomPercent);
+        anchor = TrackOverlayAnchor(anchor, screen.Bounds, new Size(
+            Math.Max(1, (int)(overlaySize.Width / mag)), Math.Max(1, (int)(overlaySize.Height / mag))));
         Rectangle bounds = _zoomMode == ZoomMode.Docked
             ? BuildDockBounds(screen.Bounds, anchor)
             : BuildLensBounds(anchor, screen.Bounds);
 
-        float mag = PercentToMag(_zoomPercent);
         RECT sourceRect = BuildOverlaySourceRect(screen.Bounds, anchor, bounds.Size, mag);
         MAGCOLOREFFECT colorEffect = _invertColors ? InvertColorEffect : IdentityColorEffect;
         LensShape shape = _zoomMode == ZoomMode.Docked ? LensShape.Rectangle : _lensShape;
@@ -1339,18 +1321,25 @@ internal sealed partial class TrayContext
             : target;
         _smoothedLensCenter = center;
 
-        int maxWidth = _lensShape == LensShape.Rectangle
-            ? screenBounds.Width : Math.Min(screenBounds.Width, screenBounds.Height);
-        int width = Math.Clamp(_lensSize, Math.Min(100, maxWidth), maxWidth);
-        int height = _lensShape == LensShape.Rectangle
-            ? Math.Clamp((int)Math.Round(width * 9.0 / 16.0), 56, Math.Max(56, screenBounds.Height))
-            : width;
+        Size size = GetLensDimensions(screenBounds);
+        int width = size.Width;
+        int height = size.Height;
         int x = (int)Math.Round(center.X - (width / 2.0));
         int y = (int)Math.Round(center.Y - (height / 2.0));
 
         x = Math.Clamp(x, screenBounds.Left, Math.Max(screenBounds.Left, screenBounds.Right - width));
         y = Math.Clamp(y, screenBounds.Top, Math.Max(screenBounds.Top, screenBounds.Bottom - height));
         return new Rectangle(x, y, width, height);
+    }
+
+    private Size GetLensDimensions(Rectangle screenBounds)
+    {
+        int maxWidth = _lensShape == LensShape.Rectangle
+            ? screenBounds.Width : Math.Min(screenBounds.Width, screenBounds.Height);
+        int width = Math.Clamp(_lensSize, Math.Min(100, maxWidth), maxWidth);
+        int height = _lensShape == LensShape.Rectangle
+            ? Math.Clamp((int)Math.Round(width * 9.0 / 16.0), 56, Math.Max(56, screenBounds.Height)) : width;
+        return new Size(width, height);
     }
 
     private Rectangle BuildDockBounds(Rectangle screenBounds, Point anchor)
@@ -1420,113 +1409,6 @@ internal sealed partial class TrayContext
             right = offsetX + viewW,
             bottom = offsetY + viewH
         };
-    }
-
-    private Point GetTrackingPoint(Point fallback)
-    {
-        return fallback;
-    }
-
-    private Point GetFocusTrackingPoint(Point fallback)
-    {
-        if (TryGetAutomationFocusPoint(out Point automationPoint))
-        {
-            return automationPoint;
-        }
-
-        return TryGetGuiFocusPoint(out Point focusPoint) ? focusPoint : fallback;
-    }
-
-    private static bool TryGetAutomationFocusPoint(out Point point)
-    {
-        point = default;
-        try
-        {
-            AutomationElement element = AutomationElement.FocusedElement;
-            if (element == null)
-            {
-                return false;
-            }
-
-            System.Windows.Rect rect = element.Current.BoundingRectangle;
-            if (rect.IsEmpty || rect.Width <= 0 || rect.Height <= 0)
-            {
-                return false;
-            }
-
-            point = new Point((int)Math.Round(rect.Left + (rect.Width / 2.0)), (int)Math.Round(rect.Top + (rect.Height / 2.0)));
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static bool TryGetGuiFocusPoint(out Point point)
-    {
-        point = default;
-        IntPtr foreground = GetForegroundWindow();
-        if (foreground == IntPtr.Zero)
-        {
-            return false;
-        }
-
-        uint threadId = GetWindowThreadProcessId(foreground, out _);
-        if (threadId == 0)
-        {
-            return false;
-        }
-
-        var info = new GUITHREADINFO { cbSize = Marshal.SizeOf<GUITHREADINFO>() };
-        if (!GetGUIThreadInfo(threadId, ref info) || info.hwndFocus == IntPtr.Zero)
-        {
-            return false;
-        }
-
-        if (!GetWindowRect(info.hwndFocus, out RECT rect))
-        {
-            return false;
-        }
-
-        point = new Point(rect.left + ((rect.right - rect.left) / 2), rect.top + ((rect.bottom - rect.top) / 2));
-        return true;
-    }
-
-    private static bool TryGetCaretPoint(out Point point)
-    {
-        point = default;
-        IntPtr foreground = GetForegroundWindow();
-        if (foreground == IntPtr.Zero)
-        {
-            return false;
-        }
-
-        uint threadId = GetWindowThreadProcessId(foreground, out _);
-        if (threadId == 0)
-        {
-            return false;
-        }
-
-        var info = new GUITHREADINFO { cbSize = Marshal.SizeOf<GUITHREADINFO>() };
-        if (!GetGUIThreadInfo(threadId, ref info) || info.hwndCaret == IntPtr.Zero)
-        {
-            return false;
-        }
-
-        POINT caret = new()
-        {
-            X = info.rcCaret.left + ((info.rcCaret.right - info.rcCaret.left) / 2),
-            Y = info.rcCaret.top + ((info.rcCaret.bottom - info.rcCaret.top) / 2)
-        };
-
-        if (!ClientToScreen(info.hwndCaret, ref caret))
-        {
-            return false;
-        }
-
-        point = new Point(caret.X, caret.Y);
-        return true;
     }
 
     private void ApplyFullscreenTransform(POINT pt, float mag, List<Screen> selectedScreens)
@@ -1627,13 +1509,13 @@ internal sealed partial class TrayContext
         if (offsetX > maxX) offsetX = maxX;
         if (offsetY > maxY) offsetY = maxY;
 
-        return new RECT
+        return TrackSourceRectangle(bounds, new RECT
         {
             left = offsetX,
             top = offsetY,
             right = offsetX + viewW,
             bottom = offsetY + viewH
-        };
+        });
     }
 
     private int GetEffectiveRenderingFps()

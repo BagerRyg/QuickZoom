@@ -16,8 +16,8 @@ internal sealed class ColorPaletteControl : Control
     private int _hoveredIndex = -1;
     private int _keyboardIndex = -1;
     private bool _updatingHeight;
-    private const int LogicalVisibleSwatchSize = 22;
     private const int LogicalHitTargetSize = 32;
+    private const int LogicalSwatchInset = 5;
 
     public ColorPaletteControl(ThemePalette palette, Color[] colors, Color selectedColor)
     {
@@ -169,7 +169,7 @@ internal sealed class ColorPaletteControl : Control
         if (selectedIndex >= 0)
         {
             using Font labelFont = ControlDrawing.UiFont("Segoe UI", 9f, FontStyle.Regular);
-            int top = (int)Math.Ceiling(_colors.Length / (double)GetColumnCount()) * ControlDrawing.ScaleLogical(this, LogicalHitTargetSize);
+            int top = (int)Math.Ceiling(_colors.Length / (double)GetColumnCount()) * GetCellHeight();
             TextRenderer.DrawText(e.Graphics, GetAccessibleColorName(selectedIndex), labelFont,
                 new Rectangle(0, top + 4, Width, Math.Max(1, Height - top - 4)), _palette.Text,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
@@ -215,9 +215,8 @@ internal sealed class ColorPaletteControl : Control
     private Rectangle GetSwatchBounds(int index)
     {
         Rectangle hitTarget = GetHitTargetBounds(index);
-        int swatchSize = Math.Min(
-            ControlDrawing.ScaleLogical(this, LogicalVisibleSwatchSize),
-            Math.Min(hitTarget.Width, hitTarget.Height));
+        int swatchSize = Math.Max(1, Math.Min(hitTarget.Width, hitTarget.Height) -
+            2 * ControlDrawing.ScaleLogical(this, LogicalSwatchInset));
         int x = hitTarget.Left + ((hitTarget.Width - swatchSize) / 2);
         int y = hitTarget.Top + ((hitTarget.Height - swatchSize) / 2);
         return new Rectangle(x, y, swatchSize, swatchSize);
@@ -225,11 +224,13 @@ internal sealed class ColorPaletteControl : Control
 
     private Rectangle GetHitTargetBounds(int index)
     {
-        int hitTargetSize = ControlDrawing.ScaleLogical(this, LogicalHitTargetSize);
         int columns = GetColumnCount();
+        int cellHeight = GetCellHeight();
         int row = index / columns;
         int column = index % columns;
-        return new Rectangle(column * hitTargetSize, row * hitTargetSize, hitTargetSize, hitTargetSize);
+        int left = column * Width / columns;
+        int right = (column + 1) * Width / columns;
+        return new Rectangle(left, row * cellHeight, right - left, cellHeight);
     }
 
     private void DrawSwatch(Graphics graphics, Rectangle bounds, Color color, bool hovered, bool selected, bool keyboardFocused)
@@ -264,8 +265,13 @@ internal sealed class ColorPaletteControl : Control
     private int GetColumnCount()
     {
         int cellSize = ControlDrawing.ScaleLogical(this, LogicalHitTargetSize);
-        return Math.Max(1, Width / Math.Max(1, cellSize));
+        int columns = Math.Max(1, Math.Min(_colors.Length, Width / Math.Max(1, cellSize)));
+        // Use complete rows, then distribute the available width across them.
+        while (columns > 1 && _colors.Length % columns != 0) columns--;
+        return columns;
     }
+
+    private int GetCellHeight() => Math.Max(1, Width / GetColumnCount());
 
     private void UpdatePreferredHeight()
     {
@@ -275,7 +281,7 @@ internal sealed class ColorPaletteControl : Control
         }
 
         _updatingHeight = true;
-        int cellSize = ControlDrawing.ScaleLogical(this, LogicalHitTargetSize);
+        int cellSize = GetCellHeight();
         int rows = (int)Math.Ceiling(_colors.Length / (double)GetColumnCount());
         using Font labelFont = ControlDrawing.UiFont("Segoe UI", 9f, FontStyle.Regular);
         int preferredHeight = Math.Max(cellSize, rows * cellSize) + labelFont.Height + 8;

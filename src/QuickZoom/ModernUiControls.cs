@@ -1610,11 +1610,15 @@ internal sealed class TrayModeButton : Control, IChildSurfaceBackgroundRenderer
 
 internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildSurfaceBackgroundRenderer
 {
+    private readonly bool _isExpandable;
+    private readonly bool _inlineValue;
+    private readonly bool _isRadioChoice;
     private readonly GraphicsPath? _iconPath;
     private readonly Label _titleLabel;
     private readonly Label? _rightLabel;
     private readonly ToggleSwitchControl? _toggle;
     private Rectangle _iconBounds;
+    private Rectangle _valueBounds;
     private ThemePalette _palette;
     private bool _hovered;
     private bool _pressed;
@@ -1622,8 +1626,12 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
     private bool _isDestructive;
     private bool _isSuccess;
 
-    public TrayMenuRow(ThemePalette palette, string title, string? rightText = null, ToggleSwitchControl? toggle = null, TrayFluentIcon? icon = null)
+    public TrayMenuRow(ThemePalette palette, string title, string? rightText = null, ToggleSwitchControl? toggle = null,
+        TrayFluentIcon? icon = null, bool isExpandable = false, bool isRadioChoice = false, bool inlineValue = false)
     {
+        _isExpandable = isExpandable;
+        _inlineValue = inlineValue;
+        _isRadioChoice = isRadioChoice;
         _palette = palette;
         SuspendLayout();
         SetStyle(
@@ -1676,7 +1684,7 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
                 Text = rightText,
                 AutoSize = false,
                 TextAlign = ContentAlignment.MiddleRight,
-                Font = ControlDrawing.UiFont("Segoe UI", 8.75f, FontStyle.Regular),
+                Font = ControlDrawing.UiFont("Segoe UI", isExpandable ? 9.75f : 8.75f, FontStyle.Regular),
                 BackColor = Color.Transparent
             };
             Controls.Add(_rightLabel);
@@ -1733,6 +1741,7 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
             {
                 _rightLabel.Text = value;
                 AccessibleDescription = value;
+                PerformLayout();
                 AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);
             }
         }
@@ -1807,7 +1816,7 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
                     : Color.FromArgb(24, 94, 54);
             }
 
-            if (_hovered || _pressed || _active || ShowsRowFocusVisual)
+            if (_hovered || _pressed || (_active && (!_inlineValue || AccessibilityPreferences.HighContrast)) || ShowsRowFocusVisual)
             {
                 if (_isDestructive)
                 {
@@ -1844,7 +1853,8 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
         _titleLabel.ForeColor = highContrastHighlight ? SystemColors.HighlightText : palette.Text;
         if (_rightLabel != null)
         {
-            _rightLabel.ForeColor = highContrastHighlight ? SystemColors.HighlightText : palette.SecondaryText;
+            _rightLabel.ForeColor = highContrastHighlight ? SystemColors.HighlightText :
+                _inlineValue ? palette.Text : palette.SecondaryText;
         }
 
         _toggle?.ApplyTheme(palette);
@@ -1864,7 +1874,7 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
         int right = Width - Padding.Right;
         int left = Padding.Left;
 
-        if (_iconPath != null)
+        if (_iconPath != null || _isRadioChoice)
         {
             int iconWidth = ControlDrawing.ScaleLogical(this, 20);
             int iconHeight = Math.Min(innerHeight, ControlDrawing.ScaleLogical(this, 18));
@@ -1872,7 +1882,31 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
             left = _iconBounds.Right + ControlDrawing.ScaleLogical(this, 10);
         }
 
-        if (_toggle != null)
+        if (_inlineValue && _rightLabel != null)
+        {
+            int titleWidth = TextRenderer.MeasureText(_titleLabel.Text, _titleLabel.Font).Width;
+            _titleLabel.Bounds = new Rectangle(left, y, titleWidth, innerHeight);
+            int valueLeft = left + titleWidth + ControlDrawing.ScaleLogical(this, 12);
+            int verticalInset = ControlDrawing.ScaleLogical(this, 5);
+            _valueBounds = new Rectangle(valueLeft, y + verticalInset, right - valueLeft + ControlDrawing.ScaleLogical(this, 4),
+                innerHeight - verticalInset * 2);
+            int textInset = ControlDrawing.ScaleLogical(this, 10);
+            _rightLabel.TextAlign = ContentAlignment.MiddleLeft;
+            _rightLabel.Bounds = new Rectangle(valueLeft + textInset, _valueBounds.Top,
+                Math.Max(1, _valueBounds.Width - textInset - ControlDrawing.ScaleLogical(this, 30)), _valueBounds.Height);
+        }
+        else if (_isExpandable && _rightLabel != null)
+        {
+            int textWidth = Math.Max(1, right - left - ControlDrawing.ScaleLogical(this, 24));
+            int titleHeight = TextRenderer.MeasureText(_titleLabel.Text, _titleLabel.Font).Height;
+            int valueHeight = TextRenderer.MeasureText(_rightLabel.Text, _rightLabel.Font).Height;
+            int gap = ControlDrawing.ScaleLogical(this, 2);
+            int top = y + Math.Max(0, (innerHeight - titleHeight - valueHeight - gap) / 2);
+            _titleLabel.Bounds = new Rectangle(left, top, textWidth, titleHeight);
+            _rightLabel.TextAlign = ContentAlignment.MiddleLeft;
+            _rightLabel.Bounds = new Rectangle(left, top + titleHeight + gap, textWidth, valueHeight);
+        }
+        else if (_toggle != null)
         {
             Size toggleSize = _toggle.Size;
             _toggle.Location = new Point(right - toggleSize.Width, y + Math.Max(0, (innerHeight - toggleSize.Height) / 2));
@@ -1922,11 +1956,13 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
         ActionRequested?.Invoke(this, EventArgs.Empty);
     }
 
-    protected override bool IsInputKey(Keys keyData) => keyData is Keys.Enter or Keys.Space || base.IsInputKey(keyData);
+    protected override bool IsInputKey(Keys keyData) => keyData is Keys.Enter or Keys.Space ||
+        (_isExpandable && keyData is (Keys.Left or Keys.Right)) || base.IsInputKey(keyData);
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
-        if (e.KeyCode is Keys.Enter or Keys.Space)
+        if (e.KeyCode is Keys.Enter or Keys.Space ||
+            _isExpandable && ((e.KeyCode == Keys.Right && !Active) || (e.KeyCode == Keys.Left && Active)))
         {
             OnClick(EventArgs.Empty);
             e.Handled = true;
@@ -1948,7 +1984,7 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
         Rectangle fillRect = new(4, 1, Math.Max(8, Width - 8), Math.Max(8, Height - 2));
-        if (_hovered || _pressed || _active || _isSuccess || ShowsRowFocusVisual)
+        if (_hovered || _pressed || (_active && (!_inlineValue || AccessibilityPreferences.HighContrast)) || _isSuccess || ShowsRowFocusVisual)
         {
             using GraphicsPath path = ControlDrawing.RoundedRect(fillRect, 9);
             Color fill = SurfaceBackgroundColor;
@@ -1967,9 +2003,31 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
             }
         }
 
+        PaintValueField(e.Graphics);
+
         if (ShowsRowFocusVisual)
         {
             ControlDrawing.DrawFocusRing(e.Graphics, fillRect, ControlDrawing.ScaleLogical(this, 9), _palette);
+        }
+
+        if (_isExpandable || (_isRadioChoice && Active))
+        {
+            Color glyphColor = AccessibilityPreferences.HighContrast &&
+                (_hovered || _pressed || _active || ShowsRowFocusVisual) ? SystemColors.HighlightText : _palette.Text;
+            using var glyphPen = new Pen(glyphColor, ControlDrawing.ScaleLogical(this, 2))
+            { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
+            int unit = ControlDrawing.ScaleLogical(this, 4);
+            int cx = _isExpandable ? Width - Padding.Right - unit * 2 : _iconBounds.Left + _iconBounds.Width / 2;
+            int cy = Height / 2;
+            if (_isExpandable)
+            {
+                int direction = Active ? -1 : 1;
+                e.Graphics.DrawLines(glyphPen, [new Point(cx - unit, cy - direction * unit / 2),
+                    new Point(cx, cy + direction * unit / 2), new Point(cx + unit, cy - direction * unit / 2)]);
+            }
+            else
+                e.Graphics.DrawLines(glyphPen, [new Point(cx - unit, cy), new Point(cx - unit / 3, cy + unit),
+                    new Point(cx + unit + unit / 2, cy - unit)]);
         }
 
         if (_iconPath != null)
@@ -1992,7 +2050,7 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
         using SolidBrush backgroundBrush = new(ControlDrawing.EffectiveBackColor(this));
         graphics.FillRectangle(backgroundBrush, childBounds);
 
-        if (_hovered || _pressed || _active || _isSuccess || ShowsRowFocusVisual)
+        if (_hovered || _pressed || (_active && (!_inlineValue || AccessibilityPreferences.HighContrast)) || _isSuccess || ShowsRowFocusVisual)
         {
             Rectangle fillRect = new(4, 1, Math.Max(8, Width - 8), Math.Max(8, Height - 2));
             using GraphicsPath path = ControlDrawing.RoundedRect(fillRect, 9);
@@ -2000,7 +2058,24 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
             graphics.FillPath(fillBrush, path);
         }
 
+        PaintValueField(graphics);
         graphics.Clip = clip;
+    }
+
+    private void PaintValueField(Graphics graphics)
+    {
+        if (!_inlineValue || _valueBounds.Width < 2 || _valueBounds.Height < 2) return;
+        bool highContrast = AccessibilityPreferences.HighContrast;
+        bool highlighted = _active || _hovered || ShowsRowFocusVisual;
+        Color fill = highContrast && highlighted ? SystemColors.Highlight : _active
+            ? ControlDrawing.Blend(_palette.MenuBackground, _palette.Accent, 24)
+            : ControlContrast.FieldBackground(_palette);
+        using GraphicsPath path = ControlDrawing.RoundedRect(_valueBounds, ControlDrawing.ScaleLogical(this, 7));
+        using SolidBrush brush = new(fill);
+        using Pen pen = new(highContrast ? SystemColors.WindowText :
+            _active ? _palette.Accent : ControlContrast.FieldBorder(_palette));
+        graphics.FillPath(brush, path);
+        graphics.DrawPath(pen, path);
     }
 
     private void SetState(bool hovered, bool pressed)
@@ -2060,7 +2135,9 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
     protected override void OnCreateControl()
     {
         base.OnCreateControl();
-        Height = ControlDrawing.ScaleLogical(this, 44 + (int)Math.Round((ControlDrawing.UiFontScale - 1f) * 18f));
+        Height = ControlDrawing.ScaleLogical(this, _isExpandable && !_inlineValue
+            ? 60 + (int)Math.Round((ControlDrawing.UiFontScale - 1f) * 40f)
+            : 44 + (int)Math.Round((ControlDrawing.UiFontScale - 1f) * 18f));
         Padding = new Padding(
             ControlDrawing.ScaleLogical(this, 12),
             0,
@@ -2082,11 +2159,15 @@ internal sealed class TrayMenuRow : Control, ISurfaceBackgroundProvider, IChildS
 
     private sealed class MenuRowAccessibleObject(TrayMenuRow owner) : ControlAccessibleObject(owner)
     {
-        public override AccessibleRole Role => owner._toggle != null ? AccessibleRole.CheckButton : AccessibleRole.PushButton;
+        public override AccessibleRole Role => owner._isRadioChoice ? AccessibleRole.RadioButton :
+            owner._isExpandable ? AccessibleRole.ButtonDropDown :
+            owner._toggle != null ? AccessibleRole.CheckButton : AccessibleRole.PushButton;
 
         public override AccessibleStates State => base.State |
             AccessibleStates.Focusable |
-            (owner._toggle?.IsOn == true ? AccessibleStates.Checked : AccessibleStates.None) |
+            (owner._toggle?.IsOn == true || owner._isRadioChoice && owner.Active ? AccessibleStates.Checked : AccessibleStates.None) |
+            (owner._isExpandable ? AccessibleStates.HasPopup |
+                (owner.Active ? AccessibleStates.Expanded : AccessibleStates.Collapsed) : AccessibleStates.None) |
             (owner.Active ? AccessibleStates.Selected : AccessibleStates.None) |
             (owner.Enabled ? AccessibleStates.None : AccessibleStates.Unavailable);
 
@@ -4444,11 +4525,12 @@ internal sealed class SettingsRow : ModernSurfacePanel
     private readonly int _accessoryPreferredWidth;
     private readonly string? _valueText;
     private readonly bool _compactDescription;
+    private readonly bool _fullWidthControl;
     private readonly string _baseAccessibleDescription;
     private bool _isStacked;
     private bool _updatingLayoutMetrics;
 
-    public SettingsRow(ThemePalette palette, string title, string description, Control control, int rightColumnWidth = 220, string? valueText = null, bool compactDescription = false)
+    public SettingsRow(ThemePalette palette, string title, string description, Control control, int rightColumnWidth = 220, string? valueText = null, bool compactDescription = false, bool fullWidthControl = false)
     {
         bool hasDescription = !string.IsNullOrWhiteSpace(description);
         _accessoryControl = control;
@@ -4456,6 +4538,7 @@ internal sealed class SettingsRow : ModernSurfacePanel
         _accessoryPreferredWidth = control.Width;
         _valueText = valueText;
         _compactDescription = compactDescription;
+        _fullWidthControl = fullWidthControl;
         _baseAccessibleDescription = description;
         CornerRadius = 9;
         AutoSize = true;
@@ -4669,6 +4752,10 @@ internal sealed class SettingsRow : ModernSurfacePanel
         }
 
         _updatingLayoutMetrics = true;
+        SuspendLayout();
+        _grid.SuspendLayout();
+        _left.SuspendLayout();
+        _right.SuspendLayout();
         int availableWidth = Math.Max(1, Width - Padding.Horizontal);
         Size gridMaximumSize = new(availableWidth, 0);
         if (_grid.MaximumSize != gridMaximumSize)
@@ -4693,7 +4780,7 @@ internal sealed class SettingsRow : ModernSurfacePanel
         int stackThreshold = Math.Max(
             ControlDrawing.ScaleLogical(this, 560),
             effectiveRightColumnWidth + ControlDrawing.ScaleLogical(this, 280));
-        bool shouldStack = availableWidth < stackThreshold || ControlDrawing.UiFontScale >= 1.55f;
+        bool shouldStack = _fullWidthControl || availableWidth < stackThreshold || ControlDrawing.UiFontScale >= 1.55f;
         if (_isStacked != shouldStack)
         {
             _isStacked = shouldStack;
@@ -4770,7 +4857,7 @@ internal sealed class SettingsRow : ModernSurfacePanel
         if (!_accessoryControl.AutoSize && _accessoryPreferredWidth > 0)
         {
             int accessoryWidth = _isStacked
-                ? Math.Min(accessoryPreferredWidth, availableWidth)
+                ? (_fullWidthControl ? availableWidth : Math.Min(accessoryPreferredWidth, availableWidth))
                 : accessoryPreferredWidth;
             int nextAccessoryWidth = Math.Max(1, accessoryWidth);
             if (_accessoryControl.Width != nextAccessoryWidth)
@@ -4788,6 +4875,10 @@ internal sealed class SettingsRow : ModernSurfacePanel
             }
         }
 
+        _left.ResumeLayout(performLayout: true);
+        _right.ResumeLayout(performLayout: true);
+        _grid.ResumeLayout(performLayout: true);
+        ResumeLayout(performLayout: true);
         _updatingLayoutMetrics = false;
     }
 }
@@ -4946,6 +5037,7 @@ internal sealed class SettingsSection : Panel
         int targetWidth = Math.Max(1, ClientSize.Width);
         _titleLabel.MaximumSize = new Size(targetWidth, 0);
         _descriptionLabel.MaximumSize = new Size(targetWidth, 0);
+        _rows.SuspendLayout();
         foreach (Control row in _rows.Controls)
         {
             if (row.Width != targetWidth)
@@ -4953,6 +5045,7 @@ internal sealed class SettingsSection : Panel
                 row.Width = targetWidth;
             }
         }
+        _rows.ResumeLayout(performLayout: true);
     }
 }
 
@@ -5056,6 +5149,8 @@ internal class SettingsPageView : UserControl
         }
 
         int targetWidth = Math.Max(1, ClientSize.Width);
+        _layout.SuspendLayout();
+        _sectionHost.SuspendLayout();
         _titleLabel.MaximumSize = new Size(targetWidth, 0);
         _descriptionLabel.MaximumSize = new Size(targetWidth, 0);
         Size maximumSize = new(targetWidth, int.MaxValue);
@@ -5091,6 +5186,8 @@ internal class SettingsPageView : UserControl
                 section.Width = targetWidth;
             }
         }
+        _sectionHost.ResumeLayout(performLayout: true);
+        _layout.ResumeLayout(performLayout: true);
     }
 }
 
@@ -5236,7 +5333,7 @@ internal sealed class SettingsContentHost : Panel
 
     public void RefreshActivePageLayoutIfNeeded()
     {
-        LayoutActivePage();
+        QueueActivePageLayout();
     }
 
     public void BeginInteractiveResize()
@@ -5365,16 +5462,21 @@ internal sealed class SettingsContentHost : Panel
 
         _layoutInProgress = true;
         int previousScrollY = _resetScrollOnNextLayout ? 0 : ScrollY;
+        // Child bounds changes can paint synchronously; draw only the finished
+        // layout so a drag does not repaint every intermediate row size.
+        bool redrawSuspended = Visible && WindowChrome.TrySetRedraw(this, enabled: false);
         SuspendLayout();
         try
         {
-            int pageWidth = Math.Max(1, Math.Min(ClientSize.Width, ControlDrawing.ScaleLogical(this, 960)));
+            bool hadScrollBar = _verticalScrollBar.Visible;
+            int scrollBarSpace = _verticalScrollBar.Width + GetScrollBarGap();
+            int pageWidth = Math.Max(1, Math.Min(ClientSize.Width - (hadScrollBar ? scrollBarSpace : 0), ControlDrawing.ScaleLogical(this, 960)));
             int pageHeight = LayoutPage(pageWidth);
             int overflowTolerance = ControlDrawing.ScaleLogical(this, 2);
             bool needsScrollBar = pageHeight > ClientSize.Height + overflowTolerance;
-            if (needsScrollBar)
+            if (needsScrollBar != hadScrollBar)
             {
-                pageWidth = Math.Max(1, Math.Min(ClientSize.Width - _verticalScrollBar.Width - GetScrollBarGap(), ControlDrawing.ScaleLogical(this, 960)));
+                pageWidth = Math.Max(1, Math.Min(ClientSize.Width - (needsScrollBar ? scrollBarSpace : 0), ControlDrawing.ScaleLogical(this, 960)));
                 pageHeight = LayoutPage(pageWidth);
             }
 
@@ -5395,6 +5497,7 @@ internal sealed class SettingsContentHost : Panel
         finally
         {
             ResumeLayout(performLayout: false);
+            if (redrawSuspended) _ = WindowChrome.TrySetRedraw(this, enabled: true);
             _layoutInProgress = false;
             _resetScrollOnNextLayout = false;
             _lastLaidOutPage = _activePage;
@@ -5412,6 +5515,7 @@ internal sealed class SettingsContentHost : Panel
 
         Size minimumSize = new(pageWidth, 0);
         Size maximumSize = new(pageWidth, int.MaxValue);
+        _activePage.SuspendLayout();
         if (_activePage.MinimumSize != minimumSize)
         {
             _activePage.MinimumSize = minimumSize;
@@ -5427,7 +5531,7 @@ internal sealed class SettingsContentHost : Panel
             _activePage.Width = pageWidth;
         }
 
-        _activePage.PerformLayout();
+        _activePage.ResumeLayout(performLayout: true);
         int childBottom = GetChildBottom(_activePage);
         return Math.Max(1, childBottom);
     }
@@ -5826,6 +5930,8 @@ internal sealed class SettingsForm : Form
             }
 
             updatingSidebarMetrics = true;
+            root.SuspendLayout();
+            sidebarHeader.SuspendLayout();
             try
             {
                 bool narrow = ClientSize.Width < ControlDrawing.ScaleLogical(this, 700);
@@ -5881,6 +5987,8 @@ internal sealed class SettingsForm : Form
             }
             finally
             {
+                sidebarHeader.ResumeLayout(performLayout: true);
+                root.ResumeLayout(performLayout: true);
                 updatingSidebarMetrics = false;
             }
         }
@@ -7153,7 +7261,7 @@ internal sealed class TrayPopupWindow : Form
                     {
                         try
                         {
-                            if (!IsDisposed && Visible && !ContainsFocus && !IgnoreDeactivateClose)
+                            if (!IsDisposed && Visible && !ContainsFocus && !IgnoreDeactivateClose && HasOpenChildMenu?.Invoke() != true)
                             {
                                 Close();
                             }
@@ -7175,6 +7283,8 @@ internal sealed class TrayPopupWindow : Form
     public FlowLayoutPanel ContentHost { get; }
     public bool IgnoreDeactivateClose { get; set; }
     internal bool CaptureMode { get; set; }
+    internal Func<bool>? CollapseExpandedSection { get; set; }
+    internal Func<bool>? HasOpenChildMenu { get; set; }
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
@@ -7201,6 +7311,7 @@ internal sealed class TrayPopupWindow : Form
         Keys key = keyData & Keys.KeyCode;
         if (key == Keys.Escape)
         {
+            if (CollapseExpandedSection?.Invoke() == true) return true;
             Close();
             return true;
         }
@@ -7216,6 +7327,8 @@ internal sealed class TrayPopupWindow : Form
         }
 
         Control? focused = FindFocusedDescendant(this);
+        if (key == Keys.Left && focused is TrayMenuRow && CollapseExpandedSection?.Invoke() == true)
+            return true;
         if (focused is TrayMenuRow && key is Keys.Home or Keys.End)
         {
             return FocusKeyboardEdge(first: key == Keys.Home);
@@ -7248,7 +7361,7 @@ internal sealed class TrayPopupWindow : Form
         return targets.Count > 0 && FocusKeyboardTarget(first ? targets[0] : targets[^1]);
     }
 
-    private bool FocusKeyboardTarget(Control target)
+    internal bool FocusKeyboardTarget(Control target)
     {
         if (!target.CanSelect)
         {
@@ -7395,7 +7508,7 @@ internal sealed class TrayPopupWindow : Form
             return;
         }
 
-        LayoutAnchored(anchor);
+        LayoutAnchored(anchor, positionWindow: !CaptureMode);
     }
 
     private void LayoutAnchored(Point anchor, bool positionWindow = true)

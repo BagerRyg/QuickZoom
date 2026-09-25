@@ -25,6 +25,7 @@ internal static class UiReleaseChecks
 
         object palette = assembly.GetType("QuickZoom.ThemePalettes", true)!
             .GetProperty("Light", BindingFlags.Static | BindingFlags.Public)!.GetValue(null)!;
+        CheckResizeLayout(assembly, palette);
         Type dropdownType = assembly.GetType("QuickZoom.ModernDropdown", true)!;
         foreach (bool disposeOwnerBeforeCallback in new[] { false, true })
         {
@@ -66,6 +67,52 @@ internal static class UiReleaseChecks
             Set("_settingsWindow", null);
             Set("_runtimeStopped", false);
         }
+    }
+
+    private static void CheckResizeLayout(Assembly assembly, object palette)
+    {
+        Type hostType = assembly.GetType("QuickZoom.SettingsContentHost", true)!;
+        using var host = (Control)Activator.CreateInstance(hostType, palette)!;
+        using var form = new ResizeProbeForm { ShowInTaskbar = false, ClientSize = new Size(600, 400) };
+        MethodInfo cloak = assembly.GetType("QuickZoom.WindowChrome", true)!.GetMethod("TrySetCloaked", BindingFlags.Static | BindingFlags.NonPublic)!;
+        if (!(bool)cloak.Invoke(null, [form, true])!) throw new Exception("Could not hide the resize test window.");
+        host.Dock = DockStyle.Fill;
+        form.Controls.Add(host);
+        using var page = new UserControl();
+        var content = new Panel { Dock = DockStyle.Top, Height = 1200 };
+        page.Controls.Add(content);
+        host.Controls.Add(page);
+        form.Show();
+        hostType.GetMethod("SetActivePage")!.Invoke(host, [page]);
+        Application.DoEvents();
+        var scrollBar = host.Controls.OfType<VScrollBar>().Single();
+        hostType.GetMethod("RestoreScrollY")!.Invoke(host, [300]);
+        int widthChanges = 0;
+        int lastWidth = page.Width;
+        page.SizeChanged += (_, _) =>
+        {
+            if (lastWidth != page.Width) widthChanges++;
+            lastWidth = page.Width;
+        };
+        foreach (int width in new[] { 620, 660, 600 })
+        {
+            widthChanges = 0;
+            form.ClientSize = new Size(width, 400);
+            Application.DoEvents();
+            if (widthChanges != 1 || !scrollBar.Visible || scrollBar.Value != 300 || !host.Visible ||
+                page.Right > scrollBar.Left || page.Height < content.Bottom)
+                throw new Exception("A scrolling page reflowed through multiple widths, lost its scroll position, or clipped content.");
+        }
+        content.Height = 100;
+        hostType.GetMethod("RefreshActivePageLayout")!.Invoke(host, null);
+        if (scrollBar.Visible || page.Width != host.ClientSize.Width || page.Top != 0)
+            throw new Exception("A shorter page retained its scrollbar or reserved width.");
+        Console.WriteLine("PASS: resizing uses one page width, preserves scrolling, restores painting, and removes unneeded scrollbars; no visible windows.");
+    }
+
+    private sealed class ResizeProbeForm : Form
+    {
+        protected override bool ShowWithoutActivation => true;
     }
 
     // Keep the existing form available if refresh incorrectly attempts to reopen

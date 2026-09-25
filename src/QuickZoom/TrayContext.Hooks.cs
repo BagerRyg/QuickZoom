@@ -167,6 +167,7 @@ internal sealed partial class TrayContext
 
     private IntPtr HookCallbackCore(int nCode, IntPtr wParam, IntPtr lParam)
     {
+        ObserveTrackingPointer(nCode, wParam, lParam);
         if (nCode >= 0 && wParam.ToInt32() == WM_MOUSEMOVE && _wiggleSpotlightEnabled)
         {
             MSLLHOOKSTRUCT movement = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
@@ -225,7 +226,9 @@ internal sealed partial class TrayContext
         if (_runtimeStopped) return CallNextHookEx(_kbdHook, nCode, wParam, lParam);
         try
         {
-            return KeyboardHookCallbackCore(nCode, wParam, lParam);
+            IntPtr result = KeyboardHookCallbackCore(nCode, wParam, lParam);
+            ObserveTrackingKeyboard(nCode, wParam, lParam, result);
+            return result;
         }
         catch (Exception ex)
         {

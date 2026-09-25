@@ -57,7 +57,7 @@ QuickZoom is designed for users who want:
 - Full settings window for advanced configuration.
 - Mouse and keyboard zoom shortcuts.
 - Smooth zoom transitions.
-- Follow-cursor magnification.
+- Automatic mouse, typing, and keyboard-focus tracking.
 - Optional center-cursor behavior.
 - Auto-disable at 100% zoom.
 - Inverted colors mode.
@@ -85,7 +85,7 @@ It changes the magnification style immediately, using the same saved mode settin
 
 Magnifies the selected display area itself, so the whole chosen screen view becomes larger.  
 This is the most traditional magnifier mode and is best for continuous reading or navigation.  
-When Follow Cursor is enabled, the view pans as the pointer moves.  
+The view follows the mode chosen in the tray's Follow selector or Settings > Mouse, unless following is paused.
 It changes the whole visible workspace, so users get strong magnification but less surrounding context.
 
 #### Lens
@@ -112,10 +112,11 @@ Turning it off resets zoom back to 100% and removes active magnification unless 
 Enables the inverted-colors feature and its hotkey behavior.  
 When turned off, any active inverted view is cleared.
 
-#### Follow Cursor
+#### Follow
 
-Controls whether fullscreen magnification pans with the pointer.  
-When off, fullscreen zoom holds closer to the last focus point instead of constantly tracking the cursor.
+Shows the current following mode in one compact row. Select it to open a rounded menu with Automatic, Mouse only, and Keyboard and typing, without moving or expanding the tray. Each choice includes a short explanation. The selected mode has a checkmark, and choosing a mode resumes following immediately. Changes stay synchronized with Settings > Mouse.
+
+Pause following appears beneath the three choices. Pausing keeps the view still and shows Paused beside Follow. Resume following restores the same mode. These controls work in Fullscreen, Lens, and Docked modes.
 
 #### Magnified Displays
 
@@ -255,7 +256,17 @@ Each monitor row includes or removes that display from the magnified fullscreen 
 At least one monitor remains selected so QuickZoom always has a valid target.  
 This is useful for excluding a secondary display that should stay normal while another display is magnified.
 
-### Settings > Cursor
+### Settings > Mouse
+
+#### Follow
+
+- **Automatic (recommended)** is the default. Typing, arrow keys, and Tab follow the caret or focused control. Deliberate mouse movement, clicks, or scrolling return control to the pointer.
+- **Mouse only** always follows the pointer.
+- **Keyboard and typing** follows the caret or focused control without switching on mouse movement.
+
+Small pointer movements do not interrupt typing. Reading pauses keep the view still, and typing pans only when the caret approaches the edge. If an app does not expose its caret or focus position, QuickZoom retains the last view; move the mouse in Automatic or choose Mouse only. Support depends on each application's Windows accessibility provider.
+
+The Pause following switch keeps the view still without forgetting your mode. Turn it off to resume; choosing a Follow mode also resumes following.
 
 #### Locate Cursor on Wiggle
 
@@ -303,7 +314,7 @@ This is useful if a shortcut conflicts with another app or if the user only want
 
 Sets the primary key held while zooming or using QuickZoom shortcut combos.  
 By default this is Alt.  
-The enable key works with mouse wheel, keyboard +/-, invert color key, and follow cursor key.  
+The enable key works with mouse wheel, keyboard +/-, invert color key, and pause/resume following key.
 Choosing a comfortable key matters because it is the main interaction point for zooming.  
 Some keys may show warnings if they conflict with Windows or other QuickZoom shortcut roles.
 
@@ -315,12 +326,12 @@ Middle mouse click with the enable key remains the default mouse-style invert tr
 Invert colors can reduce glare or improve contrast for some content.  
 The actual color inversion affects the magnified view through the native Windows magnification color effect.
 
-#### Follow Cursor Key
+#### Pause/Resume Following Key
 
-Sets the secondary keyboard key used with the enable key to toggle Follow Cursor.  
+Sets the secondary keyboard key used with the enable key to pause or resume following.
 The default is F, so the default combo is Alt + F.  
-It is most noticeable in fullscreen mode, where it changes whether the zoomed view pans with the mouse.  
-Turning Follow Cursor off can be useful when reading a fixed area without the view moving.
+It works in all three zoom modes and pauses whichever Follow mode is selected.
+Pausing following can be useful when reading a fixed area without the view moving. It preserves the selected mode, and its state is shown in both the tray and Settings.
 
 #### Disable Alt Key in Office Apps
 
@@ -406,6 +417,8 @@ QuickZoom can be run as a portable self-contained app.
 No full installation is required for normal use. Download the release, run the executable, and QuickZoom starts in the system tray.
 
 QuickZoom can also be configured to start automatically with Windows. This requires approving a single UAC prompt during setup because Windows needs permission to register the built-in elevated startup support.
+
+The setup-complete screen appears after the tray and magnification shortcuts are ready, including when automatic startup is skipped. Finish closes setup without restarting QuickZoom. A delayed startup stays on the waiting screen and offers Retry if readiness cannot be confirmed.
 
 ## Shortcuts
 

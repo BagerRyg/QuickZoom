@@ -125,7 +125,7 @@ internal static class Program
         if (shouldRunSetup || (!internalStartupMode && FirstRunSetup.ShouldRunAutomatically()))
         {
             setupFlowWasShown = true;
-            FirstRunSetup.Show(allowLivePractice: !IsSingleInstanceActive());
+            if (ShowSetupAndStartRuntime(exePath)) return;
         }
 
         _ = AppThemeBootstrap.TryApplyNativeColorMode(AppThemeBootstrap.ReadPersistedThemeMode());
@@ -192,8 +192,6 @@ internal static class Program
         }
 
         bool isAdmin = IsRunningAsAdministrator();
-        bool isManagedInstall = InstalledAppService.IsManagedInstallPath(exePath);
-        bool needsSecureInstallMigration = InstalledAppService.NeedsSecureInstallMigration(exePath);
 
         if (shouldInstallSetupStartupTask)
         {
@@ -201,27 +199,7 @@ internal static class Program
             return;
         }
 
-        _ = Task.Run(() =>
-        {
-            if (!StartupTaskService.IsReadyForCurrentBuild(out _)) return;
-            TryCleanupLegacyUserStartupEntries(exePath);
-            if (isAdmin)
-            {
-                TryCleanupLegacyScheduledTasks(exePath);
-            }
-        });
-
-        if (isAdmin && isManagedInstall && needsSecureInstallMigration)
-        {
-            if (TryInstallElevatedScheduledTask(out string migratedExePath, out string? migrationError))
-            {
-                ErrorLog.Write("StartupMigration", "Migrated elevated startup payload to secured install path: " + migratedExePath);
-            }
-            else
-            {
-                ErrorLog.Write("StartupMigration", "Could not migrate the legacy startup install to the secured install path. " + (migrationError ?? string.Empty));
-            }
-        }
+        InitializeStartupMaintenance(exePath);
 
         bool shouldOfferInstallOrUpdate = !isAdmin && !isElevatedLaunch && InstalledAppService.ShouldOfferInstallOrUpdate(exePath);
         if (!shouldOfferInstallOrUpdate && ShouldYieldToNewerInstance(exePath))
@@ -256,7 +234,7 @@ internal static class Program
 
             // A setup offered at launch always starts at the language screen.
             // Only the explicit autostart action in Settings uses the short flow.
-            FirstRunSetup.Show(allowLivePractice: !HasOtherQuickZoomInstance(expectedExePath: null));
+            if (ShowSetupAndStartRuntime(exePath, startupMaintenanceComplete: true)) return;
             if (!isAdmin &&
                 StartupTaskService.IsReadyForCurrentBuild(out _) &&
                 StartElevatedScheduledTaskAndVerify() != StartupTaskLaunchResult.Failed)
@@ -286,6 +264,105 @@ internal static class Program
         {
             ErrorLog.WriteAlways("Shutdown", "QuickZoom process exiting.");
             ReleaseSingleInstanceMutex();
+        }
+    }
+
+    private static void InitializeStartupMaintenance(string? exePath)
+    {
+        bool isAdmin = IsRunningAsAdministrator();
+        _ = Task.Run(() =>
+        {
+            if (!StartupTaskService.IsReadyForCurrentBuild(out _)) return;
+            TryCleanupLegacyUserStartupEntries(exePath);
+            if (isAdmin) TryCleanupLegacyScheduledTasks(exePath);
+        });
+
+        if (isAdmin && InstalledAppService.IsManagedInstallPath(exePath) &&
+            InstalledAppService.NeedsSecureInstallMigration(exePath))
+        {
+            if (TryInstallElevatedScheduledTask(out string migratedExePath, out string? migrationError))
+                ErrorLog.Write("StartupMigration", "Migrated elevated startup payload to secured install path: " + migratedExePath);
+            else
+                ErrorLog.Write("StartupMigration", "Could not migrate the legacy startup install to the secured install path. " + (migrationError ?? string.Empty));
+        }
+    }
+
+    private static bool ShowSetupAndStartRuntime(string? exePath, bool startupMaintenanceComplete = false)
+    {
+        TrayContext? context = null;
+        bool runtimeReady = false;
+        bool preparationStarted = false;
+        EventHandler closeSetup = (_, _) => Application.Exit();
+        try
+        {
+            FirstRunSetup.Show(allowLivePractice: _singleInstanceMutex != null || !IsSingleInstanceActive(), async skipped =>
+            {
+                preparationStarted = true;
+                if (runtimeReady) return;
+                if (context == null && await Task.Run(() =>
+                    ReconcileOtherQuickZoomInstances(exePath, showAlreadyRunningDialog: false)) == InstanceStartupDecision.ExitCurrent)
+                {
+                    if (!HasOtherQuickZoomInstance(null, requireReady: true))
+                        throw new InvalidOperationException("The existing QuickZoom instance has not reported readiness yet.");
+                    runtimeReady = true;
+                    return;
+                }
+
+                // Keep mutex acquisition/release on this UI thread. Waiting for
+                // Task Scheduler must leave the setup window responsive.
+                if (_singleInstanceMutex == null && !TryAcquireSingleInstanceMutex())
+                    throw new InvalidOperationException("Another QuickZoom instance is still starting. Retry when it is ready.");
+                _startupYieldingMarker?.Dispose();
+                _startupYieldingMarker = null;
+
+                if (context == null && !skipped && !IsRunningAsAdministrator())
+                {
+                    StartupTaskLaunchResult result = await StartElevatedScheduledTaskForSetupAsync();
+                    if (result == StartupTaskLaunchResult.Ready)
+                    {
+                        runtimeReady = true;
+                        return;
+                    }
+                    if (result == StartupTaskLaunchResult.Pending)
+                        throw new TimeoutException("The elevated QuickZoom instance has not reported readiness. Retry to check it again.");
+                }
+
+                if (context == null)
+                {
+                    if (!startupMaintenanceComplete)
+                    {
+                        await Task.Run(() => InitializeStartupMaintenance(exePath));
+                        startupMaintenanceComplete = true;
+                    }
+                    ErrorLog.WriteAlways("Startup", $"Starting {AppInfo.DisplayVersion} before setup completion from {exePath}");
+                    context = new TrayContext();
+                    context.ThreadExit += closeSetup;
+                }
+                await context.WaitForStartupReadyAsync();
+                runtimeReady = true;
+            });
+
+            if (!runtimeReady) return preparationStarted;
+            // The wizard's modal loop has already been serving the hooks and
+            // tray. Continue with the same runtime, without restarting it.
+            if (context is { IsStartupReady: true })
+            {
+                context.ThreadExit -= closeSetup;
+                Application.Run(context);
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.WriteCrash("Setup.ApplicationRun", ex);
+            Environment.ExitCode = 1;
+            MessageBox.Show(T("Error.MagnifierInit"), T("Common.AppName"), MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return true;
+        }
+        finally
+        {
+            context?.Dispose();
+            if (preparationStarted) ReleaseSingleInstanceMutex();
         }
     }
 
@@ -762,6 +839,35 @@ internal static class Program
         if (result == StartupTaskLaunchResult.Pending)
             ErrorLog.Write("StartupTaskRun", "Another QuickZoom process still owns startup. The launcher is exiting without starting a duplicate runtime.");
         return result;
+    }
+
+    private static async Task<StartupTaskLaunchResult> StartElevatedScheduledTaskForSetupAsync()
+    {
+        string? targetExePath = null;
+        if (!await Task.Run(() => StartupTaskService.IsReadyForCurrentBuild(out targetExePath)))
+            return StartupTaskLaunchResult.Failed;
+        IDisposable? yielding = StartupHandoff.MarkYielding();
+        if (yielding == null) return StartupTaskLaunchResult.Failed;
+        bool replacementReady = false;
+        bool launcherOwnsMutex = false;
+        ReleaseSingleInstanceMutex();
+        try
+        {
+            // Only the blocking process operations run in the background; the
+            // mutex belongs to the setup UI thread before and after this await.
+            replacementReady = await Task.Run(() => TryStartElevatedScheduledTask() &&
+                WaitForOtherQuickZoomInstance(targetExePath, timeoutMs: 15000, pollMs: 100));
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("Setup.StartupTaskRun", ex);
+        }
+        finally
+        {
+            if (!replacementReady) launcherOwnsMutex = TryAcquireSingleInstanceMutex();
+            CompleteStartupYielding(yielding, replacementReady, launcherOwnsMutex);
+        }
+        return GetStartupTaskLaunchResult(replacementReady, launcherOwnsMutex);
     }
 
     private static StartupTaskLaunchResult GetStartupTaskLaunchResult(bool replacementReady, bool launcherOwnsMutex)

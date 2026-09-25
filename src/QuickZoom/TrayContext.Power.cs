@@ -59,6 +59,7 @@ internal sealed partial class TrayContext
     {
         RunOnUiThread(source, () =>
         {
+            ResetActivityTracking();
             _enableKeyPressed = false;
             _invertKeyPressed = false;
             _followCursorKeyPressed = false;

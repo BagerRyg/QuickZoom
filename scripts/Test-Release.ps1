@@ -64,6 +64,8 @@ $testRoot = Join-Path $repository ('test-validation/release-' + [Guid]::NewGuid(
 Write-Host "Validation files: $testRoot"
 Invoke-CheckedProcess -FilePath (Join-Path $repository 'tests/RuntimeChecks/bin/Release/net10.0-windows/RuntimeChecks.exe') `
     -Arguments @((Join-Path $testRoot 'runtime'), '--no-render')
+Invoke-CheckedProcess -FilePath (Join-Path $repository 'tests/RuntimeChecks/bin/Release/net10.0-windows/RuntimeChecks.exe') `
+    -Arguments @((Join-Path $testRoot 'setup-per-monitor'), '--setup-startup', '--per-monitor-dpi')
 Invoke-CheckedProcess -FilePath (Join-Path $repository 'tests/PrivacyChecks/bin/Release/net10.0-windows/PrivacyChecks.exe') `
     -Arguments @((Join-Path $testRoot 'privacy'))
 Invoke-CheckedProcess -FilePath (Join-Path $repository 'tests/UiChecks/bin/Release/net10.0-windows/UiChecks.exe')
