@@ -726,6 +726,9 @@ internal static class FirstRunSetup
         private readonly Func<FirstRunSetupSelection, Task>? _prepareRuntime;
         private bool _preparingRuntime;
         private bool _runtimePreparationFailed;
+        private long _completionDismissAfter;
+        private Keys _completionActivationKey;
+        private bool _completionRequiresKeyRelease;
         private bool _startupStatusChecked;
         private Process? _startupHelper;
         private Func<ProcessStartInfo, Task<Process?>> _launchStartupHelper = LaunchStartupHelperAsync;
@@ -922,6 +925,12 @@ internal static class FirstRunSetup
             AcceptButton = _continueButton;
             KeyDown += HandleSetupKeyDown;
             KeyUp += HandleSetupKeyUp;
+            Deactivate += (_, _) =>
+            {
+                // UAC or another window may receive the release instead of us.
+                _completionActivationKey = Keys.None;
+                _completionRequiresKeyRelease = false;
+            };
             FormClosed += (_, _) =>
             {
                 StopLivePractice();
@@ -2002,6 +2011,9 @@ internal static class FirstRunSetup
 
             if (_step == CompleteStep)
             {
+                // The startup and completion pages share the same button. A
+                // queued second click must not dismiss success before it is seen.
+                if (_completionRequiresKeyRelease || Environment.TickCount64 < _completionDismissAfter) return;
                 CompleteSetup(_startupServiceSkipped);
                 return;
             }
@@ -2090,6 +2102,7 @@ internal static class FirstRunSetup
         private void ShowStep(int step, bool animate = true)
         {
             int nextStep = Math.Clamp(step, _startupOnly ? StartupStep : 0, _startupOnly ? StartupStep : CompleteStep);
+            bool enteringCompletion = nextStep == CompleteStep && _step != CompleteStep;
             if (_step == 3 && nextStep != 3)
             {
                 StopLivePractice();
@@ -2112,6 +2125,12 @@ internal static class FirstRunSetup
             if (Visible && !_captureMode)
             {
                 BeginInvoke((MethodInvoker)FocusCurrentStepEntry);
+            }
+            if (enteringCompletion)
+            {
+                _completionRequiresKeyRelease = _completionActivationKey != Keys.None;
+                Update();
+                _completionDismissAfter = Environment.TickCount64 + SystemInformation.DoubleClickTime;
             }
         }
 
@@ -2521,6 +2540,18 @@ internal static class FirstRunSetup
         {
             if (!_capturingHotkey)
             {
+                if (e.KeyCode is Keys.Enter or Keys.Space)
+                {
+                    // Enter repeats while held. Require a release between
+                    // advancing to success and dismissing that final page.
+                    if (_step == CompleteStep && _completionActivationKey == e.KeyCode)
+                    {
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                        return;
+                    }
+                    _completionActivationKey = e.KeyCode;
+                }
                 if (e.KeyCode == Keys.Escape)
                 {
                     if (!StartupActionBlocksNavigation)
@@ -2563,6 +2594,16 @@ internal static class FirstRunSetup
 
         private void HandleSetupKeyUp(object? sender, KeyEventArgs e)
         {
+            if (e.KeyCode == _completionActivationKey)
+            {
+                _completionActivationKey = Keys.None;
+                if (_completionRequiresKeyRelease)
+                {
+                    // Let the button clear its pressed state on Space-up, but
+                    // do not let that old release dismiss the new success page.
+                    BeginInvoke((MethodInvoker)(() => _completionRequiresKeyRelease = false));
+                }
+            }
             if (!_capturingHotkey ||
                 !_pendingControlKey ||
                 e.KeyCode != Keys.ControlKey)

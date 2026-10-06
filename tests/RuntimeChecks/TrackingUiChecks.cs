@@ -53,8 +53,10 @@ internal static class TrackingUiChecks
                 Save(menu, "expanded-menu");
             }
             // Exercise the native mouse-down dismissal before the trigger's
-            // mouse-up/Click, including both child labels. Keep the pointer still.
+            // mouse-up/Click, including both child labels, without moving the pointer.
             Point originalLocation = popup.Location;
+            bool originalTopMost = popup.TopMost;
+            popup.TopMost = true;
             int outsideClickDismissals = 0;
             ToolStripDropDownClosingEventHandler observeDismissal = (_, e) =>
             {
@@ -67,27 +69,24 @@ internal static class TrackingUiChecks
                 Application.DoEvents();
                 Point hit = target == header ? new Point(8, header.Height / 2) :
                     new Point(target.Width / 2, target.Height / 2);
-                Point targetScreen = target.PointToScreen(hit);
-                popup.Location = new Point(popup.Left + Cursor.Position.X - targetScreen.X,
-                    popup.Top + Cursor.Position.Y - targetScreen.Y);
-                Rectangle clickBounds = popup.Bounds;
                 Call("SetFollowOptionsExpanded", true);
                 int previousDismissals = outsideClickDismissals;
-                MouseClick(target, hit);
+                Rectangle clickBounds = MouseClick(target, hit, menu);
                 Application.DoEvents();
                 Check(outsideClickDismissals > previousDismissals && !menu.Visible && !popup.IsDisposed &&
                     popup.Bounds == clickBounds && header.Focused &&
                     header.AccessibilityObject.State.HasFlag(AccessibleStates.Collapsed),
                     "clicking the open Follow trigger closes it without reopening: " + target.GetType().Name);
-                MouseClick(target, hit);
+                Rectangle reopenBounds = MouseClick(target, hit, menu);
                 Application.DoEvents();
-                Check(menu.Visible && popup.Bounds == clickBounds,
+                Check(menu.Visible && popup.Bounds == reopenBounds,
                     "the next Follow click opens normally after closing: " + target.GetType().Name);
             }
             menu.Closing -= observeDismissal;
             menu.Close(ToolStripDropDownCloseReason.Keyboard);
             Application.DoEvents();
             popup.Location = originalLocation;
+            popup.TopMost = originalTopMost;
             Call("SetFollowOptionsExpanded", true);
             menu.Close(ToolStripDropDownCloseReason.Keyboard);
             Call("SetFollowOptionsExpanded", true);
@@ -375,16 +374,32 @@ internal static class TrackingUiChecks
             menu.GetType().GetMethod("ProcessDialogKey", Instance)!.Invoke(menu, [key]);
     }
 
-    private static void MouseClick(Control target, Point point)
+    private static Rectangle MouseClick(Control target, Point point, ContextMenuStrip menu)
     {
+        // WinForms checks the physical cursor when dispatching Click. Align only
+        // after opening the flyout, and again for the next click: the desktop
+        // pointer may have moved while menu creation or queued work was running.
+        Form popup = target.FindForm()!;
+        Point cursor = Cursor.Position;
+        Point hit = target.PointToScreen(point);
+        Point delta = new(cursor.X - hit.X, cursor.Y - hit.Y);
+        popup.Location = new Point(popup.Left + delta.X, popup.Top + delta.Y);
+        if (menu.Visible) menu.Location = new Point(menu.Left + delta.X, menu.Top + delta.Y);
+        Rectangle bounds = popup.Bounds;
         nint location = (nint)((point.Y << 16) | (point.X & 0xffff));
         foreach (int messageId in new[] { 0x0201, 0x0202 })
         {
             Message message = Message.Create(target.Handle, messageId, messageId == 0x0201 ? 1 : 0, location);
+            if (WindowFromPoint(Cursor.Position) != target.Handle)
+                throw new InvalidOperationException("The native Follow-menu mouse test needs a stable, unobstructed desktop pointer target.");
             if (!Application.FilterMessage(ref message))
                 _ = SendMessage(message.HWnd, message.Msg, message.WParam, message.LParam);
         }
+        return bounds;
     }
+
+    [DllImport("user32.dll")]
+    private static extern nint WindowFromPoint(Point point);
 
     [DllImport("user32.dll")]
     private static extern nint SendMessage(nint window, int message, nint wParam, nint lParam);

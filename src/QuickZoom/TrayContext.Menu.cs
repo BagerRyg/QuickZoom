@@ -508,11 +508,9 @@ internal sealed partial class TrayContext
             Enum.GetValues<TrackingMode>().Select(mode => TrackingModeLabel(mode, compact: true))
                 .Append(L("Tray.FollowPaused")).Max(text => TextRenderer.MeasureText(text, valueFont).Width) +
             ControlDrawing.ScaleLogical(scaleOwner, 120);
-        int requested = Math.Max(Math.Max(baseline, widestLabel + accessoryAllowance), followingWidth);
-        int available = Math.Max(
-            ControlDrawing.ScaleLogical(scaleOwner, 280),
-            Screen.FromPoint(Cursor.Position).WorkingArea.Width - ControlDrawing.ScaleLogical(scaleOwner, 32));
-        return Math.Min(requested, available);
+        // Fit the complete menu against the anchor monitor after layout, so
+        // fixed-width descendants and their text are reduced together.
+        return Math.Max(Math.Max(baseline, widestLabel + accessoryAllowance), followingWidth);
     }
 
     private ToggleSwitchControl CreateLocalizedToggle(ThemePalette palette, bool value, string accessibleName)

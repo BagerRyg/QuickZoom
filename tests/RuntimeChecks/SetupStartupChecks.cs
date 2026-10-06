@@ -63,7 +63,10 @@ internal static class SetupStartupChecks
             Call("UpdateStartupServiceContent", true);
             form.Location = new Point(-20000, -20000);
             form.Show();
-            Call(skip ? "SkipStartupService" : "Continue");
+            Control continueButton = Get<Control>("_continueButton");
+            Keys activationKey = skip ? Keys.Space : Keys.Enter;
+            _ = SendMessage(continueButton.Handle, 0x0100, new IntPtr((int)activationKey), new IntPtr(1));
+            if (skip) Call("SkipStartupService");
             PumpUntil(() => launches == 1);
             Check(Get<int>("_step") == 5 && !Get<bool>("_accepted"), "completion stays hidden while runtime readiness is pending (skip=" + skip + ")");
             Check(!Get<Control>("_continueButton").Enabled && !Get<Control>("_backButton").Enabled,
@@ -99,11 +102,62 @@ internal static class SetupStartupChecks
             PumpUntil(() => Get<int>("_step") == 6);
             Check(!Get<Control>("_backButton").Visible && Get<Control>("_continueButton").Enabled,
                 "the finished screen appears only after readiness, with preferences already applied");
+            Call("Continue");
+            Check(!Get<bool>("_accepted") && form.Visible,
+                "a queued second Finish cannot immediately dismiss the success screen");
+            PumpUntil(() => Environment.TickCount64 >= Get<long>("_completionDismissAfter"));
+            // Queue a real repeat and release together: WinForms' suppression
+            // can remove queued messages, which direct event calls cannot test.
+            Check(PostMessage(continueButton.Handle, 0x0100, new IntPtr((int)activationKey), new IntPtr(0x40000001)) &&
+                PostMessage(continueButton.Handle, 0x0101, new IntPtr((int)activationKey), new IntPtr(unchecked((int)0xc0000001))),
+                "the held " + activationKey + " repeat and release enter the native message queue");
+            PumpUntil(() => Get<Keys>("_completionActivationKey") == Keys.None && !Get<bool>("_completionRequiresKeyRelease"));
+            Check(!Get<bool>("_accepted") && form.Visible,
+                "held " + activationKey + " cannot dismiss success and its queued key-up clears the guard");
             Capture(form, Path.Combine(output, skip ? "skipped-ready.png" : "ready.png"));
             int expectedLaunches = launches;
-            Call("Continue");
+            _ = SendMessage(continueButton.Handle, 0x0100, new IntPtr((int)activationKey), new IntPtr(1));
+            if (!form.IsDisposed)
+                _ = SendMessage(continueButton.Handle, 0x0101, new IntPtr((int)activationKey), new IntPtr(unchecked((int)0xc0000001)));
             Check(Get<bool>("_accepted") && launches == expectedLaunches,
-                "Finish closes setup without launching or preparing the runtime a second time");
+                "a fresh " + activationKey + " closes setup without launching or preparing the runtime a second time");
+        }
+        ValidateCompletionAfterLostKeyUp(formType, initial, stateType);
+    }
+
+    private static void ValidateCompletionAfterLostKeyUp(Type formType, object initial, Type stateType)
+    {
+        foreach (Keys key in new[] { Keys.Enter, Keys.Space })
+        foreach (bool beforeCompletion in new[] { true, false })
+        {
+            using var form = (Form)formType.GetConstructors(Instance).Single().Invoke([initial, false, false, null, null]);
+            void Set(string name, object value) => formType.GetField(name, Instance)!.SetValue(form, value);
+            T Get<T>(string name) => (T)formType.GetField(name, Instance)!.GetValue(form)!;
+            object? Call(string name, params object?[] args) => formType.GetMethod(name, Instance)!.Invoke(form, args);
+            Set("_captureMode", true);
+            Call("ShowStep", 5, false);
+            Set("_startupState", Enum.Parse(stateType, "Ready"));
+            Call("UpdateStartupServiceContent", false);
+            form.Location = new Point(-20000, -20000);
+            form.Show();
+            var button = Get<Control>("_continueButton");
+            _ = SendMessage(form.Handle, 0x0006, new IntPtr(1), IntPtr.Zero); // WA_ACTIVE
+            _ = SendMessage(button.Handle, 0x0100, new IntPtr((int)key), new IntPtr(1));
+            if (key == Keys.Space) Call("Continue");
+            if (!beforeCompletion)
+            {
+                PumpUntil(() => Get<int>("_step") == 6);
+                Check(Get<bool>("_completionRequiresKeyRelease"), "held " + key + " arms the success-page release guard");
+            }
+            // Simulate UAC/another window owning focus and consuming key-up.
+            // No key-up is delivered back to the setup window.
+            _ = SendMessage(form.Handle, 0x0006, IntPtr.Zero, IntPtr.Zero); // WM_ACTIVATE / WA_INACTIVE
+            _ = SendMessage(form.Handle, 0x0006, new IntPtr(1), IntPtr.Zero); // WA_ACTIVE
+            PumpUntil(() => Get<int>("_step") == 6 && Environment.TickCount64 >= Get<long>("_completionDismissAfter"));
+            Check(Get<Keys>("_completionActivationKey") == Keys.None && !Get<bool>("_completionRequiresKeyRelease"),
+                $"focus loss clears stale {key} state (before completion={beforeCompletion})");
+            ((IButtonControl)button).PerformClick();
+            Check(Get<bool>("_accepted"), "mouse Finish works after another window consumes the " + key + " release");
         }
     }
 
@@ -324,6 +378,10 @@ internal static class SetupStartupChecks
 
     [DllImport("user32.dll")]
     private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PostMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
 
     private static void PumpUntil(Func<bool> condition)
     {

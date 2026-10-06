@@ -116,6 +116,8 @@ internal sealed partial class TrayContext
             return;
         }
 
+        _trayPopup?.PrepareContentUpdate();
+
         ThemePalette palette = CurrentTheme;
         EnsureSelectedMonitorsValid();
         _displayOptionsHost.SuspendLayout();
@@ -187,6 +189,7 @@ internal sealed partial class TrayContext
             index++;
         }
         _displayOptionsHost.ResumeLayout(performLayout: true);
+        _trayPopup?.RefreshAnchoredLayout(_lastTrayPopupAnchor == Point.Empty ? Cursor.Position : _lastTrayPopupAnchor);
     }
 
     private void ToggleScreenSelection(string deviceName)

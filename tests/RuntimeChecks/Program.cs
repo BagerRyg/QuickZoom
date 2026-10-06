@@ -33,6 +33,11 @@ internal static class RuntimeChecks
 
     private static void Run(string[] args)
     {
+        if (args.Contains("--tray-layout"))
+        {
+            TrayLayoutChecks.Run(Assembly.Load("QuickZoom"), args[0], capture: !args.Contains("--no-render"));
+            return;
+        }
         if (args.Contains("--setup-startup"))
         {
             SetupStartupChecks.Run(Assembly.Load("QuickZoom"), args[0]);

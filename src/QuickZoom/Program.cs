@@ -362,6 +362,8 @@ internal static class Program
         finally
         {
             context?.Dispose();
+            _startupYieldingMarker?.Dispose();
+            _startupYieldingMarker = null;
             if (preparationStarted) ReleaseSingleInstanceMutex();
         }
     }
@@ -865,7 +867,7 @@ internal static class Program
         finally
         {
             if (!replacementReady) launcherOwnsMutex = TryAcquireSingleInstanceMutex();
-            CompleteStartupYielding(yielding, replacementReady, launcherOwnsMutex);
+            CompleteStartupYielding(yielding, replacementReady, launcherOwnsMutex, keepLauncherYielding: true);
         }
         return GetStartupTaskLaunchResult(replacementReady, launcherOwnsMutex);
     }
@@ -874,17 +876,18 @@ internal static class Program
         => replacementReady ? StartupTaskLaunchResult.Ready :
             launcherOwnsMutex ? StartupTaskLaunchResult.Failed : StartupTaskLaunchResult.Pending;
 
-    private static void CompleteStartupYielding(IDisposable marker, bool replacementReady, bool launcherOwnsMutex)
+    private static void CompleteStartupYielding(IDisposable marker, bool replacementReady, bool launcherOwnsMutex,
+        bool keepLauncherYielding = false)
     {
-        if (replacementReady || launcherOwnsMutex)
+        if ((replacementReady && !keepLauncherYielding) || launcherOwnsMutex)
         {
             marker.Dispose();
             return;
         }
 
-        // The pending child may still be approaching its last arbitration check.
-        // Keep this launcher marked as yielding until Windows closes the handle
-        // on process exit, so neither process can mistake it for a runtime owner.
+        // Keep a pending launch or the still-visible setup success page out of
+        // runtime arbitration. Another launch must not terminate the wizard as
+        // an older runtime before the user dismisses it.
         _startupYieldingMarker = marker;
     }
 

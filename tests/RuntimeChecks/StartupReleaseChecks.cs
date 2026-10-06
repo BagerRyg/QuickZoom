@@ -31,7 +31,7 @@ internal static class StartupReleaseChecks
         {
             try
             {
-                completeYielding.Invoke(null, [pendingMarker, false, false]);
+                completeYielding.Invoke(null, [pendingMarker, false, false, false]);
                 Check(Marked("IsYielding") && ReferenceEquals(retainedYielding.GetValue(null), pendingMarker),
                     "a pending child's launcher stays marked as yielding until process exit");
             }
@@ -41,9 +41,20 @@ internal static class StartupReleaseChecks
         foreach ((bool ready, bool ownsMutex) in new[] { (true, false), (false, true) })
         {
             using IDisposable completedMarker = Mark("MarkYielding");
-            completeYielding.Invoke(null, [completedMarker, ready, ownsMutex]);
+            completeYielding.Invoke(null, [completedMarker, ready, ownsMutex, false]);
             Check(!Marked("IsYielding"), "ready and recovered handoffs release the yielding signal");
         }
+        using (IDisposable setupMarker = Mark("MarkYielding"))
+        {
+            try
+            {
+                completeYielding.Invoke(null, [setupMarker, true, false, true]);
+                Check(Marked("IsYielding") && ReferenceEquals(retainedYielding.GetValue(null), setupMarker),
+                    "a ready replacement leaves the visible setup protected from another launch's process arbitration");
+            }
+            finally { retainedYielding.SetValue(null, null); }
+        }
+        Check(!Marked("IsYielding"), "closing the setup releases its retained yielding signal");
         MethodInfo launchResult = program.GetMethod("GetStartupTaskLaunchResult", Static)!;
         Check(launchResult.Invoke(null, [false, false])!.ToString() == "Pending",
             "a readiness timeout without mutex ownership must stop the launcher");

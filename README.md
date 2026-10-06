@@ -4,503 +4,193 @@
   <img src="assets/icons/magnifier-dark.ico" alt="QuickZoom" width="96">
 </p>
 
-<h3 align="center">Lightweight screen magnification for Windows 10 and 11</h3>
+<h3 align="center">Screen magnification for Windows 10 and 11</h3>
 
 <p align="center">
-  QuickZoom is a fast, tray-based accessibility tool built on the native Windows magnification engine.
+  Enlarge the whole screen, inspect details through a lens, or keep an enlarged view at a screen edge.
 </p>
 
 <p align="center">
-  <a href="https://github.com/BagerRyg/QuickZoom/releases">
-    <img src="https://img.shields.io/badge/version-3.0-6ee08f?style=for-the-badge" alt="Version 3.0">
-  </a>
-  <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-64748b?style=for-the-badge" alt="Windows 10 and Windows 11">
+  <a href="https://github.com/BagerRyg/QuickZoom/releases/latest"><img src="https://img.shields.io/badge/version-3.3.54-6ee08f?style=for-the-badge" alt="Version 3.3.54"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011%20x64-64748b?style=for-the-badge" alt="Windows 10 and Windows 11 x64">
   <img src="https://img.shields.io/badge/runtime-.NET%2010-512bd4?style=for-the-badge" alt=".NET 10">
-  <img src="https://img.shields.io/badge/license-GPLv3-blue?style=for-the-badge" alt="GPLv3 license">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-blue?style=for-the-badge" alt="GPLv3 license"></a>
 </p>
 
 <p align="center">
-  <a href="https://dev.ryg.dk/quickzoom/">Website</a> |
-  <a href="https://github.com/BagerRyg/QuickZoom/releases">Download</a> |
-  <a href="#features">Features</a> |
-  <a href="#settings-reference">Settings Reference</a> |
-  <a href="#shortcuts">Shortcuts</a> |
-  <a href="#translations">Translations</a> |
-  <a href="#build-from-source">Build from source</a>
+  <a href="https://github.com/BagerRyg/QuickZoom/releases/latest">Download</a> ·
+  <a href="Manuals/QuickZoom-User-Manual-English.md">English manual</a> ·
+  <a href="Manuals/QuickZoom-Brugervejledning-Dansk.md">Dansk brugervejledning</a> ·
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="#build-from-source">Build from source</a> ·
+  <a href="https://dev.ryg.dk/quickzoom/">Website</a>
 </p>
 
----
+QuickZoom is a free, open-source desktop magnifier built on Windows' native magnification engine. It stays in the notification area near the clock, with mouse and keyboard shortcuts for everyday use. **Version 3.3.54 uses internal build 355.**
 
-## About
+## Get started
 
-QuickZoom is a lightweight magnification and accessibility tool for Windows 10 and Windows 11.
+1. Download **QuickZoom.exe** from the [latest release](https://github.com/BagerRyg/QuickZoom/releases/latest). The standalone Windows x64 release includes .NET; no separate runtime installation is needed.
+2. Save it in a normal folder on a **local fixed drive**, then run it. Network drives, removable drives, and redirected/link-based storage paths are not supported.
+3. Follow setup to choose your language, theme, activation key, privacy mode, and optional automatic startup. Keep **Alt** as the activation key for the defaults below.
+4. Hold **Alt** and scroll up, or press **Alt + +**, to zoom in. Release Alt when the view is large enough; the enlargement stays in place.
+5. Hold **Alt** and scroll down, or press **Alt + −**, to return to **100%**, which is normal size.
 
-It was built to extend and improve the native Windows magnification experience with faster access, better tray controls, smoother everyday use, and practical multi-monitor support. The goal is simple: make zooming the desktop feel quick, reliable, and easy to adjust.
+Click QuickZoom's tray icon with either mouse button to open its controls. If the icon is hidden, open the taskbar's hidden-icons arrow. On smaller screens, the menu reduces spacing and, if needed, text and icon size to fit. **Magnification** must be On for zoom shortcuts to work; turning it on alone does not enlarge the screen. Turning it Off returns zoom to 100%. **Quit → Are you sure?** closes the app completely; closing Settings leaves it running.
 
-QuickZoom is also a free and open-source alternative for users who do not need a large paid accessibility suite. Tools such as ZoomText and SuperNova can be powerful, but they can also be expensive, resource-heavy, and more complex than some users need. QuickZoom focuses on the core magnification features that matter most during normal PC use.
+**Updating an existing copy?** Quit the running app before replacing its downloaded executable. Run the new copy, complete any requested startup update, and check **About** for the new version. Your local preferences are normally reused.
 
-## Why QuickZoom?
-
-QuickZoom is designed for users who want:
-
-- Fast zoom control without opening a large application window.
-- A simple tray menu with the most important actions one click away.
-- A full settings window for deeper configuration.
-- Smooth magnification using the native Windows magnification engine.
-- Reliable multi-monitor magnification.
-- A portable, self-contained app that can also start automatically with Windows.
-- A free, open-source accessibility tool that is easy to inspect, modify, and improve.
+For setup help, every setting, examples, troubleshooting, backups, and removal instructions, read the [English user manual](Manuals/QuickZoom-User-Manual-English.md) or [danske brugervejledning](Manuals/QuickZoom-Brugervejledning-Dansk.md).
 
 ## Features
 
-- Tray-based quick controls.
-- Full settings window for advanced configuration.
-- Mouse and keyboard zoom shortcuts.
-- Smooth zoom transitions.
-- Automatic mouse, typing, and keyboard-focus tracking.
-- Optional center-cursor behavior.
-- Auto-disable at 100% zoom.
-- Inverted colors mode.
-- Cursor enhancement and wiggle-to-locate support.
-- Single-display and multi-display magnification modes.
-- Magnification across all active displays.
-- Per-monitor display selection.
-- Dark, light, and system theme support.
-- English, Danish, Finnish, Norwegian, and Swedish interface.
-- Optional elevated startup support for better compatibility with administrator apps.
-- Portable self-contained release builds.
-
-## Settings Reference
-
-This section follows the visible QuickZoom interface order: first the tray menu, then the Settings window sidebar from top to bottom.
-
-### Tray Menu
-
-#### Zoom Mode
-
-Switches between Fullscreen, Lens, and Docked without opening the full Settings window.  
-It changes the magnification style immediately, using the same saved mode settings shown under Settings > Zoom.
-
-#### Fullscreen
-
-Magnifies the selected display area itself, so the whole chosen screen view becomes larger.  
-This is the most traditional magnifier mode and is best for continuous reading or navigation.  
-The view follows the mode chosen in the tray's Follow selector or Settings > Mouse, unless following is paused.
-It changes the whole visible workspace, so users get strong magnification but less surrounding context.
-
-#### Lens
-
-Shows a floating magnifier lens around the mouse cursor while the rest of the screen stays normal size.  
-It is useful for inspecting small text, icons, buttons, or UI details without zooming the full desktop.  
-The lens uses the current zoom level and follows the cursor with smoothing.  
-It gives more context than fullscreen zoom because only the lens area is magnified.
-
-#### Docked
-
-Shows a fixed magnified tile attached to a screen edge.  
-The tile updates around the cursor, while the rest of the screen stays normal size.  
-It is useful when a user wants a stable preview area instead of a floating lens.  
-The docked tile can cover part of the workspace, but it avoids constantly moving around the screen.
-
-#### Enabled
-
-Turns QuickZoom's zoom controls on or off.  
-Turning it off resets zoom back to 100% and removes active magnification unless inverted colors still require fullscreen magnification.
-
-#### Inverted Colors
-
-Enables the inverted-colors feature and its hotkey behavior.  
-When turned off, any active inverted view is cleared.
-
-#### Follow
-
-Shows the current following mode in one compact row. Select it to open a rounded menu with Automatic, Mouse only, and Keyboard and typing, without moving or expanding the tray. Each choice includes a short explanation. The selected mode has a checkmark, and choosing a mode resumes following immediately. Changes stay synchronized with Settings > Mouse.
-
-Pause following appears beneath the three choices. Pausing keeps the view still and shows Paused beside Follow. Resume following restores the same mode. These controls work in Fullscreen, Lens, and Docked modes.
-
-#### Magnified Displays
-
-Opens the quick display picker in the tray menu.  
-It lets users choose all displays, the monitor under the cursor, or individual monitors without opening Settings.
-
-#### Keyboard Shortcuts
-
-Opens Settings > Shortcuts.  
-Use it when changing the enable key, invert key, follow-cursor key, or mouse/keyboard shortcut mode.
-
-#### Settings
-
-Opens the full Settings window.  
-This is where persistent zoom, display, cursor, appearance, shortcut, and about options live.
-
-#### Reset Cursor
-
-Restores the Windows cursor scheme and reapplies QuickZoom cursor enhancement if needed.  
-Use it if the pointer looks wrong after changing cursor settings, waking from sleep, or closing another cursor tool.
-
-#### About
-
-Opens Settings > About.  
-It shows the current build, startup status, app paths, debug logging, and usage help.
-
-#### Quit
-
-Closes QuickZoom completely.  
-It also tears down magnification, hooks, overlays, timers, tray icon state, and temporary cursor changes.
-
-### Settings > General
-
-#### Smooth Zoom
-
-Blends between zoom levels instead of jumping instantly.  
-With it enabled, scrolling or pressing zoom keys feels softer and less abrupt.  
-It can feel slightly less immediate because QuickZoom animates toward the target zoom level.  
-With it disabled, every zoom step applies immediately, which feels sharper and more direct.
-
-#### Disable Magnifier at 100%
-
-Turns magnification off when zoom returns to 100% and no active visual effect needs it.  
-This keeps the desktop in a normal state when the user is not zoomed in.  
-It can reduce unnecessary magnifier work and avoids leaving hidden magnification windows active.  
-For Lens and Docked modes, returning to 100% removes the overlay instead of showing a non-magnified tile.
-
-#### Center Cursor
-
-Changes fullscreen panning so the cursor or focus point stays closer to the center of the magnified view.  
-With it enabled, moving the mouse pans the zoomed screen more aggressively around the pointer.  
-This can feel focused and predictable for reading near the cursor.  
-With it disabled, the cursor is allowed to sit closer to its natural screen position, which can feel smoother and less locked.
-
-### Settings > Zoom
-
-#### Mode
-
-Chooses the main magnification style: Fullscreen, Lens, or Docked.  
-Fullscreen magnifies the selected screen area itself.  
-Lens creates a floating magnified area around the cursor.  
-Docked creates a fixed magnified tile on a screen edge.  
-Changing this setting affects how much of the desktop changes, how much context stays visible, and how much screen space is covered.
-
-#### Lens Size
-
-Only appears when Mode is set to Lens.  
-Sets the lens width in pixels from 100 px to 1400 px.  
-Rectangle lenses use a 16:9 height based on this width; Square and Round lenses use the same width and height.  
-A larger lens shows more surrounding context but covers more of the normal screen.  
-A smaller lens is less intrusive but shows less magnified content at once.
-
-#### Lens Shape
-
-Only appears when Mode is set to Lens.  
-Rectangle is best for reading text lines and wider UI areas.  
-Square gives an even inspection area for icons, controls, and compact UI.  
-Round gives a classic magnifier feel and keeps attention on the cursor area.  
-The shape changes the lens outline and visible area, not the zoom level itself.
-
-#### Dock Position
-
-Only appears when Mode is set to Docked.  
-Attaches the magnified tile to the top, bottom, left, or right edge of the current screen.  
-Top and bottom are useful for reading horizontal content while keeping the main screen visible.  
-Left and right can be better for wide monitors or when vertical screen space matters.  
-If the cursor enters the docked area, QuickZoom may use the opposite edge so the preview does not sit directly under the pointer.
-
-#### Tile Size
-
-Only appears when Mode is set to Docked.  
-Sets how much screen space the tile occupies, capped at 50% of the screen.  
-For top and bottom docking it controls tile height.  
-For left and right docking it controls tile width.  
-A larger tile is easier to read but covers more workspace; a smaller tile is less disruptive but gives a smaller preview.
-
-#### Zoom Step (%)
-
-Sets how much each wheel detent or keyboard zoom step changes the zoom level.  
-Small values give fine control; large values reach high zoom faster but feel more jumpy.
-
-#### Max Zoom (%)
-
-Sets the highest zoom level QuickZoom can reach.  
-Higher values allow stronger magnification but reduce visible context and make panning feel more sensitive.
-
-#### Refresh Rate
-
-Controls how often QuickZoom updates follow-cursor and animated zoom movement.  
-Higher values can feel smoother, especially on high refresh rate monitors.  
-They can also use more CPU/GPU work because the magnifier updates more often.  
-Unlimited uses the highest detected monitor refresh rate as the target.  
-If movement feels heavy or unstable, lowering this value can make the app feel calmer.
-
-### Settings > Display
-
-#### Auto-switch Monitor
-
-Controls whether QuickZoom follows the monitor your cursor moves onto.  
-With it enabled, fullscreen magnification can move between monitors as the pointer crosses display boundaries.  
-With it disabled, QuickZoom locks to the current monitor until the selection changes.  
-This is useful when accidental monitor switching feels distracting.  
-It matters most when using "Where Cursor Is Present" or selected-monitor fullscreen behavior.
-
-#### Magnified Displays
-
-Chooses which monitors QuickZoom includes in fullscreen magnification.  
-All Displays magnifies every connected display and is usually the most consistent multi-monitor choice.  
-Where Cursor Is Present magnifies only the monitor currently under the mouse.  
-Custom Selection lets the user choose specific monitors.  
-Lens and Docked modes mainly follow the cursor's current screen, so this setting is most important for fullscreen mode.
-
-#### Custom Monitor Toggles
-
-Only appear when Magnified Displays is set to Custom Selection.  
-Each monitor row includes or removes that display from the magnified fullscreen view.  
-At least one monitor remains selected so QuickZoom always has a valid target.  
-This is useful for excluding a secondary display that should stay normal while another display is magnified.
-
-### Settings > Mouse
-
-#### Follow
-
-- **Automatic (recommended)** is the default. Typing, arrow keys, and Tab follow the caret or focused control. Deliberate mouse movement, clicks, or scrolling return control to the pointer.
-- **Mouse only** always follows the pointer.
-- **Keyboard and typing** follows the caret or focused control without switching on mouse movement.
-
-Small pointer movements do not interrupt typing. Reading pauses keep the view still, and typing pans only when the caret approaches the edge. If an app does not expose its caret or focus position, QuickZoom retains the last view; move the mouse in Automatic or choose Mouse only. Support depends on each application's Windows accessibility provider.
-
-The Pause following switch keeps the view still without forgetting your mode. Turn it off to resume; choosing a Follow mode also resumes following.
-
-#### Locate Cursor on Wiggle
-
-Highlights the cursor after quick mouse-wiggle movement.  
-It helps users find the pointer without changing the current zoom level.
-
-#### Cursor Enhancement
-
-Applies QuickZoom's enhanced Windows cursor set while the app is running.  
-This can make the pointer easier to see during magnification or on busy backgrounds.  
-It changes the system cursor appearance temporarily, then restores the normal cursor scheme when QuickZoom exits or resets it.  
-The size and color settings below are most useful when this option is enabled.
-
-#### Cursor Size
-
-Scales the enhanced cursor set from 100% to 500%.  
-Larger cursors are easier to track, but very large cursors can cover small UI targets.
-
-#### Cursor Colour
-
-Sets the main fill color for the enhanced cursor.  
-High-contrast colors are easier to see against complex or changing backgrounds.
-
-#### Border Colour
-
-Sets the outline color for the enhanced cursor.  
-A contrasting border helps the cursor remain visible on both light and dark content.
-
-#### Preview
-
-Shows the current cursor fill, border, and size choices.  
-It is a visual check only and does not change zoom behavior by itself.
-
-### Settings > Shortcuts
-
-#### Shortcut Mode
-
-Chooses whether QuickZoom accepts mouse shortcuts, keyboard shortcuts, or both.  
-Both allows the default mouse wheel zoom and keyboard +/- zoom.  
-Keyboard only disables mouse-wheel zoom and mouse invert triggers.  
-Mouse only disables keyboard zoom and secondary-key toggles.  
-This is useful if a shortcut conflicts with another app or if the user only wants one input style.
-
-#### Enable Key
-
-Sets the primary key held while zooming or using QuickZoom shortcut combos.  
-By default this is Alt.  
-The enable key works with mouse wheel, keyboard +/-, invert color key, and pause/resume following key.
-Choosing a comfortable key matters because it is the main interaction point for zooming.  
-Some keys may show warnings if they conflict with Windows or other QuickZoom shortcut roles.
-
-#### Invert Colors Key
-
-Sets the secondary keyboard key used with the enable key to toggle inverted colors.  
-The default is I, so the default keyboard combo is Alt + I.  
-Middle mouse click with the enable key remains the default mouse-style invert trigger when mouse shortcuts are enabled.  
-Invert colors can reduce glare or improve contrast for some content.  
-The actual color inversion affects the magnified view through the native Windows magnification color effect.
-
-#### Pause/Resume Following Key
-
-Sets the secondary keyboard key used with the enable key to pause or resume following.
-The default is F, so the default combo is Alt + F.  
-It works in all three zoom modes and pauses whichever Follow mode is selected.
-Pausing following can be useful when reading a fixed area without the view moving. It preserves the selected mode, and its state is shown in both the tray and Settings.
-
-#### Disable Alt Key in Office Apps
-
-Only works when the Enable Key is Alt.  
-Prevents Microsoft Office ribbon key tips from stealing focus while using Alt + mouse wheel.  
-This makes zooming in Word, Excel, Outlook, PowerPoint, OneNote, Access, Publisher, and Visio feel less disruptive.  
-It is disabled automatically when the enable key is not Alt.
-
-### Settings > Appearance
-
-#### Theme Mode
-
-Chooses Auto - System, Dark, or Light.  
-Auto follows Windows theme; Dark and Light keep QuickZoom fixed.
-
-#### Language
-
-Changes the tray menu, Settings window, and dialogs.  
-The setting is saved and the UI refreshes after selection.
-
-#### UI Font Size
-
-Changes QuickZoom's own interface text size: Default, Large, or Extra large.  
-It affects the tray menu and Settings window, improving readability but requiring layouts to fit larger text.
-
-### Settings > About
-
-#### Build and Startup
-
-Shows the current QuickZoom version, build number, and startup service status.  
-If startup support is broken, this row can show a repair action.  
-The startup service helps QuickZoom launch elevated at sign-in, which can make shortcuts work better over administrator apps.  
-This row does not change zoom feel directly, but it affects reliability after reboot and with elevated windows.
-
-#### Locations
-
-Provides buttons for the install folder and config folder.  
-These are mainly for troubleshooting, updates, backups, or checking where settings and logs are stored.
-
-#### Privacy and Troubleshooting Logging
-
-Strict Data mode defaults to **off**. Choose it in setup or under **About** to block all application diagnostic and crash logging. Preferences still save locally; existing logs are retained.
-
-Troubleshooting logging also defaults to **off**. With Strict Data off, enable it under **About** for the current app session. It automatically returns to off after restarting QuickZoom. Logs contain timestamps, build and source event identifiers, exception types and error codes—not raw messages, typed keys, screen content or window titles.
-
-Logs stay in the local QuickZoom settings folder and are never uploaded. Two files of up to 1 MB are retained, replacing older entries. Use **Show log file** and review the files before sharing them yourself. There are no application crash logs unless troubleshooting logging is enabled.
-
-#### How to Use
-
-Shows the basic usage instructions inside the app.  
-It reminds users to hold the enable key and scroll, or use +/- to zoom, and use the invert hotkey for inverted colors.
-
-### Settings Window Footer
-
-#### Reset to Defaults
-
-Restores the default QuickZoom settings, resets zoom to 100%, and turns off active magnification.  
-It also refreshes cursor enhancement and rebuilds the tray/settings UI.
-
-#### Done
-
-Closes the Settings window.  
-Pending setting changes are saved before the window is fully closed.
-
-## Multi-monitor support
-
-QuickZoom supports magnification on multiple displays.
-
-The most reliable and smoothest mode is magnification across all active displays. This mode is recommended for most multi-monitor setups because it avoids many of the edge cases that can happen when only one selected monitor is magnified.
-
-Per-monitor selection is also available for users who need a more specific setup.
-
-## Protected video playback
-
-Because QuickZoom uses the native Windows magnification engine, it can often magnify protected video playback surfaces such as TV players, streaming services, and DRM-protected browser video.
-
-This can work better than some third-party magnification tools in certain setups, but behavior can still depend on the app, browser, GPU driver, hardware acceleration, and the type of protected content being played.
-
-## Portable or automatic startup
-
-QuickZoom can be run as a portable self-contained app.
-
-No full installation is required for normal use. Download the release, run the executable, and QuickZoom starts in the system tray.
-
-QuickZoom can also be configured to start automatically with Windows. This requires approving a single UAC prompt during setup because Windows needs permission to register the built-in elevated startup support.
-
-The setup-complete screen appears after the tray and magnification shortcuts are ready, including when automatic startup is skipped. Finish closes setup without restarting QuickZoom. A delayed startup stays on the waiting screen and offers Retry if readiness cannot be confirmed.
+- **Three zoom modes:** Fullscreen, Lens, and Docked, sharing one current zoom level.
+- **Mouse and keyboard following:** Automatic switches between pointer movement, typing, and keyboard focus; Mouse only and Keyboard and typing give explicit control. Pause/resume keeps a passage still while reading.
+- **Multiple monitors:** magnify all displays, the active monitor, or a custom selection in Fullscreen. Identify displays helps match the list to your screens.
+- **Adjustable magnification:** smooth transitions, configurable zoom steps, a maximum up to 750%, optional centring, and refresh-rate controls.
+- **Pointer visibility:** wiggle to locate the pointer, or apply an enhanced Windows cursor with adjustable size, fill colour, and outline.
+- **Colour inversion:** reverse the colours in the magnified view using a mouse or keyboard shortcut.
+- **Accessible settings:** search, keyboard navigation, exact numeric entry, Windows text-size support, and light/dark/system themes.
+- **Five interface languages:** English, Danish, Swedish, Norwegian, and Finnish.
+- **Local preferences and optional logs:** Strict Data mode blocks diagnostic logging. No account is required.
+- **Optional elevated autostart:** start at Windows sign-in with better access to applications running as administrator.
+
+## Screenshots
+
+Existing Build 354 captures in English and Danish, with dark and light themes. Click an image to view it at full size. The values shown are examples, not necessarily the defaults.
+
+<table>
+  <tr>
+    <th>Tray controls</th>
+    <th>Following and pause</th>
+  </tr>
+  <tr>
+    <td align="center"><a href="assets/Screenshots/Build%20354/en/dark/tray/quickzoom-build-354-en-dark-tray-menu.webp"><img src="assets/Screenshots/Build%20354/en/dark/tray/quickzoom-build-354-en-dark-tray-menu.webp" alt="Dark tray menu with zoom modes, magnification, colour inversion, following, and Settings" width="300"></a></td>
+    <td align="center"><a href="assets/Screenshots/Build%20354/en/dark/tray/quickzoom-build-354-en-dark-tray-follow-options.webp"><img src="assets/Screenshots/Build%20354/en/dark/tray/quickzoom-build-354-en-dark-tray-follow-options.webp" alt="Follow menu with Automatic, Mouse only, Keyboard and typing, and Pause following" width="300"></a></td>
+  </tr>
+  <tr>
+    <th>Lens settings · dark theme</th>
+    <th>Docked settings · light theme</th>
+  </tr>
+  <tr>
+    <td><a href="assets/Screenshots/Build%20354/en/dark/settings/quickzoom-build-354-en-dark-settings-zoom-lens-controls.webp"><img src="assets/Screenshots/Build%20354/en/dark/settings/quickzoom-build-354-en-dark-settings-zoom-lens-controls.webp" alt="Lens mode with size, shape, zoom step, and maximum zoom controls" width="600"></a></td>
+    <td><a href="assets/Screenshots/Build%20354/en/light/settings/quickzoom-build-354-en-light-settings-zoom-docked-controls.webp"><img src="assets/Screenshots/Build%20354/en/light/settings/quickzoom-build-354-en-light-settings-zoom-docked-controls.webp" alt="Docked mode with screen-edge position and tile-size controls" width="600"></a></td>
+  </tr>
+  <tr>
+    <th>Cursor size and colours</th>
+    <th>Danish interface</th>
+  </tr>
+  <tr>
+    <td><a href="assets/Screenshots/Build%20354/en/light/settings/quickzoom-build-354-en-light-settings-mouse-cursor-options.webp"><img src="assets/Screenshots/Build%20354/en/light/settings/quickzoom-build-354-en-light-settings-mouse-cursor-options.webp" alt="Cursor-size slider and colour palettes for the pointer fill and border" width="600"></a></td>
+    <td><a href="assets/Screenshots/Build%20354/da/dark/settings/quickzoom-build-354-da-dark-settings-appearance.webp"><img src="assets/Screenshots/Build%20354/da/dark/settings/quickzoom-build-354-da-dark-settings-appearance.webp" alt="Danish Appearance settings with theme, language, and interface font-size choices" width="600"></a></td>
+  </tr>
+</table>
+
+## Zoom modes and following
+
+| Mode | How it works |
+| --- | --- |
+| **Fullscreen** | Enlarges the selected displays and pans the visible area as the followed point moves. Choose All Displays, Where Cursor Is Present, or Custom Selection. |
+| **Lens** | Shows a floating magnified area around the followed point. Choose Rectangle, Square, or Round and a width from 100 to 1400 px. |
+| **Docked** | Shows an enlarged tile at the top, bottom, left, or right of the screen. Set its size to 10–50% of the screen; it can move to the opposite edge to avoid covering the followed point. |
+
+All modes support **Automatic**, **Mouse only**, and **Keyboard and typing** following. Automatic follows typing and keyboard navigation, then returns to the pointer after deliberate mouse activity. **Pause following** freezes the view without forgetting the selected mode. Choosing a Follow mode resumes following.
+
+Lens and Docked use the screen containing the followed point; Fullscreen display selection does not restrict them. Following a text caret or focused control depends on that application's Windows accessibility information. If an app does not provide a usable position, use Mouse only to position the view yourself.
 
 ## Shortcuts
 
-These are the default shortcuts. They can be changed in Settings.
+Hold the activation key first, perform the action, then release it. These defaults use **Alt**; use left Alt rather than AltGr on keyboards that have both. Keyboard +/− and numeric-keypad +/− are supported.
 
-| Action | Shortcut |
+| Action | Mouse | Keyboard |
+| --- | --- | --- |
+| Zoom in | Alt + scroll up | Alt + + |
+| Zoom out | Alt + scroll down | Alt + − |
+| Toggle inverted colours | Alt + middle click | Alt + I |
+| Switch zoom mode | Alt + left and right mouse buttons together | Alt + Z |
+| Pause/resume following | Follow menu in the tray | Alt + F |
+
+Turn **Invert colours** On in the tray before using its shortcuts. The switch enables the feature; the shortcut toggles the effect. Turning the switch Off clears inversion. Magnification and inversion are separate controls.
+
+Mode switching cycles **Fullscreen → Docked → Lens**. Z is fixed; the activation, inversion, and pause/resume keys can be changed under **Shortcuts**. **Shortcut mode** selects Both, Keyboard only, or Mouse only; Mouse only still needs the keyboard activation key. Release the activation key before normal clicking to avoid the two-button gesture.
+
+If shortcuts also trigger another app's menus, try **Give QuickZoom shortcuts priority** or choose different keys. This setting applies generally, including Office; it preserves bare Windows-key actions, AltGr, and unrelated Windows shortcuts. Escape closes menus or Settings; it is not a global zoom-reset shortcut.
+
+When changing a shortcut key, press one new key. To cancel that key-capture dialog, click its **X**: pressing Escape there can assign Escape as the shortcut key.
+
+## Settings reference
+
+Open the tray's **Open Settings**, or choose **Shortcut settings** to go straight to the key controls. Settings save automatically. Use **Ctrl+F** to search; sliders also accept typed whole numbers within their permitted range.
+
+| Page | Available controls |
 | --- | --- |
-| Zoom with mouse | `Alt` + mouse wheel |
-| Zoom with keyboard | `Alt` + `+` / `-` |
-| Invert colors with mouse | `Alt` + middle mouse button |
-| Invert colors with keyboard | `Alt` + `I` |
+| **General** | Smooth Zoom; Disable Magnifier at 100%; Center Cursor for Fullscreen framing. |
+| **Zoom** | Mode; Lens size/shape when Lens is selected; Dock position/Tile size when Docked is selected; Zoom step (1–200 percentage points); Max zoom (150–750%); Refresh rate (60, 90, 120, 180, 240 Hz, or Unlimited). |
+| **Display** | Auto-switch monitor; Magnified displays; Identify displays; individual monitor switches under Custom Selection. These affect Fullscreen. |
+| **Mouse** | Follow; Pause following; Locate Cursor on Wiggle; Cursor enhancement; Preview; Cursor size (100–500%); Cursor colour and Border colour from 48 preset swatches. |
+| **Shortcuts** | Shortcut mode; Activation key; Invert colours key; Pause/resume following key; Give QuickZoom shortcuts priority. |
+| **Appearance** | Theme: Follow Windows, Dark, or Light; Language; UI font size: Follow Windows, Large, or Extra large. |
+| **About** | Version/build and startup status; Set up autostart when needed; install/config folder buttons; Strict Data mode; session troubleshooting logging; Show log file. |
 
-## Requirements
+Defaults include Fullscreen, Automatic following, 30-point zoom steps, a 400% maximum, and 120 Hz updates. **Unlimited** targets the highest detected monitor refresh rate, with a minimum of 60 Hz. It does not mean infinite updates.
 
-- Windows 10 x64 or Windows 11 x64.
-- .NET 10 Desktop Runtime, unless you use the self-contained release build.
+Cursor size and colour can be previewed before enabling **Cursor enhancement**. Turning enhancement off restores the normal Windows cursor scheme. The tray's **Reset Cursor** reloads that scheme and reapplies enhancement if enabled.
 
-## Translations
+**Done** closes Settings without quitting. **Reset all settings** requires a second click within ten seconds; it resets preferences and active zoom, but does not uninstall QuickZoom or disable its startup task. For exact defaults, control behaviour, and recovery instructions, use the [manual](Manuals/QuickZoom-User-Manual-English.md).
 
-QuickZoom locale files are stored in `locales/` as JSON files. To add a new language:
+## Setup and automatic startup
 
-1. Copy `locales/en.json`.
-2. Rename the copy to the language code, for example `fr.json`.
-3. Translate the JSON values only. Keep the keys unchanged.
-4. Add the language to `UiLanguage` in `src/QuickZoom/UiText.cs`.
-5. Add its file code in `src/QuickZoom/LocalizationManager.cs`.
-6. Add its display name key to each locale file, then build normally.
+The seven-step setup covers language, theme, activation key, a live practice page, data mode, optional automatic startup, and completion. Its Large setup option makes setup easier to read; everyday interface text size is configured separately under Appearance.
 
-Locale files are embedded in the app and also copied beside the executable during publish.
+QuickZoom can run directly from a local folder without installing automatic startup. If you approve autostart, Windows requests administrator permission. QuickZoom installs a managed copy under `%ProgramFiles%\QuickZoom` and registers the **QuickZoom Startup (Elevated)** scheduled task for sign-in. This is optional and can also be configured later under **About → Set up autostart**.
 
-## Download
+Wait for startup verification, or choose **Skip** to launch manually. **Finish** closes setup after the tray and shortcuts are ready. There is no in-app autostart-off switch or uninstaller; the manuals explain how to disable the task and remove the app.
 
-Download the latest release from the [GitHub releases page](https://github.com/BagerRyg/QuickZoom/releases).
+## Privacy and local files
 
-The published release is intended for Windows x64.
+Preferences are stored for the current Windows user in `%LOCALAPPDATA%\QuickZoom\settings.json`. **About → Open Config Folder** opens their location. Preferences and logs stay local and are not uploaded.
+
+**Troubleshooting logging** is off by default and, when enabled, lasts only for the current session. Logs record limited technical events such as timestamps, build/source identifiers, exception types, and error codes. They exclude typed keys, screen/document content, window titles, and raw error-message text. At most two files of up to 1 MB are kept. Review a log before sharing it yourself.
+
+**Strict Data mode**, available in setup and About, blocks diagnostic and crash logging. It keeps normal preference storage and does not erase old log files. There are no application diagnostic/crash logs unless logging is enabled.
+
+## Requirements and limitations
+
+- Windows 10 or Windows 11, **x64**.
+- Local fixed-drive storage for the app and its user-data folder.
+- The standalone release includes the runtime. Framework-dependent builds need the .NET 10 Desktop Runtime.
+- Keyboard following depends on the target application's accessibility support. Elevated autostart can improve compatibility with administrator apps, but Windows' secure sign-in and UAC desktops are not supported.
+- Games, custom controls, protected video, and screen-sharing or recording software may handle magnification differently. Check the result with the applications and displays you use.
+
+QuickZoom enlarges screen content; it is not a screen reader or OCR tool, and it does not change the text size saved in your documents.
 
 ## Build from source
 
-Clone the repository and build the project in Release mode:
+Use Windows with the .NET SDK required by [`global.json`](global.json) (10.0.401 baseline) and PowerShell 7.6 or newer for release validation.
 
 ```powershell
 git clone https://github.com/BagerRyg/QuickZoom.git
 cd QuickZoom
 dotnet build .\QuickZoom.csproj -c Release
-```
-
-Run the release checks with .NET 10 SDK 10.0.401 or newer and PowerShell 7.6 or newer. `global.json` enforces this SDK baseline so self-contained releases include the serviced .NET 10.0.12 runtime or newer:
-
-```powershell
 pwsh -NoProfile -File .\scripts\Test-Release.ps1
 ```
 
-The checks use isolated test files and do not take screenshots or register startup tasks. Add `-NoRestore` after restoring all projects to avoid restoring again. Add `-IncludeNative` on an interactive Windows desktop to also exercise hidden magnifier controls and input-hook cleanup.
+The release checks cover runtime, setup/startup, privacy, UI, and locale behaviour using isolated test files. They do not take screenshots or register real startup tasks. Add `-NoRestore` after restoring the projects, or `-IncludeNative` on an interactive Windows desktop for native magnifier/input-hook checks.
 
-Create a self-contained Windows x64 build after these checks pass:
+To create the next self-contained Windows x64 single-file build:
 
 ```powershell
 .\build.bat
 ```
 
-Each run increments the build number, runs the release checks, and creates the standalone executable at `Builds\Build N\QuickZoom.exe` only if validation succeeds.
+The script increments the internal build number, runs release validation, and publishes `Builds\Build N\QuickZoom.exe` only after checks pass. Optional signing uses `SIGN_CERT_THUMBPRINT` from the CurrentUser certificate store; see [`scripts/sign-exe.ps1`](scripts/sign-exe.ps1).
 
-## Elevated startup support
+## Translations
 
-QuickZoom can optionally install a managed startup copy and register elevated startup support. This helps QuickZoom work more consistently with applications that run as administrator.
+The interface currently supports English (`en`), Danish (`da`), Swedish (`sv`), Norwegian (`no`), and Finnish (`fi`). Locale JSON files live in [`locales`](locales), are embedded in the app, and are also copied beside it when publishing.
 
-This setup is optional. QuickZoom can also run directly without registering startup support.
-
-## Project status
-
-QuickZoom is actively developed as a focused Windows accessibility utility.
-
-The project aims to stay lightweight, practical, and easy to use instead of becoming a large all-in-one accessibility suite.
-
-## Limitations
-
-QuickZoom relies on Windows' native magnification functionality, so some behavior can depend on Windows, GPU drivers, display scaling, and the application being magnified.
-
-Fullscreen games, anti-cheat software, protected windows, and some video playback surfaces may behave differently depending on the system.
+To add a language, copy `en.json`, translate its values while preserving keys and format placeholders, and update its `$LanguageTag`, `$NativeName`, `$FormattingCulture`, and `$TextDirection` metadata. Add the language to `UiLanguage` in [`UiText.cs`](src/QuickZoom/UiText.cs) and the file-code mapping in [`LocalizationManager.cs`](src/QuickZoom/LocalizationManager.cs). Run the release checks to validate locale parity and UI behaviour.
 
 ## License
 
-QuickZoom is licensed under the GNU General Public License v3.0.
-
-See [LICENSE](LICENSE) for the full license text.
+QuickZoom is licensed under the [GNU General Public License v3.0](LICENSE).

@@ -41,7 +41,8 @@ internal static class ControlDrawing
             // Fall back to 100% scale if the control is not ready yet.
         }
 
-        return Math.Max(1, (int)Math.Round(logicalPixels * (Math.Max(1, dpi) / 96f)));
+        float trayScale = control is not Form && control.FindForm() is TrayPopupWindow popup ? popup.ContentScale : 1f;
+        return Math.Max(1, (int)Math.Round(logicalPixels * (Math.Max(1, dpi) / 96f) * trayScale));
     }
 
     internal static bool FollowWindowsTextScale { get; set; } = true;
@@ -55,6 +56,12 @@ internal static class ControlDrawing
     internal static Font UiFont(string familyName, float emSize, FontStyle style)
     {
         return new Font(familyName, Math.Max(7f, emSize * UiFontScale), style);
+    }
+
+    internal static Font TrayScaledUiFont(Control control, string familyName, float emSize, FontStyle style)
+    {
+        float scale = control.FindForm() is TrayPopupWindow popup ? popup.ContentScale : 1f;
+        return new Font(familyName, Math.Max(7f, emSize * UiFontScale) * scale, style);
     }
 
     internal static Color FocusColor(ThemePalette palette) => AccessibilityPreferences.HighContrast
@@ -777,7 +784,7 @@ internal sealed class ToggleSwitchControl : Control
                 ControlDrawing.ScaleLogical(this, 28) + textWidth + ControlDrawing.ScaleLogical(this, 18));
         }
 
-        Size = new Size(targetWidth, ControlDrawing.ScaleLogical(this, 44));
+        Size = new Size(targetWidth, Parent is TrayMenuRow row ? row.Height : ControlDrawing.ScaleLogical(this, 44));
     }
 
     private void DrawStateText(Graphics graphics, Rectangle trackRect, Rectangle knobRect, Color trackColor)
@@ -811,7 +818,7 @@ internal sealed class ToggleSwitchControl : Control
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
     }
 
-    private static Font CreateStateFont() => ControlDrawing.UiFont("Segoe UI Semibold", 8f, FontStyle.Bold);
+    private Font CreateStateFont() => ControlDrawing.TrayScaledUiFont(this, "Segoe UI Semibold", 8f, FontStyle.Bold);
 
     private void SetAnimationTarget(float target)
     {
@@ -1290,6 +1297,8 @@ internal sealed class TrayModeButton : Control, IChildSurfaceBackgroundRenderer
         Size textSize = TextRenderer.MeasureText(_label, font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
         int totalWidth = iconSize + gap + textSize.Width;
         int sidePadding = ControlDrawing.ScaleLogical(this, 7);
+        if (FindForm() is TrayPopupWindow { ContentScale: < 1f })
+            sidePadding = Math.Min(sidePadding, Math.Max(0, (Width - totalWidth) / 2));
         int startX = Math.Max(sidePadding, (Width - totalWidth) / 2);
         int titleHeight = Math.Max(iconSize, textSize.Height);
 
@@ -1558,9 +1567,9 @@ internal sealed class TrayModeButton : Control, IChildSurfaceBackgroundRenderer
             .ToArray() ?? [];
     }
 
-    private static Font ModeButtonFont() => ControlDrawing.UiFont("Segoe UI Semibold", 9f, FontStyle.Bold);
+    private Font ModeButtonFont() => ControlDrawing.TrayScaledUiFont(this, "Segoe UI Semibold", 9f, FontStyle.Bold);
 
-    private static Font ModeButtonDescriptionFont() => ControlDrawing.UiFont("Segoe UI", 7.8f, FontStyle.Regular);
+    private Font ModeButtonDescriptionFont() => ControlDrawing.TrayScaledUiFont(this, "Segoe UI", 7.8f, FontStyle.Regular);
 
     protected override void OnGotFocus(EventArgs e)
     {
@@ -7192,12 +7201,11 @@ internal sealed class SettingsForm : Form
 
 }
 
-internal sealed class TrayPopupWindow : Form
+internal sealed partial class TrayPopupWindow : Form
 {
     private readonly ThemePalette _palette;
     private readonly ModernSurfacePanel _surface;
     private readonly Panel _scrollHost;
-    private const int DefaultLogicalContentWidth = 300;
 
     public TrayPopupWindow(ThemePalette palette)
     {
@@ -7224,7 +7232,7 @@ internal sealed class TrayPopupWindow : Form
         _scrollHost = new Panel
         {
             Dock = DockStyle.Fill,
-            AutoScroll = true,
+            AutoScroll = false,
             BackColor = palette.MenuBackground,
             Margin = new Padding(0),
             Padding = new Padding(0)
@@ -7503,7 +7511,7 @@ internal sealed class TrayPopupWindow : Form
 
     public void RefreshAnchoredLayout(Point anchor)
     {
-        if (IsDisposed)
+        if (IsDisposed || !Visible)
         {
             return;
         }
@@ -7511,91 +7519,24 @@ internal sealed class TrayPopupWindow : Form
         LayoutAnchored(anchor, positionWindow: !CaptureMode);
     }
 
-    private void LayoutAnchored(Point anchor, bool positionWindow = true)
+    private void LayoutAnchored(Point anchor, bool positionWindow = true, Rectangle? workingArea = null)
     {
-        Rectangle area = Screen.FromPoint(anchor).WorkingArea;
-        int maxClientHeight = Math.Max(ControlDrawing.ScaleLogical(this, 220), area.Height - ControlDrawing.ScaleLogical(this, 24));
-        int maxClientWidth = Math.Max(
-            ControlDrawing.ScaleLogical(this, 260),
-            area.Width - ControlDrawing.ScaleLogical(this, 24) - _surface.Padding.Horizontal - Padding.Horizontal);
-        int popupContentWidth = Math.Min(GetRequestedContentWidth(), maxClientWidth);
-
-        ContentHost.MinimumSize = new Size(popupContentWidth, 0);
-        ContentHost.MaximumSize = new Size(popupContentWidth, 0);
-        ContentHost.Width = popupContentWidth;
-        ContentHost.PerformLayout();
-
-        Size desiredContent = MeasureContentHost(popupContentWidth);
-        int naturalClientHeight = Math.Max(
-            ControlDrawing.ScaleLogical(this, 90),
-            desiredContent.Height + _surface.Padding.Vertical + Padding.Vertical);
-        bool needsVerticalScroll = naturalClientHeight > maxClientHeight;
-        int availableContentWidth = popupContentWidth;
-
-        ContentHost.MinimumSize = new Size(availableContentWidth, 0);
-        ContentHost.MaximumSize = new Size(availableContentWidth, 0);
-        ContentHost.Width = availableContentWidth;
-        ContentHost.PerformLayout();
-        desiredContent = MeasureContentHost(availableContentWidth);
-
-        int clientWidth = popupContentWidth + _surface.Padding.Horizontal + Padding.Horizontal +
-            (needsVerticalScroll ? SystemInformation.VerticalScrollBarWidth : 0);
-        int clientHeight = Math.Min(
-            Math.Max(ControlDrawing.ScaleLogical(this, 90), desiredContent.Height + _surface.Padding.Vertical + Padding.Vertical),
-            maxClientHeight);
-
-        int viewportHeight = Math.Max(1, clientHeight - _surface.Padding.Vertical - Padding.Vertical);
-        bool requiresVerticalScroll = desiredContent.Height > viewportHeight;
-        _scrollHost.AutoScroll = requiresVerticalScroll;
-        _scrollHost.AutoScrollMinSize = requiresVerticalScroll ? new Size(0, desiredContent.Height) : Size.Empty;
-        _scrollHost.VerticalScroll.Visible = requiresVerticalScroll;
+        Rectangle area = workingArea ?? Screen.FromPoint(anchor).WorkingArea;
+        int gutter = Math.Min(ControlDrawing.ScaleLogical(this, 8), Math.Max(0, Math.Min(area.Width, area.Height) / 8));
+        Size maximum = new(Math.Max(1, area.Width - gutter * 2), Math.Max(1, area.Height - gutter * 2));
+        Size desiredContent = FitContentToWorkingArea(maximum);
+        _scrollHost.AutoScroll = false;
+        _scrollHost.AutoScrollMinSize = Size.Empty;
+        _scrollHost.VerticalScroll.Visible = false;
         _scrollHost.HorizontalScroll.Enabled = false;
         _scrollHost.HorizontalScroll.Visible = false;
-        _scrollHost.PerformLayout();
-        _surface.PerformLayout();
+        ClientSize = new Size(
+            Math.Min(maximum.Width, desiredContent.Width + _surface.Padding.Horizontal + Padding.Horizontal),
+            Math.Min(maximum.Height, desiredContent.Height + _surface.Padding.Vertical + Padding.Vertical));
         PerformLayout();
-        ClientSize = new Size(clientWidth, clientHeight);
-
-        int gutter = ControlDrawing.ScaleLogical(this, 8);
-        int x = anchor.X - Width + gutter + 4;
-        int y = anchor.Y - Height;
-
-        if (x < area.Left + gutter)
-        {
-            x = area.Left + gutter;
-        }
-
-        if (x + Width > area.Right - gutter)
-        {
-            x = area.Right - Width - gutter;
-        }
-
-        if (y < area.Top + gutter)
-        {
-            y = Math.Min(area.Bottom - Height - gutter, anchor.Y + gutter + 4);
-        }
-
-        if (y + Height > area.Bottom)
-        {
-            y = area.Bottom - Height;
-        }
-
+        int x = Math.Clamp(anchor.X - Width + gutter + 4, area.Left + gutter, area.Right - Width - gutter);
+        int y = Math.Clamp(anchor.Y - Height, area.Top + gutter, area.Bottom - Height - gutter);
         if (positionWindow) Location = new Point(x, y);
-    }
-
-    private int GetRequestedContentWidth()
-    {
-        int requestedWidth = Math.Max(
-            ControlDrawing.ScaleLogical(this, DefaultLogicalContentWidth),
-            Math.Max(ContentHost.MinimumSize.Width, ContentHost.Width));
-
-        foreach (Control child in ContentHost.Controls)
-        {
-            requestedWidth = Math.Max(requestedWidth, child.Width + child.Margin.Horizontal);
-            requestedWidth = Math.Max(requestedWidth, child.MinimumSize.Width + child.Margin.Horizontal);
-        }
-
-        return requestedWidth;
     }
 
     private Size MeasureContentHost(int width)
