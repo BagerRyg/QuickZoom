@@ -57,7 +57,7 @@ For setup help, every setting, examples, troubleshooting, backups, and removal i
 
 ## Screenshots
 
-Existing Build 354 captures in English and Danish, with dark and light themes. Click an image to view it at full size. The values shown are examples, not necessarily the defaults.
+Existing Build 354 captures in English and Danish, all using the dark theme. Click an image to view it at full size. The values shown are examples, not necessarily the defaults.
 
 <table>
   <tr>
@@ -70,18 +70,18 @@ Existing Build 354 captures in English and Danish, with dark and light themes. C
   </tr>
   <tr>
     <th>Lens settings · dark theme</th>
-    <th>Docked settings · light theme</th>
+    <th>Docked settings · dark theme</th>
   </tr>
   <tr>
     <td><a href="assets/Screenshots/Build%20354/en/dark/settings/quickzoom-build-354-en-dark-settings-zoom-lens-controls.webp"><img src="assets/Screenshots/Build%20354/en/dark/settings/quickzoom-build-354-en-dark-settings-zoom-lens-controls.webp" alt="Lens mode with size, shape, zoom step, and maximum zoom controls" width="600"></a></td>
-    <td><a href="assets/Screenshots/Build%20354/en/light/settings/quickzoom-build-354-en-light-settings-zoom-docked-controls.webp"><img src="assets/Screenshots/Build%20354/en/light/settings/quickzoom-build-354-en-light-settings-zoom-docked-controls.webp" alt="Docked mode with screen-edge position and tile-size controls" width="600"></a></td>
+    <td><a href="assets/Screenshots/Build%20354/en/dark/settings/quickzoom-build-354-en-dark-settings-zoom-docked-controls.webp"><img src="assets/Screenshots/Build%20354/en/dark/settings/quickzoom-build-354-en-dark-settings-zoom-docked-controls.webp" alt="Docked mode with screen-edge position and tile-size controls" width="600"></a></td>
   </tr>
   <tr>
     <th>Cursor size and colours</th>
     <th>Danish interface</th>
   </tr>
   <tr>
-    <td><a href="assets/Screenshots/Build%20354/en/light/settings/quickzoom-build-354-en-light-settings-mouse-cursor-options.webp"><img src="assets/Screenshots/Build%20354/en/light/settings/quickzoom-build-354-en-light-settings-mouse-cursor-options.webp" alt="Cursor-size slider and colour palettes for the pointer fill and border" width="600"></a></td>
+    <td><a href="assets/Screenshots/Build%20354/en/dark/settings/quickzoom-build-354-en-dark-settings-mouse-cursor-options.webp"><img src="assets/Screenshots/Build%20354/en/dark/settings/quickzoom-build-354-en-dark-settings-mouse-cursor-options.webp" alt="Cursor-size slider and colour palettes for the pointer fill and border" width="600"></a></td>
     <td><a href="assets/Screenshots/Build%20354/da/dark/settings/quickzoom-build-354-da-dark-settings-appearance.webp"><img src="assets/Screenshots/Build%20354/da/dark/settings/quickzoom-build-354-da-dark-settings-appearance.webp" alt="Danish Appearance settings with theme, language, and interface font-size choices" width="600"></a></td>
   </tr>
 </table>
